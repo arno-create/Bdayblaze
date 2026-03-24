@@ -5,9 +5,11 @@ from typing import cast
 
 import discord
 
+from bdayblaze.discord.embed_budget import BudgetedEmbed
+
 
 def build_help_embed() -> discord.Embed:
-    embed = discord.Embed(
+    budget = BudgetedEmbed.create(
         title="Bdayblaze help",
         description=(
             "Birthday tracking for Discord servers with privacy-first defaults and "
@@ -15,17 +17,17 @@ def build_help_embed() -> discord.Embed:
         ),
         color=discord.Color.blurple(),
     )
-    embed.add_field(
+    budget.add_field(
         name="Getting started",
         value=(
             "1. Save your date with `/birthday set`.\n"
             "2. Server admins can open `/birthday setup`.\n"
-            "3. Customize the message in `/birthday message`.\n"
+            "3. Open Celebration Studio with `/birthday message`.\n"
             "4. Use `/birthday test-message` before going live."
         ),
         inline=False,
     )
-    embed.add_field(
+    budget.add_field(
         name="User commands",
         value=(
             "`/birthday set` Save your birthday for this server.\n"
@@ -40,11 +42,11 @@ def build_help_embed() -> discord.Embed:
         ),
         inline=False,
     )
-    embed.add_field(
+    budget.add_field(
         name="Admin commands",
         value=(
             "`/birthday setup` Configure channel, timezone, and role behavior.\n"
-            "`/birthday message` Edit Studio Lite templates and presentation.\n"
+            "`/birthday message` Open Celebration Studio.\n"
             "`/birthday test-message` Send a private operator dry run.\n"
             "`/birthday member ...` View, set, or remove another member's record.\n"
             "`/birthday export` and `/birthday import` manage CSV backup and restore.\n"
@@ -54,7 +56,7 @@ def build_help_embed() -> discord.Embed:
         ),
         inline=False,
     )
-    embed.add_field(
+    budget.add_field(
         name="Privacy",
         value=(
             "Birthdays stay scoped to the current server. Month/day is required, year is optional, "
@@ -62,15 +64,15 @@ def build_help_embed() -> discord.Embed:
         ),
         inline=False,
     )
-    embed.set_footer(text="Use top-level /help and /about for bot-wide info.")
-    return embed
+    budget.set_footer("Use top-level /help and /about for bot-wide info.")
+    return budget.build()
 
 
 def build_about_embed() -> discord.Embed:
     repo_url = _repository_url()
     package_version = _package_version()
 
-    embed = discord.Embed(
+    budget = BudgetedEmbed.create(
         title="About Bdayblaze",
         description=(
             "Bdayblaze helps Discord servers celebrate birthdays with server-scoped storage, "
@@ -78,7 +80,7 @@ def build_about_embed() -> discord.Embed:
         ),
         color=discord.Color.blurple(),
     )
-    embed.add_field(
+    budget.add_field(
         name="Privacy summary",
         value=(
             "Birthday data is stored per server membership in the current version. "
@@ -87,7 +89,7 @@ def build_about_embed() -> discord.Embed:
         ),
         inline=False,
     )
-    embed.add_field(
+    budget.add_field(
         name="Deletion path",
         value=(
             "Members can delete their own stored birthday with `/birthday remove`. "
@@ -96,7 +98,7 @@ def build_about_embed() -> discord.Embed:
         ),
         inline=False,
     )
-    embed.add_field(
+    budget.add_field(
         name="Permissions and config",
         value=(
             "Announcements and birthday roles only work when this server's settings, "
@@ -108,8 +110,8 @@ def build_about_embed() -> discord.Embed:
     version_line = f"Version: `{package_version}`"
     if repo_url is not None:
         version_line = f"{version_line}\nRepository: {repo_url}"
-    embed.add_field(name="Version", value=version_line, inline=False)
-    return embed
+    budget.add_field(name="Version", value=version_line, inline=False)
+    return budget.build()
 
 
 def _package_version() -> str:

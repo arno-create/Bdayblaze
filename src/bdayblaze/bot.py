@@ -7,7 +7,7 @@ from discord.ext import commands
 from bdayblaze.container import ServiceContainer
 from bdayblaze.discord.cogs.birthday import BirthdayGroup
 from bdayblaze.discord.cogs.info import InfoCog
-from bdayblaze.logging import get_logger
+from bdayblaze.logging import get_logger, redact_identifier
 from bdayblaze.services.errors import BdayblazeError
 
 
@@ -54,13 +54,54 @@ class BdayblazeBot(commands.Bot):
         error: app_commands.AppCommandError,
     ) -> None:
         original = error.original if isinstance(error, app_commands.CommandInvokeError) else error
+        command_name = interaction.command.qualified_name if interaction.command else "unknown"
+        guild_hash = (
+            redact_identifier(interaction.guild_id) if interaction.guild_id is not None else None
+        )
+        user_hash = redact_identifier(interaction.user.id)
+        is_admin_flow = bool(
+            isinstance(interaction.user, discord.Member)
+            and interaction.user.guild_permissions.manage_guild
+        )
+
         if isinstance(original, app_commands.errors.MissingPermissions):
             message = "You need Manage Server to use that command."
+            error_hint: str | None = None
         elif isinstance(original, BdayblazeError):
             message = str(original)
+            error_hint = None
+        elif isinstance(original, discord.HTTPException):
+            self._logger.warning(
+                "app_command_http_error",
+                command=command_name,
+                guild_id=guild_hash,
+                user_id=user_hash,
+                status=original.status,
+                discord_code=original.code,
+                error_type=type(original).__name__,
+            )
+            if original.status == 400:
+                message = (
+                    "Discord rejected that UI response. Try again after shortening the current "
+                    "template or refreshing the panel."
+                )
+                error_hint = "BDAY-UI-400"
+            else:
+                message = "Discord rejected that action. Try again in a moment."
+                error_hint = f"BDAY-HTTP-{original.status}"
         else:
-            self._logger.exception("app_command_error", error_code=type(original).__name__)
+            self._logger.exception(
+                "app_command_error",
+                command=command_name,
+                guild_id=guild_hash,
+                user_id=user_hash,
+                error_code=type(original).__name__,
+            )
             message = "Something went wrong while handling that command."
+            error_hint = "BDAY-UNEXPECTED"
+
+        if is_admin_flow and error_hint is not None:
+            message = f"{message}\nHint: `{error_hint}`."
 
         if interaction.response.is_done():
             await interaction.followup.send(message, ephemeral=True)

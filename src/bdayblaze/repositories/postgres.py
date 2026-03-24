@@ -535,18 +535,34 @@ class PostgresRepository:
             )
         return self._map_recurring_celebration(row) if row is not None else None
 
+    async def fetch_server_anniversary(self, guild_id: int) -> RecurringCelebration | None:
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(
+                """
+                SELECT *
+                FROM recurring_celebrations
+                WHERE guild_id = $1
+                  AND celebration_kind = 'server_anniversary'
+                """,
+                guild_id,
+            )
+        return self._map_recurring_celebration(row) if row is not None else None
+
     async def list_recurring_celebrations(
         self,
         guild_id: int,
         *,
         limit: int,
+        include_server_anniversary: bool = False,
     ) -> list[RecurringCelebration]:
+        kind_clause = "" if include_server_anniversary else "AND celebration_kind = 'custom'"
         async with self._pool.acquire() as connection:
             rows = await connection.fetch(
-                """
+                f"""
                 SELECT *
                 FROM recurring_celebrations
                 WHERE guild_id = $1
+                  {kind_clause}
                 ORDER BY enabled DESC, event_month ASC, event_day ASC, name ASC
                 LIMIT $2
                 """,
@@ -565,6 +581,8 @@ class PostgresRepository:
         channel_id: int | None,
         template: str | None,
         enabled: bool,
+        celebration_kind: str,
+        use_guild_created_date: bool,
         next_occurrence_at_utc: datetime,
     ) -> RecurringCelebration:
         async with self._pool.acquire() as connection:
@@ -578,10 +596,12 @@ class PostgresRepository:
                     channel_id,
                     template,
                     enabled,
+                    celebration_kind,
+                    use_guild_created_date,
                     next_occurrence_at_utc,
                     updated_at_utc
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
                 RETURNING *
                 """,
                 guild_id,
@@ -591,6 +611,8 @@ class PostgresRepository:
                 channel_id,
                 template,
                 enabled,
+                celebration_kind,
+                use_guild_created_date,
                 next_occurrence_at_utc,
             )
         return self._map_recurring_celebration(row)
@@ -606,6 +628,8 @@ class PostgresRepository:
         channel_id: int | None,
         template: str | None,
         enabled: bool,
+        celebration_kind: str,
+        use_guild_created_date: bool,
         next_occurrence_at_utc: datetime,
     ) -> RecurringCelebration | None:
         async with self._pool.acquire() as connection:
@@ -618,7 +642,9 @@ class PostgresRepository:
                     channel_id = $6,
                     template = $7,
                     enabled = $8,
-                    next_occurrence_at_utc = $9,
+                    celebration_kind = $9,
+                    use_guild_created_date = $10,
+                    next_occurrence_at_utc = $11,
                     updated_at_utc = NOW()
                 WHERE guild_id = $1
                   AND id = $2
@@ -632,6 +658,8 @@ class PostgresRepository:
                 channel_id,
                 template,
                 enabled,
+                celebration_kind,
+                use_guild_created_date,
                 next_occurrence_at_utc,
             )
         return self._map_recurring_celebration(row) if row is not None else None
@@ -1031,6 +1059,7 @@ class PostgresRepository:
                             "event_name": row["name"],
                             "event_month": row["event_month"],
                             "event_day": row["event_day"],
+                            "celebration_kind": row["celebration_kind"],
                         },
                     )
                 return inserted
@@ -1774,6 +1803,8 @@ class PostgresRepository:
             channel_id=row["channel_id"],
             template=row["template"],
             enabled=row["enabled"],
+            celebration_kind=row["celebration_kind"],
+            use_guild_created_date=row["use_guild_created_date"],
             next_occurrence_at_utc=row["next_occurrence_at_utc"],
             created_at_utc=row["created_at_utc"],
             updated_at_utc=row["updated_at_utc"],

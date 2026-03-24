@@ -144,6 +144,28 @@ class HealthService:
                         )
                     )
 
+            server_anniversary = await self._repository.fetch_server_anniversary(guild.id)
+            if server_anniversary is not None and server_anniversary.enabled:
+                effective_channel_id = (
+                    server_anniversary.channel_id or settings.announcement_channel_id
+                )
+                for diagnostic in build_channel_diagnostics(
+                    guild,
+                    channel_id=effective_channel_id,
+                    label="server anniversary",
+                ):
+                    issues.append(
+                        HealthIssue(
+                            severity=diagnostic.severity,
+                            code=f"server_anniversary_{diagnostic.code}",
+                            summary=f"Server anniversary is blocked: {diagnostic.summary}",
+                            action=(
+                                diagnostic.action
+                                or "Review the server-anniversary channel override."
+                            ),
+                        )
+                    )
+
         now_utc = datetime.now(UTC)
         stale_window = timedelta(seconds=max(self._scheduler_max_sleep_seconds * 2, 600))
         backlog = await self._repository.fetch_scheduler_backlog(now_utc, stale_window)

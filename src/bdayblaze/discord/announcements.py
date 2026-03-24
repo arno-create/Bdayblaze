@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import discord
 
+from bdayblaze.discord.embed_budget import BudgetedEmbed
 from bdayblaze.domain.announcement_template import (
     DEFAULT_ANNOUNCEMENT_TEMPLATE,
     AnnouncementRenderContext,
@@ -70,7 +71,7 @@ def build_announcement_message(
     if late_delivery and recovery_note not in description:
         description = f"{recovery_note}\n\n{description}".strip()
 
-    embed = discord.Embed(
+    budget = BudgetedEmbed.create(
         title=announcement_theme_title(
             announcement_theme,
             recipient_count=max(len(recipients), 1),
@@ -86,6 +87,7 @@ def build_announcement_message(
             )
         ),
     )
+    embed = budget.build()
     if presentation.image_url:
         embed.set_image(url=presentation.image_url)
     if presentation.thumbnail_url:
@@ -94,7 +96,7 @@ def build_announcement_message(
     if presentation.footer_text:
         footer_parts.append(presentation.footer_text)
     if preview_label is not None:
-        embed.set_author(name=preview_label)
+        budget.set_author(preview_label)
         footer_parts.append(
             f"Bdayblaze Preview | {announcement_theme_footer_label(announcement_theme)}"
         )
@@ -103,12 +105,12 @@ def build_announcement_message(
     elif kind == "birthday_dm":
         footer_parts.append("Bdayblaze Birthday DM")
     if footer_parts:
-        embed.set_footer(text=" | ".join(footer_parts))
+        budget.set_footer(" | ".join(footer_parts))
 
     mentions = " ".join(recipient.mention for recipient in recipients if recipient.mention)
     return PreparedAnnouncement(
         content="" if mention_suppressed else mentions,
-        embed=embed,
+        embed=budget.build(),
     )
 
 

@@ -347,6 +347,7 @@ class DiscordSchedulerGateway:
         *,
         guild_id: int,
         channel_id: int,
+        celebration_kind: str,
         celebration_mode: str,
         announcement_theme: str,
         template: str | None,
@@ -369,7 +370,11 @@ class DiscordSchedulerGateway:
         if not _channel_ready(channel):
             return DirectSendResult(status="announcement_forbidden")
         prepared = build_announcement_message(
-            kind="recurring_event",
+            kind=(
+                "server_anniversary"
+                if celebration_kind == "server_anniversary"
+                else "recurring_event"
+            ),
             server_name=guild.name,
             recipients=[],
             celebration_mode=celebration_mode,  # type: ignore[arg-type]

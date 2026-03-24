@@ -7,7 +7,7 @@ Bdayblaze is a production-minded Discord birthday bot focused on reliable celebr
 - Guild-scoped birthday storage with optional birth year, per-user timezone override, and server-scoped visibility controls.
 - Slash-first UX with top-level `/help` and `/about`, compact `/birthday` subcommands, ephemeral setup flows, and private dry-run previews.
 - Restart-safe scheduler with persisted next-occurrence timestamps, durable event records, bounded stale-send recovery, and no Message Content intent.
-- Rich but compact "Studio Lite" announcement customization with strict placeholder validation and safe embed media settings.
+- Rich but compact Celebration Studio customization with strict placeholder validation, safe embed media settings, and bounded Discord-safe admin panels.
 - Practical operator tooling: permission diagnostics, health checks, admin member CRUD, CSV import/export, tracked join anniversaries, and annual recurring celebrations.
 - Large-server controls that stay cheap to run: eligibility role, ignore bots, minimum membership age, and mention suppression on large batches.
 
@@ -157,9 +157,15 @@ When `PORT` is present, the bot starts a small built-in HTTP health server so Re
 - Admin browse flows can opt into private entries where appropriate.
 - Output stays bounded and mobile-friendly; large public dumps are intentionally avoided.
 
-### Studio Lite
+### Celebration Studio
 
-- Announcement presentation stays compact and safe:
+- `/birthday message` opens Celebration Studio, the private admin surface for:
+  - birthday announcements
+  - birthday DMs
+  - member anniversaries
+  - server anniversary
+  - custom annual event overview
+- The studio keeps announcement presentation compact and safe:
   - theme preset
   - optional title override
   - description template
@@ -170,13 +176,16 @@ When `PORT` is present, the bot starts a small built-in HTTP health server so Re
 - Theme presets include `classic`, `festive`, `minimal`, `cute`, `elegant`, and `gaming`.
 - Template rendering uses a strict placeholder whitelist. There is no Jinja, eval, or arbitrary embed builder.
 - Literal braces can be escaped with `{{` and `}}`.
+- Long templates, placeholder references, and diagnostics are chunked or trimmed inside the panel so Discord embed limits are not exceeded.
+- Studio modal saves return a compact confirmation card with a path back to the relevant studio section instead of spawning another full-size panel.
 
 ### Event coverage
 
 - Birthday announcements remain the primary event type.
 - Optional birthday DM greetings can be enabled per server.
 - Join anniversaries are supported as tracked annual announcements. This pass keeps them tracked-only rather than full-guild auto-discovery.
-- Admins can define compact annual recurring celebrations such as a server birthday or community founding day.
+- Server anniversary is a first-class annual celebration. It defaults to the guild creation date when Discord provides it, and admins can override that date privately.
+- Admins can also define compact annual recurring celebrations such as a community founding day.
 
 ### Large-server controls
 
@@ -192,6 +201,7 @@ When `PORT` is present, the bot starts a small built-in HTTP health server so Re
 - Announcements are scheduled from the member's effective timezone, not a global guild midnight.
 - Scheduler state is persisted before Discord side effects run.
 - `/birthday test-message` renders a private preview and separately reports live readiness.
+- Dry-run previews exist for birthday announcements, birthday DMs, member anniversaries, server anniversary, and recurring annual events.
 - Stale-send recovery only scans Discord history for stale `sending` batches, capped at 3 requests of 10 bot-authored messages each.
 - If an original sent message is deleted or falls outside that bounded recovery window before recovery runs, one duplicate announcement can still occur.
 - Late recovered announcements can use graceful wording without weakening dedupe guarantees.
@@ -201,12 +211,13 @@ When `PORT` is present, the bot starts a small built-in HTTP health server so Re
 - Migration `003_announcement_themes_and_birth_month_index.sql` adds compact theme presets and an index on `(guild_id, birth_month, birth_day)`.
 - Migration `004_operator_ready_pass.sql` adds:
   - birthday visibility controls
-  - Studio Lite presentation fields
+  - Celebration Studio presentation fields
   - birthday DM and anniversary settings
   - large-server eligibility controls
   - tracked member anniversaries
   - recurring annual celebrations
   - additional scheduler event kinds and browse/scheduler indexes
+- Migration `005_server_anniversary_kind.sql` adds recurring-celebration metadata so server anniversary can be stored as an explicit first-class annual event while still using the existing recurring scheduler path.
 
 ## Testing and checks
 

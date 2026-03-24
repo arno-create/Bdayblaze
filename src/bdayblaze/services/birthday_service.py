@@ -412,6 +412,8 @@ class BirthdayService:
                 channel_id=channel_id,
                 template=normalized_template,
                 enabled=enabled,
+                celebration_kind="custom",
+                use_guild_created_date=False,
                 next_occurrence_at_utc=next_occurrence,
             )
         updated = await self._repository.update_recurring_celebration(
@@ -423,19 +425,122 @@ class BirthdayService:
             channel_id=channel_id,
             template=normalized_template,
             enabled=enabled,
+            celebration_kind="custom",
+            use_guild_created_date=False,
             next_occurrence_at_utc=next_occurrence,
         )
         if updated is None:
             raise NotFoundError("That recurring event was not found in this server.")
         return updated
 
+    async def get_server_anniversary(self, guild_id: int) -> RecurringCelebration | None:
+        return await self._repository.fetch_server_anniversary(guild_id)
+
+    async def upsert_server_anniversary(
+        self,
+        *,
+        guild_id: int,
+        guild_created_at_utc: datetime | None,
+        override_month: int | None,
+        override_day: int | None,
+        channel_id: int | None,
+        template: str | None,
+        enabled: bool,
+        use_guild_created_date: bool,
+        now_utc: datetime | None = None,
+    ) -> RecurringCelebration:
+        settings = await self._repository.fetch_guild_settings(guild_id)
+        timezone_name = settings.default_timezone if settings is not None else "UTC"
+        if use_guild_created_date:
+            if guild_created_at_utc is None:
+                raise ValidationError(
+                    "Discord did not provide this server's creation date. "
+                    "Set a custom date instead."
+                )
+            month, day = anniversary_month_day(guild_created_at_utc, timezone_name)
+        else:
+            if override_month is None or override_day is None:
+                raise ValidationError("Provide both a month and a day for the server anniversary.")
+            try:
+                validate_birth_date(override_month, override_day)
+            except ValueError as exc:
+                raise ValidationError(str(exc)) from exc
+            month, day = override_month, override_day
+
+        try:
+            normalized_template = validate_announcement_template(template)
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from exc
+
+        next_occurrence = next_occurrence_at_utc(
+            birth_month=month,
+            birth_day=day,
+            timezone_name=timezone_name,
+            now_utc=now_utc or datetime.now(UTC),
+        )
+        existing = await self._repository.fetch_server_anniversary(guild_id)
+        if existing is None:
+            return await self._repository.insert_recurring_celebration(
+                guild_id=guild_id,
+                name="Server anniversary",
+                event_month=month,
+                event_day=day,
+                channel_id=channel_id,
+                template=normalized_template,
+                enabled=enabled,
+                celebration_kind="server_anniversary",
+                use_guild_created_date=use_guild_created_date,
+                next_occurrence_at_utc=next_occurrence,
+            )
+        updated = await self._repository.update_recurring_celebration(
+            existing.id,
+            guild_id=guild_id,
+            name="Server anniversary",
+            event_month=month,
+            event_day=day,
+            channel_id=channel_id,
+            template=normalized_template,
+            enabled=enabled,
+            celebration_kind="server_anniversary",
+            use_guild_created_date=use_guild_created_date,
+            next_occurrence_at_utc=next_occurrence,
+        )
+        if updated is None:
+            raise NotFoundError("The server anniversary could not be updated.")
+        return updated
+
+    async def reset_server_anniversary(
+        self,
+        *,
+        guild_id: int,
+        guild_created_at_utc: datetime | None,
+        enabled: bool,
+        now_utc: datetime | None = None,
+    ) -> RecurringCelebration:
+        return await self.upsert_server_anniversary(
+            guild_id=guild_id,
+            guild_created_at_utc=guild_created_at_utc,
+            override_month=None,
+            override_day=None,
+            channel_id=None,
+            template=None,
+            enabled=enabled,
+            use_guild_created_date=True,
+            now_utc=now_utc,
+        )
+
     async def list_recurring_celebrations(
         self,
         guild_id: int,
         *,
         limit: int = 20,
+        include_server_anniversary: bool = False,
     ) -> list[RecurringCelebration]:
-        return await self._repository.list_recurring_celebrations(guild_id, limit=limit)
+        return await self._repository.list_recurring_celebrations(
+            guild_id,
+            limit=limit,
+            include_server_anniversary=include_server_anniversary,
+        )
 
     async def get_recurring_celebration(
         self,

@@ -237,20 +237,28 @@ class SettingsService:
             return describe_birthday_dm_readiness(settings)
         if kind == "anniversary":
             return describe_anniversary_readiness(guild, settings)
-        if kind == "recurring_event":
+        if kind in {"recurring_event", "server_anniversary"}:
             diagnostics = build_channel_diagnostics(
                 guild,
                 channel_id=channel_id or settings.announcement_channel_id,
-                label="recurring event",
+                label="server anniversary" if kind == "server_anniversary" else "recurring event",
             )
             if not diagnostics:
                 return AnnouncementDeliveryReadiness(
                     status="ready",
-                    summary="Preview ready. Live recurring-event delivery is currently ready.",
+                    summary=(
+                        "Preview ready. Live server-anniversary delivery is currently ready."
+                        if kind == "server_anniversary"
+                        else "Preview ready. Live recurring-event delivery is currently ready."
+                    ),
                 )
             return AnnouncementDeliveryReadiness(
                 status="blocked",
-                summary="Preview ready. Live recurring-event delivery is blocked.",
+                summary=(
+                    "Preview ready. Live server-anniversary delivery is blocked."
+                    if kind == "server_anniversary"
+                    else "Preview ready. Live recurring-event delivery is blocked."
+                ),
                 details=tuple(item.detail_line() for item in diagnostics),
                 diagnostics=diagnostics,
             )

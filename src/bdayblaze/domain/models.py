@@ -7,10 +7,12 @@ from typing import Any, Literal
 CelebrationMode = Literal["quiet", "party"]
 AnnouncementTheme = Literal["classic", "festive", "minimal", "cute", "elegant", "gaming"]
 ProfileVisibility = Literal["private", "server_visible"]
+CelebrationKind = Literal["custom", "server_anniversary"]
 AnnouncementKind = Literal[
     "birthday_announcement",
     "birthday_dm",
     "anniversary",
+    "server_anniversary",
     "recurring_event",
 ]
 EventKind = Literal[
@@ -151,6 +153,8 @@ class RecurringCelebration:
     template: str | None
     enabled: bool
     next_occurrence_at_utc: datetime
+    celebration_kind: CelebrationKind = "custom"
+    use_guild_created_date: bool = False
     created_at_utc: datetime | None = None
     updated_at_utc: datetime | None = None
 

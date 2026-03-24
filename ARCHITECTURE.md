@@ -18,7 +18,7 @@
 - `services`
   - Birthday registration, import/export, settings validation, health checks, diagnostics, and scheduler orchestration.
 - `discord`
-  - Slash commands, embeds, gateway side effects, top-level info commands, and setup/message interactions.
+  - Slash commands, embeds, gateway side effects, top-level info commands, and setup/Celebration Studio interactions.
   - Discord UX stays here; business rules stay in services/domain.
 - `db`
   - Connection pool and migration runner.
@@ -40,7 +40,7 @@
 - Stores:
   - announcement channel and default timezone
   - birthday role and celebration mode
-  - Studio Lite presentation fields
+  - Celebration Studio presentation fields
   - birthday announcement template
   - birthday DM settings/template
   - anniversary settings/template/channel override
@@ -68,7 +68,9 @@
 ### `recurring_celebrations`
 
 - One row per server-defined annual event.
-- Stores name, month/day, enabled flag, optional channel override, optional template override, and next occurrence timestamp.
+- Stores name, month/day, enabled flag, optional channel override, optional template override, next occurrence timestamp, and a compact `celebration_kind`.
+- `celebration_kind='server_anniversary'` is reserved for the single first-class server anniversary record in a guild.
+- Server anniversary can also store `use_guild_created_date` so the UX can default to the guild creation date without adding a second scheduler system.
 - Purpose-built for annual server events; not a generic cron or RRULE engine.
 
 ### `celebration_events`
@@ -114,6 +116,7 @@
 ## Delivery and diagnostics
 
 - Permission and readiness checks are centralized so setup, previews, health checks, and live delivery use the same wording and blockers.
+- Admin-heavy embeds use shared budget enforcement so setup, Celebration Studio, dry runs, health checks, import previews, and recurring-event summaries do not exceed Discord field or total embed limits.
 - Diagnostics cover:
   - missing `View Channel`
   - missing `Send Messages`
@@ -125,6 +128,7 @@
   - invalid template/media configuration
   - eligibility exclusions such as ignored bots, missing eligibility role, and minimum membership age
 - Live birthday announcements, birthday DMs, anniversaries, and recurring events all use the same persisted-event model.
+- Server anniversary stays on the recurring-announcement scheduler path internally, but renders as its own announcement kind in previews and live sends.
 
 ## Reliability choices
 
@@ -155,6 +159,7 @@ The current shape is intentionally compact but extensible:
 
 - `celebration_mode` remains small while leaving room for future announcement styles.
 - `AnnouncementStudioPresentation` can expand without turning into an arbitrary embed-builder.
+- Celebration Studio sections can grow without reintroducing one giant panel, because the current UI is already split into bounded pages and compact modal-return flows.
 - `celebration_events.payload` can carry future capsule/card/drop metadata.
 - `tracked_member_anniversaries` provides a clean seam for richer timeline or anniversary features later.
 - `recurring_celebrations` is purpose-built now but can back future server milestone experiences.

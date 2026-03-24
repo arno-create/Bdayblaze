@@ -51,6 +51,34 @@ PLACEHOLDER_DESCRIPTIONS: Final[dict[str, str]] = {
 
 _PLACEHOLDER_ORDER: Final[tuple[str, ...]] = tuple(PLACEHOLDER_DESCRIPTIONS)
 _ALLOWED_PLACEHOLDERS: Final[frozenset[str]] = frozenset(_PLACEHOLDER_ORDER)
+PLACEHOLDER_GROUPS: Final[dict[str, tuple[str, ...]]] = {
+    "Birthday and member fields": (
+        "user.mention",
+        "user.display_name",
+        "user.name",
+        "members.mentions",
+        "members.names",
+        "members.count",
+        "birthday.month",
+        "birthday.day",
+        "birthday.date",
+        "birthday.mentions",
+        "birthday.names",
+        "birthday.count",
+        "timezone",
+    ),
+    "Server and delivery fields": (
+        "server.name",
+        "celebration_mode",
+        "delivery.note",
+    ),
+    "Anniversary and event fields": (
+        "event.name",
+        "event.date",
+        "event.kind",
+        "anniversary.years",
+    ),
+}
 
 
 @dataclass(slots=True, frozen=True)
@@ -88,6 +116,18 @@ def supported_placeholders() -> tuple[tuple[str, str], ...]:
     )
 
 
+def supported_placeholder_groups() -> tuple[tuple[str, tuple[tuple[str, str], ...]], ...]:
+    return tuple(
+        (
+            group_name,
+            tuple(
+                (placeholder, PLACEHOLDER_DESCRIPTIONS[placeholder]) for placeholder in placeholders
+            ),
+        )
+        for group_name, placeholders in PLACEHOLDER_GROUPS.items()
+    )
+
+
 def celebration_mode_label(mode: CelebrationMode) -> str:
     return "Festive post" if mode == "party" else "Quiet post"
 
@@ -99,6 +139,8 @@ def default_template_for_kind(kind: AnnouncementKind) -> str:
         return DEFAULT_ANNIVERSARY_TEMPLATE
     if kind == "recurring_event":
         return DEFAULT_RECURRING_EVENT_TEMPLATE
+    if kind == "server_anniversary":
+        return "Today we are celebrating {event.name} in {server.name}."
     return DEFAULT_ANNOUNCEMENT_TEMPLATE
 
 
@@ -252,6 +294,7 @@ def _build_placeholder_values(*, context: AnnouncementRenderContext) -> dict[str
         "birthday_announcement": "birthday",
         "birthday_dm": "birthday",
         "anniversary": "anniversary",
+        "server_anniversary": "server anniversary",
         "recurring_event": "recurring event",
     }[context.kind]
     anniversary_years = (
@@ -398,6 +441,16 @@ def preview_context_for_kind(kind: AnnouncementKind) -> AnnouncementRenderContex
             celebration_mode="party",
             recipients=[],
             event_name="Server birthday",
+            event_month=3,
+            event_day=25,
+        )
+    if kind == "server_anniversary":
+        return AnnouncementRenderContext(
+            kind=kind,
+            server_name="Bdayblaze HQ",
+            celebration_mode="party",
+            recipients=[],
+            event_name="Server anniversary",
             event_month=3,
             event_day=25,
         )

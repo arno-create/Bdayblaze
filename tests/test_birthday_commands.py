@@ -60,6 +60,19 @@ class FakeBirthdayService:
             enabled=True,
             next_occurrence_at_utc=datetime(2027, 3, 25, tzinfo=UTC),
         )
+        self.server_anniversary = RecurringCelebration(
+            id=8,
+            guild_id=1,
+            name="Server anniversary",
+            event_month=4,
+            event_day=1,
+            channel_id=123,
+            template="Happy {event.name}",
+            enabled=True,
+            next_occurrence_at_utc=datetime(2027, 4, 1, tzinfo=UTC),
+            celebration_kind="server_anniversary",
+            use_guild_created_date=False,
+        )
 
     async def require_birthday(
         self,
@@ -80,6 +93,10 @@ class FakeBirthdayService:
         assert guild_id == 1
         assert celebration_id == 7
         return self.recurring
+
+    async def get_server_anniversary(self, guild_id: int) -> RecurringCelebration | None:
+        assert guild_id == 1
+        return self.server_anniversary
 
 
 class FakeRole:
@@ -115,6 +132,7 @@ class FakeGuild:
         self.name = "Birthday Club"
         self._role = role
         self._member = member
+        self.created_at = datetime(2020, 4, 1, tzinfo=UTC)
 
     def get_role(self, role_id: int) -> FakeRole | None:
         if self._role is not None and self._role.id == role_id:
@@ -173,6 +191,24 @@ async def test_build_preview_embed_uses_member_birthday_for_dm_preview() -> None
     )
 
     assert embed.description == "Happy birthday Jamie"
+
+
+@pytest.mark.asyncio
+async def test_build_preview_embed_supports_server_anniversary_preview() -> None:
+    service = FakeBirthdayService()
+    settings = replace(GuildSettings.default(1), announcements_enabled=True)
+
+    embed = await _build_preview_embed(
+        FakeGuild(1),  # type: ignore[arg-type]
+        settings,
+        service,  # type: ignore[arg-type]
+        kind="server_anniversary",
+        member=None,
+        event_id=None,
+    )
+
+    assert embed.title
+    assert "Server anniversary" in embed.description
 
 
 @pytest.mark.asyncio

@@ -11,6 +11,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bdayblaze.discord.announcements import build_announcement_message
+from bdayblaze.discord.embed_budget import BudgetedEmbed
 from bdayblaze.discord.member_resolution import resolve_guild_members
 from bdayblaze.discord.ui.setup import (
     MessageTemplateView,
@@ -406,23 +407,43 @@ class BirthdayGroup(
                 settings=settings,
                 owner_id=interaction.user.id,
                 guild=interaction.guild,
+                birthday_service=self._birthday_service,
             ),
             ephemeral=True,
         )
 
-    @app_commands.command(name="message", description="Open the Birthday Studio Lite panel.")
+    @app_commands.command(name="message", description="Open Celebration Studio.")
     @app_commands.checks.has_permissions(manage_guild=True)
     @app_commands.guild_only()
     async def message(self, interaction: discord.Interaction) -> None:
         assert interaction.guild is not None
         settings = await self._settings_service.get_settings(interaction.guild.id)
+        server_anniversary = await self._birthday_service.get_server_anniversary(
+            interaction.guild.id
+        )
+        recurring_events = tuple(
+            await self._birthday_service.list_recurring_celebrations(
+                interaction.guild.id,
+                limit=8,
+            )
+        )
         await interaction.response.send_message(
-            embed=build_message_template_embed(settings),
+            embed=build_message_template_embed(
+                settings,
+                section="home",
+                guild=interaction.guild,
+                server_anniversary=server_anniversary,
+                recurring_events=recurring_events,
+            ),
             view=MessageTemplateView(
                 settings_service=self._settings_service,
                 settings=settings,
                 owner_id=interaction.user.id,
                 guild=interaction.guild,
+                birthday_service=self._birthday_service,
+                section="home",
+                server_anniversary=server_anniversary,
+                recurring_events=recurring_events,
             ),
             ephemeral=True,
         )
@@ -430,7 +451,8 @@ class BirthdayGroup(
     @app_commands.command(
         name="test-message",
         description=(
-            "Send a private dry-run preview for a birthday, DM, anniversary, or recurring event."
+            "Send a private dry-run preview for a birthday, DM, anniversary, "
+            "server anniversary, or recurring event."
         ),
     )
     @app_commands.describe(
@@ -447,6 +469,7 @@ class BirthdayGroup(
             "birthday_announcement",
             "birthday_dm",
             "anniversary",
+            "server_anniversary",
             "recurring_event",
         ] = "birthday_announcement",
         member: discord.Member | None = None,
@@ -467,6 +490,11 @@ class BirthdayGroup(
             except NotFoundError as exc:
                 await interaction.followup.send(str(exc), ephemeral=True)
                 return
+        if kind == "server_anniversary":
+            anniversary = await self._birthday_service.get_server_anniversary(
+                interaction.guild.id
+            )
+            recurring_channel_id = anniversary.channel_id if anniversary is not None else None
         readiness = await self._settings_service.describe_delivery(
             interaction.guild,
             kind=kind,
@@ -484,36 +512,8 @@ class BirthdayGroup(
         except (ValidationError, NotFoundError) as exc:
             await interaction.followup.send(str(exc), ephemeral=True)
             return
-        status_embed = discord.Embed(
-            title="Dry-run preview",
-            description="Preview only. No live celebration was sent.",
-            color=(
-                discord.Color.green() if readiness.status == "ready" else discord.Color.orange()
-            ),
-        )
-        status_embed.add_field(
-            name="Live delivery readiness",
-            value=readiness.summary,
-            inline=False,
-        )
-        if readiness.details:
-            status_embed.add_field(
-                name="Details",
-                value="\n".join(readiness.details),
-                inline=False,
-            )
-        status_embed.add_field(
-            name="Current presentation",
-            value=(
-                f"Theme: {settings.announcement_theme}\n"
-                f"Style: {settings.celebration_mode}\n"
-                f"Image: {settings.announcement_image_url or 'None'}\n"
-                f"Thumbnail: {settings.announcement_thumbnail_url or 'None'}"
-            ),
-            inline=False,
-        )
         await interaction.followup.send(
-            embeds=[status_embed, preview_embed],
+            embeds=[_build_dry_run_status_embed(readiness, settings), preview_embed],
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
@@ -1004,20 +1004,10 @@ class BirthdayGroup(
                 "No recurring events are configured yet.", ephemeral=True
             )
             return
-        lines = [
-            (
-                f"`{celebration.id}` - {celebration.name} on "
-                f"{celebration.event_month:02d}/{celebration.event_day:02d} - "
-                f"{'Enabled' if celebration.enabled else 'Disabled'}"
-            )
-            for celebration in celebrations
-        ]
-        embed = discord.Embed(
-            title="Recurring events",
-            description="\n".join(lines),
-            color=discord.Color.blurple(),
+        await interaction.followup.send(
+            embed=_build_recurring_event_list_embed(celebrations),
+            ephemeral=True,
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @event.command(name="remove", description="Remove a recurring annual celebration.")
     @app_commands.checks.has_permissions(manage_guild=True)
@@ -1048,24 +1038,10 @@ class BirthdayGroup(
         assert interaction.guild is not None
         await interaction.response.defer(ephemeral=True)
         issues = await self._health_service.inspect_guild(interaction.guild)
-        if not issues:
-            embed = discord.Embed(
-                title="Health check",
-                description="No actionable issues were detected.",
-                color=discord.Color.green(),
-            )
-            await interaction.followup.send(embed=embed, ephemeral=True)
-            return
-        lines = [
-            f"[{issue.severity.upper()}] `{issue.code}`: {issue.summary}\nAction: {issue.action}"
-            for issue in issues
-        ]
-        embed = discord.Embed(
-            title="Health check",
-            description="\n\n".join(lines),
-            color=discord.Color.orange(),
+        await interaction.followup.send(
+            embed=_build_health_embed(issues),
+            ephemeral=True,
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(
         name="privacy",
@@ -1073,37 +1049,10 @@ class BirthdayGroup(
     )
     @app_commands.guild_only()
     async def privacy(self, interaction: discord.Interaction) -> None:
-        embed = discord.Embed(
-            title="Privacy",
-            description=(
-                "Bdayblaze stores birthdays per server membership, not across servers. "
-                "Only month/day, an optional birth year, an optional timezone override, "
-                "and a server-scoped visibility setting are stored."
-            ),
-            color=discord.Color.blurple(),
+        await interaction.response.send_message(
+            embed=_build_privacy_embed(),
+            ephemeral=True,
         )
-        embed.add_field(
-            name="Visibility",
-            value=(
-                "`private` means only you and admins can view the saved record.\n"
-                "`server_visible` allows that member to appear in browse commands for this server."
-            ),
-            inline=False,
-        )
-        embed.add_field(
-            name="Deletion",
-            value="Use `/birthday remove` to delete your birthday data for this server.",
-            inline=False,
-        )
-        embed.add_field(
-            name="Operations",
-            value=(
-                "Logs avoid raw birth dates, birth years, and raw message bodies with personal "
-                "data."
-            ),
-            inline=False,
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 class ConfirmBirthdayDeletionView(discord.ui.View):
@@ -1158,6 +1107,129 @@ class ConfirmBirthdayDeletionView(discord.ui.View):
         )
 
 
+def _build_dry_run_status_embed(
+    readiness: object,
+    settings: GuildSettings,
+) -> discord.Embed:
+    from bdayblaze.domain.models import AnnouncementDeliveryReadiness
+
+    assert isinstance(readiness, AnnouncementDeliveryReadiness)
+    embed = BudgetedEmbed.create(
+        title="Dry-run preview",
+        description="Preview only. No live celebration was sent.",
+        color=discord.Color.green() if readiness.status == "ready" else discord.Color.orange(),
+    )
+    embed.add_field(
+        name="Live delivery readiness",
+        value=readiness.summary,
+        inline=False,
+    )
+    if readiness.details:
+        embed.add_line_fields("Details", readiness.details, inline=False)
+    embed.add_line_fields(
+        "Current presentation",
+        (
+            f"Theme: {settings.announcement_theme}",
+            f"Style: {settings.celebration_mode}",
+            f"Image: {settings.announcement_image_url or 'None'}",
+            f"Thumbnail: {settings.announcement_thumbnail_url or 'None'}",
+        ),
+        inline=False,
+    )
+    return embed.build()
+
+
+def _build_health_embed(issues: object) -> discord.Embed:
+    from bdayblaze.domain.models import HealthIssue
+
+    assert isinstance(issues, list)
+    if not issues:
+        return BudgetedEmbed.create(
+            title="Health check",
+            description="No actionable issues were detected.",
+            color=discord.Color.green(),
+        ).build()
+
+    typed_issues = [issue for issue in issues if isinstance(issue, HealthIssue)]
+    embed = BudgetedEmbed.create(
+        title="Health check",
+        color=discord.Color.orange(),
+    )
+    embed.add_line_fields(
+        "Issues",
+        [
+            f"[{issue.severity.upper()}] `{issue.code}`: {issue.summary}\n"
+            f"Action: {issue.action}"
+            for issue in typed_issues
+        ],
+        inline=False,
+    )
+    return embed.build()
+
+
+def _build_recurring_event_list_embed(
+    celebrations: object,
+) -> discord.Embed:
+    from bdayblaze.domain.models import RecurringCelebration
+
+    assert isinstance(celebrations, list)
+    typed_celebrations = [
+        celebration
+        for celebration in celebrations
+        if isinstance(celebration, RecurringCelebration)
+    ]
+    embed = BudgetedEmbed.create(
+        title="Recurring events",
+        color=discord.Color.blurple(),
+    )
+    embed.add_line_fields(
+        "Configured events",
+        [
+            (
+                f"`{celebration.id}` - {celebration.name} on "
+                f"{celebration.event_month:02d}/{celebration.event_day:02d} - "
+                f"{'Enabled' if celebration.enabled else 'Disabled'}"
+            )
+            for celebration in typed_celebrations
+        ],
+        inline=False,
+    )
+    return embed.build()
+
+
+def _build_privacy_embed() -> discord.Embed:
+    embed = BudgetedEmbed.create(
+        title="Privacy",
+        description=(
+            "Bdayblaze stores birthdays per server membership, not across servers. "
+            "Only month/day, an optional birth year, an optional timezone override, "
+            "and a server-scoped visibility setting are stored."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="Visibility",
+        value=(
+            "`private` means only you and admins can view the saved record.\n"
+            "`server_visible` allows that member to appear in browse commands for this server."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Deletion",
+        value="Use `/birthday remove` to delete your birthday data for this server.",
+        inline=False,
+    )
+    embed.add_field(
+        name="Operations",
+        value=(
+            "Logs avoid raw birth dates, birth years, and raw message bodies with personal data."
+        ),
+        inline=False,
+    )
+    return embed.build()
+
+
 def _build_birthday_embed(
     *,
     title: str,
@@ -1165,7 +1237,11 @@ def _build_birthday_embed(
     birthday: MemberBirthday,
     settings: GuildSettings,
 ) -> discord.Embed:
-    embed = discord.Embed(title=title, description=description, color=discord.Color.blurple())
+    embed = BudgetedEmbed.create(
+        title=title,
+        description=description,
+        color=discord.Color.blurple(),
+    )
     embed.add_field(
         name="Date",
         value=f"{birthday.birth_month:02d}/{birthday.birth_day:02d}",
@@ -1189,14 +1265,14 @@ def _build_birthday_embed(
         value=discord.utils.format_dt(birthday.next_occurrence_at_utc, "F"),
         inline=False,
     )
-    return embed
+    return embed.build()
 
 
 def _build_import_preview_embed(preview: object, applied: bool = False) -> discord.Embed:
     from bdayblaze.domain.models import BirthdayImportPreview
 
     assert isinstance(preview, BirthdayImportPreview)
-    embed = discord.Embed(
+    embed = BudgetedEmbed.create(
         title="Birthday import preview" if not applied else "Birthday import applied",
         color=discord.Color.blurple(),
     )
@@ -1204,11 +1280,9 @@ def _build_import_preview_embed(preview: object, applied: bool = False) -> disco
     embed.add_field(name="Valid rows", value=str(len(preview.valid_rows)), inline=True)
     embed.add_field(name="Errors", value=str(len(preview.errors)), inline=True)
     if preview.errors:
-        embed.add_field(
-            name="Validation errors",
-            value="\n".join(
-                f"Row {error.row_number}: {error.message}" for error in preview.errors[:8]
-            ),
+        embed.add_line_fields(
+            "Validation errors",
+            [f"Row {error.row_number}: {error.message}" for error in preview.errors[:8]],
             inline=False,
         )
     if not applied:
@@ -1221,7 +1295,7 @@ def _build_import_preview_embed(preview: object, applied: bool = False) -> disco
             ),
             inline=False,
         )
-    return embed
+    return embed.build()
 
 
 async def _build_preview_embed(
@@ -1229,7 +1303,13 @@ async def _build_preview_embed(
     settings: GuildSettings,
     birthday_service: BirthdayService,
     *,
-    kind: Literal["birthday_announcement", "birthday_dm", "anniversary", "recurring_event"],
+    kind: Literal[
+        "birthday_announcement",
+        "birthday_dm",
+        "anniversary",
+        "server_anniversary",
+        "recurring_event",
+    ],
     member: discord.Member | None,
     event_id: int | None,
 ) -> discord.Embed:
@@ -1249,6 +1329,34 @@ async def _build_preview_embed(
             event_name=celebration.name,
             event_month=celebration.event_month,
             event_day=celebration.event_day,
+        ).embed
+    if kind == "server_anniversary":
+        server_anniversary = await birthday_service.get_server_anniversary(guild.id)
+        if server_anniversary is None:
+            if guild.created_at is None:
+                raise ValidationError(
+                    "Discord did not provide the guild creation date. "
+                    "Save a custom server-anniversary date first."
+                )
+            event_month = guild.created_at.month
+            event_day = guild.created_at.day
+            template = None
+        else:
+            event_month = server_anniversary.event_month
+            event_day = server_anniversary.event_day
+            template = server_anniversary.template
+        return build_announcement_message(
+            kind="server_anniversary",
+            server_name=guild.name,
+            recipients=[],
+            celebration_mode=settings.celebration_mode,
+            announcement_theme=settings.announcement_theme,
+            presentation=settings.presentation(),
+            template=template,
+            preview_label="Preview only - server anniversary",
+            event_name="Server anniversary",
+            event_month=event_month,
+            event_day=event_day,
         ).embed
 
     if kind in {"birthday_announcement", "birthday_dm"} and member is not None:
@@ -1342,7 +1450,13 @@ async def _require_ready_delivery(
     settings_service: SettingsService,
     guild: discord.Guild,
     *,
-    kind: Literal["birthday_announcement", "birthday_dm", "anniversary", "recurring_event"],
+    kind: Literal[
+        "birthday_announcement",
+        "birthday_dm",
+        "anniversary",
+        "server_anniversary",
+        "recurring_event",
+    ],
     channel_id: int | None,
 ) -> None:
     readiness = await settings_service.describe_delivery(

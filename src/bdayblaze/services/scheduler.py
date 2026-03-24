@@ -123,6 +123,7 @@ class SchedulerGateway(Protocol):
         *,
         guild_id: int,
         channel_id: int,
+        celebration_kind: str,
         celebration_mode: str,
         announcement_theme: str,
         template: str | None,
@@ -459,6 +460,7 @@ class BirthdaySchedulerService:
             result = await self._gateway.send_recurring_announcement(
                 guild_id=event.guild_id,
                 channel_id=int(event.payload["channel_id"]),
+                celebration_kind=str(event.payload.get("celebration_kind", "custom")),
                 celebration_mode=str(event.payload.get("celebration_mode", "quiet")),
                 announcement_theme=str(event.payload.get("announcement_theme", "classic")),
                 template=_optional_str(event.payload.get("template")),
