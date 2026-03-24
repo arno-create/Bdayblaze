@@ -1,0 +1,21 @@
+services:
+  - type: worker
+    name: bdayblaze
+    runtime: python
+    buildCommand: pip install -e .
+    startCommand: python -m bdayblaze.main run
+    envVars:
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: BDAYBLAZE_LOG_LEVEL
+        value: INFO
+      - key: BDAYBLAZE_AUTO_RUN_MIGRATIONS
+        value: "true"
+      - key: BDAYBLAZE_RECOVERY_GRACE_HOURS
+        value: "36"
+      - key: BDAYBLAZE_SCHEDULER_MAX_SLEEP_SECONDS
+        value: "300"
+      - key: BDAYBLAZE_SCHEDULER_BATCH_SIZE
+        value: "25"

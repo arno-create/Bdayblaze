@@ -73,6 +73,31 @@ src/bdayblaze/
 - For Supabase, use a pooled connection string and keep the batch size modest on constrained hosts.
 - The bot can optionally auto-run migrations on startup via `BDAYBLAZE_AUTO_RUN_MIGRATIONS=true`, but a separate migration step is safer for production.
 
+### Render
+
+- Deploy this bot as a `Background Worker`, not a `Web Service`.
+- Recommended Python runtime: `3.12.x`.
+- Build command:
+
+  ```bash
+  pip install -e .
+  ```
+
+- Start command:
+
+  ```bash
+  python -m bdayblaze.main run
+  ```
+
+- Required environment variables:
+  - `DISCORD_TOKEN`
+  - `DATABASE_URL`
+- Recommended environment variables:
+  - `BDAYBLAZE_AUTO_RUN_MIGRATIONS=true` for the first deploy so the schema is created automatically
+  - `BDAYBLAZE_LOG_LEVEL=INFO`
+
+The repository includes [render.yaml](C:\Users\arnoa\OneDrive\Рабочий стол\Bdayblaze\render.yaml) and [runtime.txt](C:\Users\arnoa\OneDrive\Рабочий стол\Bdayblaze\runtime.txt) so Render can pick the correct worker shape and Python version.
+
 ## Commands
 
 - `/birthday set`

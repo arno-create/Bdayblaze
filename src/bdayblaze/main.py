@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import sys
 
 from dotenv import load_dotenv
 
@@ -77,6 +78,10 @@ async def _run_migrations(settings: Settings) -> None:
 
 def main() -> None:
     load_dotenv()
+    if sys.version_info >= (3, 14):
+        raise RuntimeError(
+            "Python 3.14 is not supported by this deployment yet. Use Python 3.12 or 3.13."
+        )
     parser = argparse.ArgumentParser(prog="bdayblaze")
     parser.add_argument("command", choices=["run", "migrate"], nargs="?", default="run")
     args = parser.parse_args()
