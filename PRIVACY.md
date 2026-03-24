@@ -3,30 +3,60 @@
 ## Data minimization
 
 - Birthdays are stored per guild membership context, not globally across servers.
-- Only the minimum required fields are stored:
+- Only the minimum birthday data needed for bot function is stored:
   - month
   - day
   - optional year
   - optional timezone override
-- Age is not shown publicly and there is no cross-server birthday visibility feature in this version.
+  - server-scoped visibility choice
+- Birth year is optional and hidden by default.
+- Join anniversaries are tracked only when the bot has a reliable join timestamp for that member through birthday/admin flows or explicit sync.
 - No message content is collected or required.
+- This bot does not implement activity or inactivity tracking in this pass.
+
+## Visibility model
+
+- `private`: the stored birthday remains visible to the member and admins, but is excluded from normal member browse commands.
+- `server_visible`: the member may appear in normal birthday browse commands for that server.
+- Visibility is server-scoped. Bdayblaze does not provide a global public birthday profile or cross-server sharing.
+- Birth year is never shown in non-admin browse flows, even when the birthday itself is server-visible.
 
 ## Logging rules
 
 - Do not log birth dates, birth years, or full timezone-linked birthday records.
-- Do not log raw announcement-template content when it may contain personal data.
-- Store only redacted error codes in celebration event retry metadata.
-- Prefer hashed identifiers for operational correlation where needed.
+- Do not log raw custom message or template bodies when they may contain pasted personal data.
+- Store only non-sensitive skip/error codes in retry metadata or delivery status where practical.
+- Prefer internal identifiers and aggregate diagnostics over human-readable personal data in logs.
 
 ## User expectations
 
-- `/birthday view` only exposes the caller's own stored record.
-- `/birthday remove` provides a direct deletion path.
-- `/birthday upcoming`, `/birthday today`, `/birthday next`, `/birthday month`, and `/birthday twins` are guild-scoped and intentionally omit year and age.
+- `/birthday view` only exposes the caller's own stored record unless an admin explicitly uses member-management commands.
+- `/birthday remove` provides a direct deletion path for the caller's record in the current server.
+- `/birthday today`, `/birthday next`, `/birthday upcoming`, `/birthday month`, `/birthday twins`, and `/birthday list` are guild-scoped and visibility-aware.
 - `/birthday privacy` explains what is stored and why.
-- `/birthday list` and `/birthday member ...` are admin-only and private to the admin using them.
-- `/birthday message` is admin-only and edits the announcement body only; reliable user mentions remain system-generated outside the custom template.
+- `/birthday member ...`, `/birthday import`, `/birthday export`, setup, message editing, health, and dry-run tools are admin-only and private to the admin using them.
 - `/birthday test-message` sends a private preview only and reports live-delivery readiness separately from preview success.
+
+## Import and export
+
+- Birthday CSV import/export is scoped to the current server only.
+- Export includes only the fields needed for bot operation:
+  - `user_id`
+  - `month`
+  - `day`
+  - `birth_year`
+  - `timezone_override`
+  - `visibility`
+- Export delivery should remain private to admins.
+- Import uses strict schema validation, attachment size limits, row-numbered errors, and a preview-before-apply flow.
+- Exported CSV files are personal data and should be handled like sensitive operator data.
+
+## Safe customization
+
+- Custom announcement text uses a strict placeholder whitelist.
+- There is no eval, Jinja, arbitrary attribute access, or free-form JSON embed execution.
+- Studio Lite stores compact configuration values such as validated URLs, text fields, preset names, and accent colors.
+- Uploaded binaries are not stored in the database.
 
 ## Threat model summary
 
@@ -34,6 +64,8 @@
 
 - Birthday records
 - Guild configuration
+- Tracked anniversary records
+- Recurring celebration definitions
 - Celebration event queue
 - Announcement batch state
 - Bot token and database credentials
@@ -41,30 +73,33 @@
 ### Primary risks
 
 - Over-collection of personal data
+- Birthday visibility leaking outside intended server scope
 - Duplicate or missed celebrations after restarts
-- Misconfigured role hierarchy causing noisy failures
+- Misconfigured permissions or role hierarchy causing noisy failures
 - Channel or role IDs becoming stale after deletion
-- Sensitive values leaking through logs or diagnostics
+- Sensitive values leaking through logs, diagnostics, or CSV handling
 
-### Mitigations in the MVP
+### Mitigations
 
 - Least-privilege intents and permissions.
-- Guild-scoped storage and optional birth year.
+- Guild-scoped storage with privacy-first defaults.
+- Optional birth year and server-scoped visibility controls.
 - Durable event queue plus persisted announcement-batch state for restart recovery.
 - Bounded stale-send recovery scans only bot-authored messages in a narrow time window for the exact batch footer token.
-- Health command for stale config, permissions, and scheduler lag.
-- Graceful handling when members, roles, or channels disappear.
+- Centralized permission diagnostics and health reporting for stale config, missing permissions, and hierarchy problems.
+- Graceful handling when members, roles, channels, or DM access disappear.
 
 ## Operational guidance
 
 - Restrict database access to the bot runtime and migration workflow.
-- Use environment variables or secret management for credentials.
+- Use environment variables or a secret manager for credentials.
 - Prefer a pooled Postgres connection string.
-- Treat exported database snapshots as sensitive personal data.
+- Treat exported CSVs, backups, and database snapshots as sensitive personal data.
+- Review admin permissions before granting access to import/export or member-management flows.
 
 ## Edge-case product decisions
 
 - Leap-day birthdays celebrate on February 28 in non-leap years.
 - If a member changes timezone during an active celebration, the active role-removal window is preserved and the new timezone applies to future occurrences.
-- If a member leaves the server, celebrations are skipped safely and active role cleanup is attempted if the member returns before the removal event expires.
-- If a crash happens after an announcement is sent but before sent state is persisted, Bdayblaze uses a small bounded recovery scan to try to detect the existing message. If that original message is gone or outside the bounded recovery window, one duplicate announcement can still happen.
+- If a member leaves the server, announcements and DMs are skipped safely and active role cleanup is attempted when possible.
+- If a crash happens after an announcement is sent but before sent state is persisted, Bdayblaze uses a small bounded recovery scan to try to detect the existing message. If that message is deleted or outside the bounded recovery window, one duplicate announcement can still happen.

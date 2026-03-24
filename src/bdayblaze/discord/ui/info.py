@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, metadata, version
+from typing import cast
 
 import discord
 
@@ -32,8 +33,10 @@ def build_help_embed() -> discord.Embed:
             "`/birthday remove` Delete your server-scoped data.\n"
             "`/birthday today` Show birthdays currently active under bot celebration logic.\n"
             "`/birthday next` See the nearest upcoming birthday.\n"
+            "`/birthday upcoming` Browse upcoming visible birthdays.\n"
             "`/birthday month` Browse birthdays for a month.\n"
-            "`/birthday twins` Find members who share your month and day."
+            "`/birthday twins` Find members who share your month and day.\n"
+            "`/birthday list` Browse visible birthdays privately."
         ),
         inline=False,
     )
@@ -41,10 +44,12 @@ def build_help_embed() -> discord.Embed:
         name="Admin commands",
         value=(
             "`/birthday setup` Configure channel, timezone, and role behavior.\n"
-            "`/birthday message` Edit the announcement template and theme.\n"
-            "`/birthday test-message` Send a private operator preview.\n"
+            "`/birthday message` Edit Studio Lite templates and presentation.\n"
+            "`/birthday test-message` Send a private operator dry run.\n"
             "`/birthday member ...` View, set, or remove another member's record.\n"
-            "`/birthday list` Privately browse stored birthdays.\n"
+            "`/birthday export` and `/birthday import` manage CSV backup and restore.\n"
+            "`/birthday anniversary ...` manages tracked join anniversaries.\n"
+            "`/birthday event ...` manages recurring annual celebrations.\n"
             "`/birthday health` Check permissions, config, and scheduler health."
         ),
         inline=False,
@@ -57,7 +62,7 @@ def build_help_embed() -> discord.Embed:
         ),
         inline=False,
     )
-    embed.set_footer(text="Top-level /help and /about aliases are available too.")
+    embed.set_footer(text="Use top-level /help and /about for bot-wide info.")
     return embed
 
 
@@ -77,7 +82,8 @@ def build_about_embed() -> discord.Embed:
         name="Privacy summary",
         value=(
             "Birthday data is stored per server membership in the current version. "
-            "The bot stores month/day, an optional year, and an optional timezone override."
+            "The bot stores month/day, an optional year, an optional timezone override, and a "
+            "server-scoped visibility setting."
         ),
         inline=False,
     )
@@ -85,7 +91,8 @@ def build_about_embed() -> discord.Embed:
         name="Deletion path",
         value=(
             "Members can delete their own stored birthday with `/birthday remove`. "
-            "Admins can also remove records privately with `/birthday member remove`."
+            "Admins can also remove records privately with `/birthday member remove`. "
+            "CSV import/export is admin-only and delivered privately."
         ),
         inline=False,
     )
@@ -117,7 +124,8 @@ def _repository_url() -> str | None:
         package_metadata = metadata("bdayblaze")
     except PackageNotFoundError:
         return None
-    for value in package_metadata.get_all("Project-URL", []):
+    project_urls = cast(list[str], package_metadata.get_all("Project-URL", []))
+    for value in project_urls:
         label, _, url = value.partition(",")
         if label.strip().lower() == "repository" and url.strip():
             return url.strip()

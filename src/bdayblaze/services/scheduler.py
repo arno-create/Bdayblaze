@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
 from bdayblaze.domain.models import (
+    AnniversaryRecipientSnapshot,
     AnnouncementRecipientSnapshot,
     CelebrationEvent,
     SchedulerMetrics,
@@ -28,7 +29,17 @@ class GatewayRetryableError(Exception):
 
 @dataclass(slots=True, frozen=True)
 class AnnouncementSendResult:
-    message_id: int
+    message_id: int | None
+    delivered_user_ids: tuple[int, ...] = ()
+    skipped_user_ids: dict[int, str] = field(default_factory=dict)
+    note_code: str | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class DirectSendResult:
+    status: str
+    message_id: int | None = None
+    note_code: str | None = None
 
 
 class SchedulerGateway(Protocol):
@@ -53,9 +64,89 @@ class SchedulerGateway(Protocol):
         announcement_theme: str,
         batch_token: str,
         template: str,
+        title_override: str | None,
+        footer_text: str | None,
+        image_url: str | None,
+        thumbnail_url: str | None,
+        accent_color: int | None,
+        scheduled_for_utc: datetime,
+        mention_suppression_threshold: int,
+        eligibility_role_id: int | None,
+        ignore_bots: bool,
+        minimum_membership_days: int,
     ) -> AnnouncementSendResult: ...
 
-    async def add_birthday_role(self, *, guild_id: int, user_id: int, role_id: int) -> str: ...
+    async def send_anniversary_announcement(
+        self,
+        *,
+        guild_id: int,
+        channel_id: int,
+        recipients: list[AnniversaryRecipientSnapshot],
+        celebration_mode: str,
+        announcement_theme: str,
+        batch_token: str,
+        template: str,
+        title_override: str | None,
+        footer_text: str | None,
+        image_url: str | None,
+        thumbnail_url: str | None,
+        accent_color: int | None,
+        scheduled_for_utc: datetime,
+        event_name: str,
+        event_month: int,
+        event_day: int,
+        mention_suppression_threshold: int,
+        eligibility_role_id: int | None,
+        ignore_bots: bool,
+        minimum_membership_days: int,
+    ) -> AnnouncementSendResult: ...
+
+    async def send_birthday_dm(
+        self,
+        *,
+        guild_id: int,
+        user_id: int,
+        celebration_mode: str,
+        announcement_theme: str,
+        template: str,
+        birth_month: int,
+        birth_day: int,
+        timezone: str,
+        eligibility_role_id: int | None,
+        ignore_bots: bool,
+        minimum_membership_days: int,
+        scheduled_for_utc: datetime,
+    ) -> DirectSendResult: ...
+
+    async def send_recurring_announcement(
+        self,
+        *,
+        guild_id: int,
+        channel_id: int,
+        celebration_mode: str,
+        announcement_theme: str,
+        template: str | None,
+        title_override: str | None,
+        footer_text: str | None,
+        image_url: str | None,
+        thumbnail_url: str | None,
+        accent_color: int | None,
+        event_name: str,
+        event_month: int,
+        event_day: int,
+        scheduled_for_utc: datetime,
+    ) -> DirectSendResult: ...
+
+    async def add_birthday_role(
+        self,
+        *,
+        guild_id: int,
+        user_id: int,
+        role_id: int,
+        eligibility_role_id: int | None,
+        ignore_bots: bool,
+        minimum_membership_days: int,
+    ) -> str: ...
 
     async def remove_birthday_role(self, *, guild_id: int, user_id: int, role_id: int) -> str: ...
 
@@ -112,12 +203,30 @@ class BirthdaySchedulerService:
             claimed_birthdays = await self._repository.claim_due_birthdays(
                 current, self._batch_size
             )
+            claimed_anniversaries = await self._repository.claim_due_anniversaries(
+                current, self._batch_size
+            )
+            claimed_recurring = await self._repository.claim_due_recurring_celebrations(
+                current, self._batch_size
+            )
             claimed_removals = await self._repository.claim_due_role_removals(
                 current, self._batch_size
             )
             pending_events = await self._repository.claim_pending_events(current, self._batch_size)
-            total_claimed += claimed_birthdays + claimed_removals + len(pending_events)
-            if not pending_events and claimed_birthdays == 0 and claimed_removals == 0:
+            total_claimed += (
+                claimed_birthdays
+                + claimed_anniversaries
+                + claimed_recurring
+                + claimed_removals
+                + len(pending_events)
+            )
+            if (
+                not pending_events
+                and claimed_birthdays == 0
+                and claimed_anniversaries == 0
+                and claimed_recurring == 0
+                and claimed_removals == 0
+            ):
                 break
             if pending_events:
                 await self._execute_pending_events(current, pending_events)
@@ -144,13 +253,19 @@ class BirthdaySchedulerService:
     ) -> None:
         handled_announcement_batches: set[tuple[int, str]] = set()
         for event in pending_events:
-            if event.event_kind == "announcement":
+            if event.event_kind in {"announcement", "anniversary_announcement"}:
                 batch_token = str(event.payload["batch_token"])
                 marker = (event.guild_id, batch_token)
                 if marker in handled_announcement_batches:
                     continue
                 handled_announcement_batches.add(marker)
                 await self._handle_announcement_batch(now_utc, event.guild_id, batch_token)
+                continue
+            if event.event_kind == "birthday_dm":
+                await self._handle_birthday_dm(now_utc, event)
+                continue
+            if event.event_kind == "recurring_announcement":
+                await self._handle_recurring_announcement(now_utc, event)
                 continue
             await self._handle_role_event(now_utc, event)
 
@@ -167,7 +282,6 @@ class BirthdaySchedulerService:
         channel_id = int(first_event.payload["channel_id"])
         celebration_mode = str(first_event.payload.get("celebration_mode", "quiet"))
         announcement_theme = str(first_event.payload.get("announcement_theme", "classic"))
-        template = str(first_event.payload["template"])
         event_ids = [event.id for event in batch_events]
         batch_claim = await self._repository.claim_announcement_batch_delivery(
             batch_token,
@@ -203,21 +317,17 @@ class BirthdaySchedulerService:
                 await self._repository.mark_events_completed(event_ids, existing_message_id)
                 return
 
-        recipients = [
-            AnnouncementRecipientSnapshot(
-                user_id=event.user_id,
-                birth_month=int(event.payload["birth_month"]),
-                birth_day=int(event.payload["birth_day"]),
-                timezone=str(event.payload["timezone"]),
-            )
-            for event in batch_events
-            if event.user_id is not None
-        ]
-        if not recipients:
-            await self._repository.mark_announcement_batch_sent(batch_token, message_id=None)
-            await self._repository.mark_events_completed(event_ids)
-            return
-        try:
+        if first_event.event_kind == "announcement":
+            recipients = [
+                AnnouncementRecipientSnapshot(
+                    user_id=event.user_id,
+                    birth_month=int(event.payload["birth_month"]),
+                    birth_day=int(event.payload["birth_day"]),
+                    timezone=str(event.payload["timezone"]),
+                )
+                for event in batch_events
+                if event.user_id is not None
+            ]
             result = await self._gateway.send_birthday_announcement(
                 guild_id=guild_id,
                 channel_id=channel_id,
@@ -225,22 +335,158 @@ class BirthdaySchedulerService:
                 celebration_mode=celebration_mode,
                 announcement_theme=announcement_theme,
                 batch_token=batch_token,
-                template=template,
+                template=str(first_event.payload["template"]),
+                title_override=_optional_str(first_event.payload.get("title_override")),
+                footer_text=_optional_str(first_event.payload.get("footer_text")),
+                image_url=_optional_str(first_event.payload.get("image_url")),
+                thumbnail_url=_optional_str(first_event.payload.get("thumbnail_url")),
+                accent_color=_optional_int(first_event.payload.get("accent_color")),
+                scheduled_for_utc=first_event.scheduled_for_utc,
+                mention_suppression_threshold=int(
+                    first_event.payload.get("mention_suppression_threshold", 8)
+                ),
+                eligibility_role_id=_optional_int(first_event.payload.get("eligibility_role_id")),
+                ignore_bots=bool(first_event.payload.get("ignore_bots", True)),
+                minimum_membership_days=int(first_event.payload.get("minimum_membership_days", 0)),
             )
-        except GatewaySkipError as exc:
+        else:
+            anniversary_recipients = [
+                AnniversaryRecipientSnapshot(
+                    user_id=event.user_id,
+                    joined_at_utc=datetime.fromisoformat(str(event.payload["joined_at_utc"])),
+                )
+                for event in batch_events
+                if event.user_id is not None
+            ]
+            result = await self._gateway.send_anniversary_announcement(
+                guild_id=guild_id,
+                channel_id=channel_id,
+                recipients=anniversary_recipients,
+                celebration_mode=celebration_mode,
+                announcement_theme=announcement_theme,
+                batch_token=batch_token,
+                template=str(first_event.payload["template"]),
+                title_override=_optional_str(first_event.payload.get("title_override")),
+                footer_text=_optional_str(first_event.payload.get("footer_text")),
+                image_url=_optional_str(first_event.payload.get("image_url")),
+                thumbnail_url=_optional_str(first_event.payload.get("thumbnail_url")),
+                accent_color=_optional_int(first_event.payload.get("accent_color")),
+                scheduled_for_utc=first_event.scheduled_for_utc,
+                event_name=str(first_event.payload.get("event_name", "Join anniversary")),
+                event_month=int(first_event.payload["event_month"]),
+                event_day=int(first_event.payload["event_day"]),
+                mention_suppression_threshold=int(
+                    first_event.payload.get("mention_suppression_threshold", 8)
+                ),
+                eligibility_role_id=_optional_int(first_event.payload.get("eligibility_role_id")),
+                ignore_bots=bool(first_event.payload.get("ignore_bots", True)),
+                minimum_membership_days=int(first_event.payload.get("minimum_membership_days", 0)),
+            )
+
+        if result.message_id is not None:
+            await self._repository.mark_announcement_batch_sent(
+                batch_token,
+                message_id=result.message_id,
+            )
+        else:
             await self._repository.mark_announcement_batch_sent(batch_token, message_id=None)
-            await self._repository.complete_events_as_skipped(event_ids, exc.code)
+
+        sent_event_ids: list[int] = []
+        skipped_event_ids_by_code: dict[str, list[int]] = {}
+        for event in batch_events:
+            if event.user_id is None:
+                skipped_event_ids_by_code.setdefault("missing_user_id", []).append(event.id)
+                continue
+            if event.user_id in result.skipped_user_ids:
+                skipped_event_ids_by_code.setdefault(
+                    result.skipped_user_ids[event.user_id], []
+                ).append(event.id)
+                continue
+            if event.user_id in result.delivered_user_ids:
+                sent_event_ids.append(event.id)
+                continue
+            skipped_event_ids_by_code.setdefault("member_missing", []).append(event.id)
+
+        if sent_event_ids:
+            await self._repository.mark_events_completed(
+                sent_event_ids,
+                result.message_id,
+                note_code=result.note_code,
+            )
+        for code, ids in skipped_event_ids_by_code.items():
+            await self._repository.complete_events_as_skipped(ids, code)
+
+    async def _handle_birthday_dm(self, now_utc: datetime, event: CelebrationEvent) -> None:
+        if event.user_id is None:
+            await self._repository.complete_event_as_skipped(event.id, "missing_user_id")
             return
+        try:
+            result = await self._gateway.send_birthday_dm(
+                guild_id=event.guild_id,
+                user_id=event.user_id,
+                celebration_mode=str(event.payload.get("celebration_mode", "quiet")),
+                announcement_theme=str(event.payload.get("announcement_theme", "classic")),
+                template=str(event.payload["template"]),
+                birth_month=int(event.payload["birth_month"]),
+                birth_day=int(event.payload["birth_day"]),
+                timezone=str(event.payload["timezone"]),
+                eligibility_role_id=_optional_int(event.payload.get("eligibility_role_id")),
+                ignore_bots=bool(event.payload.get("ignore_bots", True)),
+                minimum_membership_days=int(event.payload.get("minimum_membership_days", 0)),
+                scheduled_for_utc=event.scheduled_for_utc,
+            )
         except GatewayRetryableError as exc:
-            await self._repository.reset_announcement_batch_delivery(batch_token)
             await self._repository.reschedule_events(
-                event_ids, now_utc + self._retry_delay, exc.code
+                [event.id],
+                now_utc + self._retry_delay,
+                exc.code,
             )
             return
-        await self._repository.mark_announcement_batch_sent(
-            batch_token, message_id=result.message_id
-        )
-        await self._repository.mark_events_completed(event_ids, result.message_id)
+        if result.status == "sent":
+            await self._repository.mark_events_completed(
+                [event.id],
+                note_code=result.note_code,
+            )
+            return
+        await self._repository.complete_event_as_skipped(event.id, result.status)
+
+    async def _handle_recurring_announcement(
+        self,
+        now_utc: datetime,
+        event: CelebrationEvent,
+    ) -> None:
+        try:
+            result = await self._gateway.send_recurring_announcement(
+                guild_id=event.guild_id,
+                channel_id=int(event.payload["channel_id"]),
+                celebration_mode=str(event.payload.get("celebration_mode", "quiet")),
+                announcement_theme=str(event.payload.get("announcement_theme", "classic")),
+                template=_optional_str(event.payload.get("template")),
+                title_override=_optional_str(event.payload.get("title_override")),
+                footer_text=_optional_str(event.payload.get("footer_text")),
+                image_url=_optional_str(event.payload.get("image_url")),
+                thumbnail_url=_optional_str(event.payload.get("thumbnail_url")),
+                accent_color=_optional_int(event.payload.get("accent_color")),
+                event_name=str(event.payload["event_name"]),
+                event_month=int(event.payload["event_month"]),
+                event_day=int(event.payload["event_day"]),
+                scheduled_for_utc=event.scheduled_for_utc,
+            )
+        except GatewayRetryableError as exc:
+            await self._repository.reschedule_events(
+                [event.id],
+                now_utc + self._retry_delay,
+                exc.code,
+            )
+            return
+        if result.status == "sent":
+            await self._repository.mark_events_completed(
+                [event.id],
+                result.message_id,
+                note_code=result.note_code,
+            )
+            return
+        await self._repository.complete_event_as_skipped(event.id, result.status)
 
     async def _handle_role_event(self, now_utc: datetime, event: CelebrationEvent) -> None:
         if event.user_id is None:
@@ -253,6 +499,9 @@ class BirthdaySchedulerService:
                     guild_id=event.guild_id,
                     user_id=event.user_id,
                     role_id=role_id,
+                    eligibility_role_id=_optional_int(event.payload.get("eligibility_role_id")),
+                    ignore_bots=bool(event.payload.get("ignore_bots", True)),
+                    minimum_membership_days=int(event.payload.get("minimum_membership_days", 0)),
                 )
             else:
                 status = await self._gateway.remove_birthday_role(
@@ -262,13 +511,23 @@ class BirthdaySchedulerService:
                 )
         except GatewayRetryableError as exc:
             await self._repository.reschedule_events(
-                [event.id], now_utc + self._retry_delay, exc.code
+                [event.id],
+                now_utc + self._retry_delay,
+                exc.code,
             )
             return
 
         if status in {"applied", "already_present", "already_absent"}:
             await self._repository.mark_events_completed([event.id])
             return
+        if event.event_kind == "role_start" and status in {
+            "bot_ignored",
+            "eligibility_role_missing",
+            "membership_age_unmet",
+            "role_missing",
+            "forbidden",
+        }:
+            await self._repository.clear_active_birthday_role(event.guild_id, event.user_id)
         await self._repository.complete_event_as_skipped(event.id, status)
 
     async def _skip_stale_birthdays(self, now_utc: datetime) -> int:
@@ -318,3 +577,13 @@ class BirthdaySchedulerRunner:
                 await asyncio.wait_for(self._stop_event.wait(), timeout=sleep_for)
             except TimeoutError:
                 continue
+
+
+def _optional_str(value: object | None) -> str | None:
+    return str(value) if value is not None else None
+
+
+def _optional_int(value: object | None) -> int | None:
+    if value is None:
+        return None
+    return int(str(value))

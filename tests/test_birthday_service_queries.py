@@ -16,10 +16,11 @@ class FakeQueryRepository:
         self.month_results: list[BirthdayPreview] = []
         self.list_results: list[BirthdayPreview] = []
         self.requested_pairs: tuple[tuple[int, int], ...] | None = None
+        self.last_visible_only: bool | None = None
 
     async def fetch_member_birthday(self, guild_id: int, user_id: int) -> MemberBirthday | None:
         if (
-            self.birthday
+            self.birthday is not None
             and self.birthday.guild_id == guild_id
             and self.birthday.user_id == user_id
         ):
@@ -28,7 +29,7 @@ class FakeQueryRepository:
 
     async def delete_member_birthday(self, guild_id: int, user_id: int) -> MemberBirthday | None:
         if (
-            self.birthday
+            self.birthday is not None
             and self.birthday.guild_id == guild_id
             and self.birthday.user_id == user_id
         ):
@@ -42,8 +43,11 @@ class FakeQueryRepository:
         guild_id: int,
         month_day_pairs: tuple[tuple[int, int], ...],
         limit: int,
+        *,
+        visible_only: bool,
     ) -> list[BirthdayPreview]:
         self.requested_pairs = month_day_pairs
+        self.last_visible_only = visible_only
         return self.month_day_results[:limit]
 
     async def list_birthdays_for_month(
@@ -53,7 +57,9 @@ class FakeQueryRepository:
         limit: int,
         *,
         order_by_upcoming: bool,
+        visible_only: bool,
     ) -> list[BirthdayPreview]:
+        self.last_visible_only = visible_only
         return self.month_results[:limit]
 
     async def list_birthdays(
@@ -62,8 +68,21 @@ class FakeQueryRepository:
         limit: int,
         *,
         order_by_upcoming: bool,
+        visible_only: bool,
     ) -> list[BirthdayPreview]:
+        self.last_visible_only = visible_only
         return self.list_results[:limit]
+
+    async def count_birthdays_by_day_for_month(
+        self,
+        guild_id: int,
+        month: int,
+        *,
+        visible_only: bool,
+        limit: int,
+    ) -> list[tuple[int, int]]:
+        self.last_visible_only = visible_only
+        return [(24, 2), (25, 1)][:limit]
 
 
 def _preview(
@@ -72,6 +91,7 @@ def _preview(
     month: int,
     day: int,
     timezone: str,
+    visibility: str = "server_visible",
 ) -> BirthdayPreview:
     return BirthdayPreview(
         user_id=user_id,
@@ -79,6 +99,7 @@ def _preview(
         birth_day=day,
         next_occurrence_at_utc=datetime(2027, month, min(day, 28), tzinfo=UTC),
         effective_timezone=timezone,
+        profile_visibility=visibility,  # type: ignore[arg-type]
     )
 
 
@@ -90,7 +111,7 @@ def _birthday(*, user_id: int, month: int, day: int) -> MemberBirthday:
         birth_day=day,
         birth_year=None,
         timezone_override="UTC",
-        age_visible=False,
+        profile_visibility="private",
         next_occurrence_at_utc=datetime(2027, month, min(day, 28), tzinfo=UTC),
         next_role_removal_at_utc=None,
         active_birthday_role_id=None,
@@ -109,12 +130,14 @@ async def test_list_current_birthdays_filters_to_active_celebrations() -> None:
     active = await service.list_current_birthdays(
         1,
         limit=10,
+        visible_only=True,
         now_utc=datetime(2026, 3, 24, 12, tzinfo=UTC),
     )
 
     assert [preview.user_id for preview in active] == [1]
     assert repository.requested_pairs is not None
     assert (3, 24) in repository.requested_pairs
+    assert repository.last_visible_only is True
 
 
 @pytest.mark.asyncio
@@ -127,7 +150,12 @@ async def test_list_birthday_twins_excludes_the_requesting_member() -> None:
     ]
     service = BirthdayService(repository)  # type: ignore[arg-type]
 
-    birthday, twins = await service.list_birthday_twins(1, 42, limit=10)
+    birthday, twins = await service.list_birthday_twins(
+        1,
+        42,
+        limit=10,
+        visible_only=True,
+    )
 
     assert birthday.user_id == 42
     assert [preview.user_id for preview in twins] == [77]
@@ -144,9 +172,11 @@ async def test_list_birthdays_for_month_returns_repository_results() -> None:
         month=3,
         limit=10,
         order_by_upcoming=False,
+        visible_only=False,
     )
 
     assert [preview.user_id for preview in results] == [7]
+    assert repository.last_visible_only is False
 
 
 @pytest.mark.asyncio
@@ -155,9 +185,26 @@ async def test_list_birthdays_returns_repository_results() -> None:
     repository.list_results = [_preview(user_id=8, month=4, day=1, timezone="UTC")]
     service = BirthdayService(repository)  # type: ignore[arg-type]
 
-    results = await service.list_birthdays(1, limit=10, order_by_upcoming=True)
+    results = await service.list_birthdays(
+        1,
+        limit=10,
+        order_by_upcoming=True,
+        visible_only=True,
+    )
 
     assert [preview.user_id for preview in results] == [8]
+    assert repository.last_visible_only is True
+
+
+@pytest.mark.asyncio
+async def test_month_leaderboard_delegates_to_repository() -> None:
+    repository = FakeQueryRepository()
+    service = BirthdayService(repository)  # type: ignore[arg-type]
+
+    leaderboard = await service.month_leaderboard(1, month=3, visible_only=False, limit=2)
+
+    assert leaderboard == [(24, 2), (25, 1)]
+    assert repository.last_visible_only is False
 
 
 @pytest.mark.asyncio

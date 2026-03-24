@@ -13,6 +13,7 @@ class FakeSettingsRepository:
     def __init__(self, settings: GuildSettings | None = None) -> None:
         self.settings = settings
         self.saved: GuildSettings | None = None
+        self.timezone_refresh_calls: list[tuple[int, str]] = []
 
     async def fetch_guild_settings(self, guild_id: int) -> GuildSettings | None:
         assert self.settings is None or self.settings.guild_id == guild_id
@@ -23,15 +24,29 @@ class FakeSettingsRepository:
         self.settings = settings
         return settings
 
+    async def refresh_timezone_bound_schedules(
+        self,
+        guild_id: int,
+        *,
+        default_timezone: str,
+        now_utc: object,
+    ) -> None:
+        self.timezone_refresh_calls.append((guild_id, default_timezone))
+
 
 class FakeRole:
-    def __init__(self, *, position: int) -> None:
+    def __init__(self, *, position: int = 1, managed: bool = False, default: bool = False) -> None:
         self.position = position
+        self.managed = managed
+        self._default = default
 
     def __le__(self, other: object) -> bool:
         if not isinstance(other, FakeRole):
             return NotImplemented
         return self.position <= other.position
+
+    def is_default(self) -> bool:
+        return self._default
 
 
 class FakeGuild:
@@ -78,8 +93,7 @@ async def test_settings_service_rejects_unknown_template_placeholders() -> None:
 
 @pytest.mark.asyncio
 async def test_settings_service_resets_blank_template_to_default_storage() -> None:
-    settings = GuildSettings.default(1)
-    repository = FakeSettingsRepository(settings)
+    repository = FakeSettingsRepository(GuildSettings.default(1))
     service = SettingsService(repository)  # type: ignore[arg-type]
 
     saved = await service.update_settings(
@@ -104,6 +118,30 @@ async def test_settings_service_saves_announcement_theme() -> None:
 
 
 @pytest.mark.asyncio
+async def test_settings_service_rejects_invalid_studio_media_url() -> None:
+    repository = FakeSettingsRepository(GuildSettings.default(1))
+    service = SettingsService(repository)  # type: ignore[arg-type]
+
+    with pytest.raises(ValidationError, match="must use HTTPS"):
+        await service.update_settings(
+            FakeGuild(1),  # type: ignore[arg-type]
+            announcement_image_url="http://example.com/banner.png",
+        )
+
+
+@pytest.mark.asyncio
+async def test_settings_service_rejects_invalid_studio_accent_color() -> None:
+    repository = FakeSettingsRepository(GuildSettings.default(1))
+    service = SettingsService(repository)  # type: ignore[arg-type]
+
+    with pytest.raises(ValidationError, match="6-digit hex"):
+        await service.update_settings(
+            FakeGuild(1),  # type: ignore[arg-type]
+            announcement_accent_color="#GGGGGG",
+        )
+
+
+@pytest.mark.asyncio
 async def test_describe_announcement_delivery_reports_disabled_announcements() -> None:
     repository = FakeSettingsRepository(GuildSettings.default(1))
     service = SettingsService(repository)  # type: ignore[arg-type]
@@ -112,3 +150,33 @@ async def test_describe_announcement_delivery_reports_disabled_announcements() -
 
     assert readiness.status == "blocked"
     assert "disabled" in readiness.summary
+
+
+@pytest.mark.asyncio
+async def test_describe_delivery_reports_birthday_dm_disabled_until_enabled() -> None:
+    repository = FakeSettingsRepository(GuildSettings.default(1))
+    service = SettingsService(repository)  # type: ignore[arg-type]
+    guild = FakeGuild(1)
+
+    blocked = await service.describe_delivery(guild, kind="birthday_dm")
+    await service.update_settings(guild, birthday_dm_enabled=True)
+    ready = await service.describe_delivery(guild, kind="birthday_dm")
+
+    assert blocked.status == "blocked"
+    assert "disabled" in blocked.summary
+    assert ready.status == "ready"
+    assert "best-effort" in ready.summary
+
+
+@pytest.mark.asyncio
+async def test_settings_service_refreshes_timezone_bound_schedules_when_timezone_changes() -> None:
+    repository = FakeSettingsRepository(GuildSettings.default(1))
+    service = SettingsService(repository)  # type: ignore[arg-type]
+
+    saved = await service.update_settings(
+        FakeGuild(1),  # type: ignore[arg-type]
+        default_timezone="Europe/Berlin",
+    )
+
+    assert saved.default_timezone == "Europe/Berlin"
+    assert repository.timezone_refresh_calls == [(1, "Europe/Berlin")]

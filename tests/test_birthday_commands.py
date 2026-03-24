@@ -1,72 +1,85 @@
 from __future__ import annotations
 
+from dataclasses import replace
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
-import discord
 import pytest
 
-from bdayblaze.discord.cogs.birthday import BirthdayGroup, _remove_active_birthday_role_if_needed
-from bdayblaze.domain.models import AnnouncementDeliveryReadiness, GuildSettings
-
-
-class DummyBirthdayService:
-    pass
-
-
-class DummyHealthService:
-    pass
+from bdayblaze.discord.cogs.birthday import (
+    _build_preview_embed,
+    _remove_active_birthday_role_if_needed,
+    _require_ready_delivery,
+    _visible_only_for_scope,
+)
+from bdayblaze.domain.models import (
+    AnnouncementDeliveryReadiness,
+    GuildSettings,
+    MemberBirthday,
+    RecurringCelebration,
+)
+from bdayblaze.services.errors import ValidationError
 
 
 class FakeSettingsService:
-    def __init__(self, settings: GuildSettings, readiness: AnnouncementDeliveryReadiness) -> None:
-        self.settings = settings
+    def __init__(self, readiness: AnnouncementDeliveryReadiness) -> None:
         self.readiness = readiness
 
-    async def get_settings(self, guild_id: int) -> GuildSettings:
-        assert guild_id == self.settings.guild_id
-        return self.settings
-
-    async def describe_announcement_delivery(
+    async def describe_delivery(
         self,
         guild: object,
+        *,
+        kind: str,
+        channel_id: int | None,
     ) -> AnnouncementDeliveryReadiness:
-        assert getattr(guild, "id", None) == self.settings.guild_id
         return self.readiness
 
 
-class FakeResponse:
-    async def defer(self, *, ephemeral: bool) -> None:
-        assert ephemeral is True
-
-
-class FakeFollowup:
+class FakeBirthdayService:
     def __init__(self) -> None:
-        self.messages: list[dict[str, object]] = []
+        self.birthday = MemberBirthday(
+            guild_id=1,
+            user_id=42,
+            birth_month=3,
+            birth_day=24,
+            birth_year=None,
+            timezone_override="UTC",
+            profile_visibility="private",
+            next_occurrence_at_utc=datetime(2027, 3, 24, tzinfo=UTC),
+            next_role_removal_at_utc=None,
+            active_birthday_role_id=None,
+        )
+        self.recurring = RecurringCelebration(
+            id=7,
+            guild_id=1,
+            name="Server birthday",
+            event_month=3,
+            event_day=25,
+            channel_id=123,
+            template="Today we celebrate {event.name}",
+            enabled=True,
+            next_occurrence_at_utc=datetime(2027, 3, 25, tzinfo=UTC),
+        )
 
-    async def send(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
-        self.messages.append({"args": args, "kwargs": kwargs})
+    async def require_birthday(
+        self,
+        guild_id: int,
+        user_id: int,
+        *,
+        missing_message: str,
+    ) -> MemberBirthday:
+        assert guild_id == 1
+        assert user_id == 42
+        return self.birthday
 
-
-class FakeUser:
-    def __init__(self, *, dm_forbidden: bool) -> None:
-        self.dm_forbidden = dm_forbidden
-        self.sent: list[dict[str, object]] = []
-
-    async def send(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
-        if self.dm_forbidden:
-            raise discord.Forbidden(
-                SimpleNamespace(status=403, reason="Forbidden"),
-                "DMs closed",
-            )
-        self.sent.append({"args": args, "kwargs": kwargs})
-
-
-class FakeInteraction:
-    def __init__(self, guild: object, user: FakeUser) -> None:
-        self.guild = guild
-        self.user = user
-        self.response = FakeResponse()
-        self.followup = FakeFollowup()
+    async def get_recurring_celebration(
+        self,
+        guild_id: int,
+        celebration_id: int,
+    ) -> RecurringCelebration:
+        assert guild_id == 1
+        assert celebration_id == 7
+        return self.recurring
 
 
 class FakeRole:
@@ -77,6 +90,10 @@ class FakeRole:
 class FakeMember:
     def __init__(self, user_id: int, role: FakeRole) -> None:
         self.id = user_id
+        self.name = "jamie"
+        self.display_name = "Jamie"
+        self.mention = "@Jamie"
+        self.joined_at = datetime(2022, 3, 24, tzinfo=UTC)
         self.roles = [role]
         self.removed_reasons: list[str] = []
 
@@ -90,6 +107,7 @@ class FakeGuild:
     def __init__(
         self,
         guild_id: int,
+        *,
         role: FakeRole | None = None,
         member: FakeMember | None = None,
     ) -> None:
@@ -99,53 +117,81 @@ class FakeGuild:
         self._member = member
 
     def get_role(self, role_id: int) -> FakeRole | None:
-        if self._role and self._role.id == role_id:
+        if self._role is not None and self._role.id == role_id:
             return self._role
         return None
 
     def get_member(self, user_id: int) -> FakeMember | None:
-        if self._member and self._member.id == user_id:
+        if self._member is not None and self._member.id == user_id:
             return self._member
         return None
 
     async def fetch_member(self, user_id: int) -> FakeMember:
-        raise discord.NotFound(SimpleNamespace(status=404, reason="Not Found"), "missing")
+        raise AssertionError("fetch_member should not be used when the member is cached")
 
 
 @pytest.mark.asyncio
-async def test_test_message_falls_back_to_ephemeral_when_dms_are_closed() -> None:
-    settings = GuildSettings(
-        guild_id=1,
-        announcement_channel_id=None,
-        default_timezone="UTC",
-        birthday_role_id=None,
-        announcements_enabled=False,
-        role_enabled=False,
-        celebration_mode="quiet",
-        announcement_theme="classic",
-        announcement_template=None,
+async def test_build_preview_embed_uses_selected_member_for_anniversary_preview() -> None:
+    service = FakeBirthdayService()
+    member = FakeMember(42, FakeRole(55))
+    settings = replace(
+        GuildSettings.default(1),
+        anniversary_enabled=True,
+        anniversary_template=("Happy anniversary {members.names} for {anniversary.years} years."),
     )
-    service = FakeSettingsService(
+
+    embed = await _build_preview_embed(
+        FakeGuild(1),
         settings,
+        service,  # type: ignore[arg-type]
+        kind="anniversary",
+        member=member,  # type: ignore[arg-type]
+        event_id=None,
+    )
+
+    assert "Jamie" in embed.description
+    assert "4 years" in embed.description
+
+
+@pytest.mark.asyncio
+async def test_build_preview_embed_uses_member_birthday_for_dm_preview() -> None:
+    service = FakeBirthdayService()
+    member = FakeMember(42, FakeRole(55))
+    settings = replace(
+        GuildSettings.default(1),
+        birthday_dm_template="Happy birthday {user.display_name}",
+        birthday_dm_enabled=True,
+    )
+
+    embed = await _build_preview_embed(
+        FakeGuild(1),
+        settings,
+        service,  # type: ignore[arg-type]
+        kind="birthday_dm",
+        member=member,  # type: ignore[arg-type]
+        event_id=None,
+    )
+
+    assert embed.description == "Happy birthday Jamie"
+
+
+@pytest.mark.asyncio
+async def test_require_ready_delivery_raises_on_blocked_readiness() -> None:
+    settings_service = FakeSettingsService(
         AnnouncementDeliveryReadiness(
             status="blocked",
-            summary="Preview ready. Live delivery is disabled in this server.",
-            details=("Announcements are currently disabled.",),
-        ),
+            summary="Blocked",
+            details=("The bot cannot send messages in #birthdays.",),
+        )
     )
-    group = BirthdayGroup(  # type: ignore[arg-type]
-        birthday_service=DummyBirthdayService(),  # type: ignore[arg-type]
-        settings_service=service,  # type: ignore[arg-type]
-        health_service=DummyHealthService(),  # type: ignore[arg-type]
-    )
-    interaction = FakeInteraction(FakeGuild(1), FakeUser(dm_forbidden=True))
 
-    await group.test_message(interaction)  # type: ignore[arg-type]
-
-    assert interaction.followup.messages
-    followup = interaction.followup.messages[0]["kwargs"]
-    assert followup["ephemeral"] is True
-    assert len(followup["embeds"]) == 3
+    with pytest.raises(ValidationError, match="cannot send messages"):
+        await _require_ready_delivery(
+            settings_service,  # type: ignore[arg-type]
+            FakeGuild(1),  # type: ignore[arg-type]
+            kind="recurring_event",
+            channel_id=123,
+        )
 
 
 @pytest.mark.asyncio
@@ -155,7 +201,17 @@ async def test_remove_active_birthday_role_if_needed_removes_saved_role() -> Non
     guild = FakeGuild(1, role=role, member=member)
 
     await _remove_active_birthday_role_if_needed(
-        guild, 42, 55, reason="Birthday cleanup"
-    )  # type: ignore[arg-type]
+        guild,  # type: ignore[arg-type]
+        42,
+        55,
+        reason="Birthday cleanup",
+    )
 
     assert member.removed_reasons == ["Birthday cleanup"]
+
+
+def test_visible_only_for_scope_rejects_non_admin_all_scope() -> None:
+    interaction = SimpleNamespace(permissions=SimpleNamespace(manage_guild=False))
+
+    with pytest.raises(ValidationError, match="Only admins"):
+        _visible_only_for_scope(interaction, "all")  # type: ignore[arg-type]

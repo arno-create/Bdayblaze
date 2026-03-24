@@ -54,6 +54,4 @@ async def resolve_guild_members(
             if member is not None:
                 resolved[user_id] = member
 
-    return [
-        (user_id, resolved[user_id]) for user_id in ordered_ids if user_id in resolved
-    ]
+    return [(user_id, resolved[user_id]) for user_id in ordered_ids if user_id in resolved]

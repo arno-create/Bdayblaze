@@ -7,6 +7,7 @@ import discord
 from bdayblaze.domain.birthday_logic import validate_timezone
 from bdayblaze.domain.models import HealthIssue, SchedulerMetrics
 from bdayblaze.repositories.postgres import PostgresRepository
+from bdayblaze.services.diagnostics import build_channel_diagnostics, build_role_diagnostics
 
 
 class HealthService:
@@ -32,7 +33,9 @@ class HealthService:
                     severity="warning",
                     code="missing_config",
                     summary="Server setup is still using defaults.",
-                    action="Run /birthday setup to configure timezone, channel, and optional role.",
+                    action=(
+                        "Run /birthday setup to configure timezone, channels, and delivery rules."
+                    ),
                 )
             )
         else:
@@ -48,114 +51,98 @@ class HealthService:
                     )
                 )
 
-            bot_member = guild.me
-            if bot_member is None:
+            for diagnostic in build_channel_diagnostics(
+                guild,
+                channel_id=(
+                    settings.announcement_channel_id if settings.announcements_enabled else None
+                ),
+                label="announcement",
+            ):
+                if settings.announcements_enabled:
+                    issues.append(
+                        HealthIssue(
+                            severity=diagnostic.severity,
+                            code=diagnostic.code,
+                            summary=diagnostic.summary,
+                            action=(
+                                diagnostic.action or "Review the configured announcement channel."
+                            ),
+                        )
+                    )
+
+            anniversary_channel_id = (
+                settings.anniversary_channel_id or settings.announcement_channel_id
+            )
+            for diagnostic in build_channel_diagnostics(
+                guild,
+                channel_id=anniversary_channel_id if settings.anniversary_enabled else None,
+                label="anniversary",
+            ):
+                if settings.anniversary_enabled:
+                    issues.append(
+                        HealthIssue(
+                            severity=diagnostic.severity,
+                            code=diagnostic.code,
+                            summary=diagnostic.summary,
+                            action=(
+                                diagnostic.action or "Review the configured anniversary channel."
+                            ),
+                        )
+                    )
+
+            for diagnostic in build_role_diagnostics(
+                guild,
+                role_id=settings.birthday_role_id if settings.role_enabled else None,
+            ):
+                if settings.role_enabled:
+                    issues.append(
+                        HealthIssue(
+                            severity=diagnostic.severity,
+                            code=diagnostic.code,
+                            summary=diagnostic.summary,
+                            action=diagnostic.action or "Review the configured birthday role.",
+                        )
+                    )
+
+            if (
+                settings.eligibility_role_id is not None
+                and guild.get_role(settings.eligibility_role_id) is None
+            ):
                 issues.append(
                     HealthIssue(
-                        severity="warning",
-                        code="bot_member_unavailable",
-                        summary="The bot member state is not ready yet.",
-                        action="Wait a few seconds and re-run /birthday health.",
+                        severity="error",
+                        code="eligibility_role_missing",
+                        summary="The configured eligibility role no longer exists.",
+                        action="Pick a new eligibility role or clear the requirement.",
                     )
                 )
-            else:
-                if settings.announcements_enabled:
-                    if settings.announcement_channel_id is None:
-                        issues.append(
-                            HealthIssue(
-                                severity="error",
-                                code="announcement_channel_missing",
-                                summary="Announcements are enabled without a configured channel.",
-                                action="Select a valid announcement channel in /birthday setup.",
-                            )
-                        )
-                    else:
-                        channel = guild.get_channel(settings.announcement_channel_id)
-                        if not isinstance(channel, discord.TextChannel):
-                            issues.append(
-                                HealthIssue(
-                                    severity="error",
-                                    code="announcement_channel_deleted",
-                                    summary=(
-                                        "The configured announcement channel is missing or invalid."
-                                    ),
-                                    action=(
-                                        "Pick a new text or announcement channel in /birthday "
-                                        "setup."
-                                    ),
-                                )
-                            )
-                        else:
-                            permissions = channel.permissions_for(bot_member)
-                            if (
-                                not permissions.view_channel
-                                or not permissions.send_messages
-                                or not permissions.embed_links
-                            ):
-                                issues.append(
-                                    HealthIssue(
-                                        severity="error",
-                                        code="announcement_permissions",
-                                        summary=(
-                                            "The bot cannot announce birthdays in the configured "
-                                            "channel."
-                                        ),
-                                        action=(
-                                            "Grant View Channel, Send Messages, and Embed Links "
-                                            "there."
-                                        ),
-                                    )
-                                )
 
-                if settings.role_enabled:
-                    if settings.birthday_role_id is None:
-                        issues.append(
-                            HealthIssue(
-                                severity="error",
-                                code="birthday_role_missing",
-                                summary="Role assignment is enabled without a configured role.",
-                                action="Select a dedicated birthday role in /birthday setup.",
-                            )
+            recurring_events = await self._repository.list_recurring_celebrations(
+                guild.id,
+                limit=20,
+            )
+            for celebration in recurring_events:
+                if not celebration.enabled:
+                    continue
+                effective_channel_id = celebration.channel_id or settings.announcement_channel_id
+                for diagnostic in build_channel_diagnostics(
+                    guild,
+                    channel_id=effective_channel_id,
+                    label="recurring event",
+                ):
+                    issues.append(
+                        HealthIssue(
+                            severity=diagnostic.severity,
+                            code=f"recurring_event_{celebration.id}_{diagnostic.code}",
+                            summary=(
+                                f"Recurring event '{celebration.name}' is blocked: "
+                                f"{diagnostic.summary}"
+                            ),
+                            action=(
+                                diagnostic.action or "Review the recurring event channel override."
+                            ),
                         )
-                    else:
-                        role = guild.get_role(settings.birthday_role_id)
-                        if role is None:
-                            issues.append(
-                                HealthIssue(
-                                    severity="error",
-                                    code="birthday_role_deleted",
-                                    summary="The configured birthday role no longer exists.",
-                                    action="Select a replacement role or disable role assignment.",
-                                )
-                            )
-                        else:
-                            if not bot_member.guild_permissions.manage_roles:
-                                issues.append(
-                                    HealthIssue(
-                                        severity="error",
-                                        code="manage_roles_missing",
-                                        summary="The bot is missing Manage Roles.",
-                                        action=(
-                                            "Grant Manage Roles or disable birthday role "
-                                            "assignment."
-                                        ),
-                                    )
-                                )
-                            elif bot_member.top_role <= role:
-                                issues.append(
-                                    HealthIssue(
-                                        severity="error",
-                                        code="role_hierarchy_invalid",
-                                        summary=(
-                                            "The birthday role is above the bot in the role "
-                                            "hierarchy."
-                                        ),
-                                        action=(
-                                            "Move the bot's top role above the dedicated birthday "
-                                            "role."
-                                        ),
-                                    )
-                                )
+                    )
 
         now_utc = datetime.now(UTC)
         stale_window = timedelta(seconds=max(self._scheduler_max_sleep_seconds * 2, 600))
@@ -166,6 +153,8 @@ class HealthService:
                 ts
                 for ts in [
                     backlog.oldest_due_birthday_utc,
+                    backlog.oldest_due_anniversary_utc,
+                    backlog.oldest_due_recurring_utc,
                     backlog.oldest_due_role_removal_utc,
                     backlog.oldest_due_event_utc,
                 ]
@@ -235,6 +224,40 @@ class HealthService:
                     code="recovery_incomplete",
                     summary="Startup recovery has not completed yet.",
                     action="Re-run /birthday health after the bot has been online for a minute.",
+                )
+            )
+
+        recent_issues = await self._repository.list_recent_delivery_issues(
+            guild.id,
+            since_utc=now_utc - timedelta(days=7),
+            limit=5,
+        )
+        for recent_issue in recent_issues:
+            if recent_issue.last_error_code == "late_delivery":
+                issues.append(
+                    HealthIssue(
+                        severity="info",
+                        code="recent_late_delivery",
+                        summary=(
+                            f"Recent {recent_issue.event_kind} delivery was recovered late "
+                            "but completed."
+                        ),
+                        action=(
+                            "Review recent uptime or Discord API failures if late recoveries "
+                            "keep appearing."
+                        ),
+                    )
+                )
+                continue
+            issues.append(
+                HealthIssue(
+                    severity="info",
+                    code=f"recent_{recent_issue.last_error_code}",
+                    summary=(
+                        f"Recent {recent_issue.event_kind} issue: "
+                        f"{recent_issue.last_error_code or 'unknown'}."
+                    ),
+                    action="Review recent logs and preview the affected delivery type if needed.",
                 )
             )
 

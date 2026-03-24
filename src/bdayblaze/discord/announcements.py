@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Final
 
 import discord
 
 from bdayblaze.domain.announcement_template import (
     DEFAULT_ANNOUNCEMENT_TEMPLATE,
+    AnnouncementRenderContext,
     AnnouncementRenderRecipient,
+    default_template_for_kind,
     render_announcement_template,
 )
 from bdayblaze.domain.announcement_theme import (
@@ -15,7 +16,12 @@ from bdayblaze.domain.announcement_theme import (
     announcement_theme_footer_label,
     announcement_theme_title,
 )
-from bdayblaze.domain.models import AnnouncementTheme, CelebrationMode
+from bdayblaze.domain.models import (
+    AnnouncementKind,
+    AnnouncementStudioPresentation,
+    AnnouncementTheme,
+    CelebrationMode,
+)
 
 
 @dataclass(slots=True, frozen=True)
@@ -24,97 +30,87 @@ class PreparedAnnouncement:
     embed: discord.Embed
 
 
-_PREVIEW_SINGLE_RECIPIENTS: Final[tuple[AnnouncementRenderRecipient, ...]] = (
-    AnnouncementRenderRecipient(
-        mention="@Jamie",
-        display_name="Jamie",
-        username="jamie",
-        birth_month=3,
-        birth_day=24,
-        timezone="Asia/Yerevan",
-    ),
-)
-
-_PREVIEW_BATCH_RECIPIENTS: Final[tuple[AnnouncementRenderRecipient, ...]] = (
-    AnnouncementRenderRecipient(
-        mention="@Jamie",
-        display_name="Jamie",
-        username="jamie",
-        birth_month=3,
-        birth_day=24,
-        timezone="Asia/Yerevan",
-    ),
-    AnnouncementRenderRecipient(
-        mention="@Rin",
-        display_name="Rin",
-        username="rin",
-        birth_month=3,
-        birth_day=24,
-        timezone="Europe/Berlin",
-    ),
-)
-
-
 def build_announcement_message(
     *,
+    kind: AnnouncementKind,
     server_name: str,
     recipients: list[AnnouncementRenderRecipient],
     celebration_mode: CelebrationMode,
     announcement_theme: AnnouncementTheme,
+    presentation: AnnouncementStudioPresentation,
     template: str | None,
     batch_token: str | None = None,
     preview_label: str | None = None,
+    event_name: str | None = None,
+    event_month: int | None = None,
+    event_day: int | None = None,
+    late_delivery: bool = False,
+    mention_suppressed: bool = False,
 ) -> PreparedAnnouncement:
+    context = AnnouncementRenderContext(
+        kind=kind,
+        server_name=server_name,
+        celebration_mode=celebration_mode,
+        recipients=recipients,
+        event_name=event_name,
+        event_month=event_month,
+        event_day=event_day,
+        late_delivery=late_delivery,
+    )
     try:
-        description = render_announcement_template(
-            template,
-            server_name=server_name,
-            celebration_mode=celebration_mode,
-            recipients=recipients,
-        )
+        description = render_announcement_template(template, context=context)
     except ValueError:
         description = render_announcement_template(
-            DEFAULT_ANNOUNCEMENT_TEMPLATE,
-            server_name=server_name,
-            celebration_mode=celebration_mode,
-            recipients=recipients,
+            DEFAULT_ANNOUNCEMENT_TEMPLATE
+            if kind == "birthday_announcement"
+            else default_template_for_kind(kind),
+            context=context,
         )
+    recovery_note = "We missed the exact moment, but not the celebration."
+    if late_delivery and recovery_note not in description:
+        description = f"{recovery_note}\n\n{description}".strip()
 
     embed = discord.Embed(
         title=announcement_theme_title(
             announcement_theme,
-            recipient_count=len(recipients),
+            recipient_count=max(len(recipients), 1),
             celebration_mode=celebration_mode,
+            title_override=presentation.title_override,
         ),
         description=description,
         color=discord.Color(
             announcement_theme_color_value(
                 announcement_theme,
                 celebration_mode=celebration_mode,
+                accent_override=presentation.accent_color,
             )
         ),
     )
+    if presentation.image_url:
+        embed.set_image(url=presentation.image_url)
+    if presentation.thumbnail_url:
+        embed.set_thumbnail(url=presentation.thumbnail_url)
+    footer_parts: list[str] = []
+    if presentation.footer_text:
+        footer_parts.append(presentation.footer_text)
     if preview_label is not None:
         embed.set_author(name=preview_label)
-        embed.set_footer(
-            text=f"Bdayblaze Preview | {announcement_theme_footer_label(announcement_theme)}"
+        footer_parts.append(
+            f"Bdayblaze Preview | {announcement_theme_footer_label(announcement_theme)}"
         )
     elif batch_token is not None:
-        embed.set_footer(text=batch_footer(announcement_theme, batch_token))
+        footer_parts.append(batch_footer(announcement_theme, batch_token))
+    elif kind == "birthday_dm":
+        footer_parts.append("Bdayblaze Birthday DM")
+    if footer_parts:
+        embed.set_footer(text=" | ".join(footer_parts))
 
+    mentions = " ".join(recipient.mention for recipient in recipients if recipient.mention)
     return PreparedAnnouncement(
-        content=" ".join(recipient.mention for recipient in recipients),
+        content="" if mention_suppressed else mentions,
         embed=embed,
     )
 
 
 def batch_footer(theme: AnnouncementTheme, batch_token: str) -> str:
     return f"Bdayblaze {announcement_theme_footer_label(theme)} | {batch_token}"
-
-
-def preview_single_recipients() -> list[AnnouncementRenderRecipient]:
-    return list(_PREVIEW_SINGLE_RECIPIENTS)
-
-
-def preview_batch_recipients() -> list[AnnouncementRenderRecipient]:
-    return list(_PREVIEW_BATCH_RECIPIENTS)

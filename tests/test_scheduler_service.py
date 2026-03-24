@@ -13,6 +13,7 @@ from bdayblaze.domain.models import (
 from bdayblaze.services.scheduler import (
     AnnouncementSendResult,
     BirthdaySchedulerService,
+    DirectSendResult,
 )
 
 
@@ -26,18 +27,22 @@ class FakeSchedulerRepository:
         self.pending_batches = pending_batches
         self.batch_claim = batch_claim
         self._claim_pending_calls = 0
-        self.completed_calls: list[tuple[list[int], int | None]] = []
+        self.completed_calls: list[tuple[list[int], int | None, str | None]] = []
         self.skipped_calls: list[tuple[list[int], str]] = []
         self.single_skipped_calls: list[tuple[int, str]] = []
         self.rescheduled_calls: list[tuple[list[int], str]] = []
         self.batch_sent_calls: list[tuple[str, int | None]] = []
-        self.batch_reset_calls: list[str] = []
-        self.delivery_claim_calls: list[str] = []
 
     async def requeue_stale_processing_events(self, stale_before_utc: datetime) -> int:
         return 0
 
     async def claim_due_birthdays(self, now_utc: datetime, batch_size: int) -> int:
+        return 0
+
+    async def claim_due_anniversaries(self, now_utc: datetime, batch_size: int) -> int:
+        return 0
+
+    async def claim_due_recurring_celebrations(self, now_utc: datetime, batch_size: int) -> int:
         return 0
 
     async def skip_stale_birthdays(self, stale_before_utc: datetime, batch_size: int) -> int:
@@ -47,7 +52,9 @@ class FakeSchedulerRepository:
         return 0
 
     async def claim_pending_events(
-        self, now_utc: datetime, batch_size: int
+        self,
+        now_utc: datetime,
+        batch_size: int,
     ) -> list[CelebrationEvent]:
         self._claim_pending_calls += 1
         if self._claim_pending_calls > 1:
@@ -71,7 +78,6 @@ class FakeSchedulerRepository:
         claimed_at_utc: datetime,
         stale_started_before_utc: datetime,
     ) -> AnnouncementBatchClaim:
-        self.delivery_claim_calls.append(batch_token)
         return self.batch_claim
 
     async def next_due_timestamp(self) -> datetime | None:
@@ -81,9 +87,13 @@ class FakeSchedulerRepository:
         return 0
 
     async def mark_events_completed(
-        self, event_ids: list[int], message_id: int | None = None
+        self,
+        event_ids: list[int],
+        message_id: int | None = None,
+        *,
+        note_code: str | None = None,
     ) -> None:
-        self.completed_calls.append((event_ids, message_id))
+        self.completed_calls.append((event_ids, message_id, note_code))
 
     async def complete_events_as_skipped(self, event_ids: list[int], error_code: str) -> None:
         self.skipped_calls.append((event_ids, error_code))
@@ -107,9 +117,6 @@ class FakeSchedulerRepository:
     ) -> None:
         self.batch_sent_calls.append((batch_token, message_id))
 
-    async def reset_announcement_batch_delivery(self, batch_token: str) -> None:
-        self.batch_reset_calls.append(batch_token)
-
 
 class FakeGateway:
     def __init__(
@@ -117,10 +124,17 @@ class FakeGateway:
         *,
         existing_message_id: int | None = None,
         role_status: str = "applied",
+        dm_result: DirectSendResult | None = None,
+        recurring_result: DirectSendResult | None = None,
+        anniversary_result: AnnouncementSendResult | None = None,
     ) -> None:
         self.existing_message_id = existing_message_id
         self.role_status = role_status
+        self.dm_result = dm_result or DirectSendResult(status="sent")
+        self.recurring_result = recurring_result or DirectSendResult(status="sent", message_id=991)
+        self.anniversary_result = anniversary_result or AnnouncementSendResult(message_id=880)
         self.sent_batches: list[str] = []
+        self.sent_anniversary_batches: list[str] = []
         self.history_checks: list[str] = []
 
     async def find_announcement_message(
@@ -136,24 +150,24 @@ class FakeGateway:
         self.history_checks.append(batch_token)
         return self.existing_message_id
 
-    async def send_birthday_announcement(
-        self,
-        *,
-        guild_id: int,
-        channel_id: int,
-        recipients: list[object],
-        celebration_mode: str,
-        announcement_theme: str,
-        batch_token: str,
-        template: str,
-    ) -> AnnouncementSendResult:
-        self.sent_batches.append(batch_token)
+    async def send_birthday_announcement(self, **kwargs: object) -> AnnouncementSendResult:
+        self.sent_batches.append(str(kwargs["batch_token"]))
         return AnnouncementSendResult(message_id=777)
 
-    async def add_birthday_role(self, *, guild_id: int, user_id: int, role_id: int) -> str:
+    async def send_anniversary_announcement(self, **kwargs: object) -> AnnouncementSendResult:
+        self.sent_anniversary_batches.append(str(kwargs["batch_token"]))
+        return self.anniversary_result
+
+    async def send_birthday_dm(self, **kwargs: object) -> DirectSendResult:
+        return self.dm_result
+
+    async def send_recurring_announcement(self, **kwargs: object) -> DirectSendResult:
+        return self.recurring_result
+
+    async def add_birthday_role(self, **kwargs: object) -> str:
         return self.role_status
 
-    async def remove_birthday_role(self, *, guild_id: int, user_id: int, role_id: int) -> str:
+    async def remove_birthday_role(self, **kwargs: object) -> str:
         return self.role_status
 
 
@@ -177,26 +191,44 @@ def _announcement_batch(
     )
 
 
-def _announcement_event(event_id: int, batch_token: str) -> CelebrationEvent:
+def _announcement_event(
+    event_id: int,
+    batch_token: str,
+    *,
+    kind: str = "announcement",
+) -> CelebrationEvent:
     now = datetime(2026, 3, 24, tzinfo=UTC)
-    return CelebrationEvent(
-        id=event_id,
-        event_key=f"announcement:{event_id}",
-        guild_id=1,
-        user_id=100 + event_id,
-        event_kind="announcement",
-        scheduled_for_utc=now,
-        state="processing",
-        payload={
+    payload: dict[str, object] = {
+        "channel_id": 123,
+        "batch_token": batch_token,
+        "celebration_mode": "quiet",
+        "announcement_theme": "classic",
+        "template": "Happy birthday {birthday.mentions}",
+        "birth_month": 3,
+        "birth_day": 24,
+        "timezone": "Asia/Yerevan",
+    }
+    if kind == "anniversary_announcement":
+        payload = {
             "channel_id": 123,
             "batch_token": batch_token,
             "celebration_mode": "quiet",
             "announcement_theme": "classic",
-            "template": "Happy birthday {birthday.mentions}",
-            "birth_month": 3,
-            "birth_day": 24,
-            "timezone": "Asia/Yerevan",
-        },
+            "template": "Happy anniversary {members.names}",
+            "joined_at_utc": now.isoformat(),
+            "event_name": "Join anniversary",
+            "event_month": 3,
+            "event_day": 24,
+        }
+    return CelebrationEvent(
+        id=event_id,
+        event_key=f"{kind}:{event_id}",
+        guild_id=1,
+        user_id=100 + event_id,
+        event_kind=kind,  # type: ignore[arg-type]
+        scheduled_for_utc=now,
+        state="processing",
+        payload=payload,
         attempt_count=1,
         last_error_code=None,
         message_id=None,
@@ -207,7 +239,7 @@ def _announcement_event(event_id: int, batch_token: str) -> CelebrationEvent:
     )
 
 
-def _role_event(event_id: int, kind: str) -> CelebrationEvent:
+def _single_event(event_id: int, kind: str, payload: dict[str, object]) -> CelebrationEvent:
     now = datetime(2026, 3, 24, tzinfo=UTC)
     return CelebrationEvent(
         id=event_id,
@@ -217,7 +249,7 @@ def _role_event(event_id: int, kind: str) -> CelebrationEvent:
         event_kind=kind,  # type: ignore[arg-type]
         scheduled_for_utc=now,
         state="processing",
-        payload={"role_id": 999},
+        payload=payload,
         attempt_count=1,
         last_error_code=None,
         message_id=None,
@@ -252,7 +284,7 @@ async def test_scheduler_marks_already_sent_batch_complete_without_resending() -
     claimed = await service.run_iteration(datetime(2026, 3, 24, tzinfo=UTC))
 
     assert claimed == 2
-    assert repository.completed_calls == [([1, 2], 555)]
+    assert repository.completed_calls == [([1, 2], 555, None)]
     assert gateway.sent_batches == []
     assert gateway.history_checks == []
 
@@ -285,12 +317,104 @@ async def test_scheduler_uses_history_scan_only_for_stale_sending_batch_recovery
     assert gateway.history_checks == [batch_token]
     assert gateway.sent_batches == []
     assert repository.batch_sent_calls == [(batch_token, 777)]
-    assert repository.completed_calls == [([1, 2], 777)]
+    assert repository.completed_calls == [([1, 2], 777, None)]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_handles_anniversary_batches() -> None:
+    batch_token = "anniversary-batch:1:123"
+    events = [
+        _announcement_event(1, batch_token, kind="anniversary_announcement"),
+        _announcement_event(2, batch_token, kind="anniversary_announcement"),
+    ]
+    repository = FakeSchedulerRepository(
+        pending_batches={batch_token: events},
+        batch_claim=AnnouncementBatchClaim(status="claimed", batch=None),
+    )
+    gateway = FakeGateway()
+    service = BirthdaySchedulerService(
+        repository,  # type: ignore[arg-type]
+        gateway,  # type: ignore[arg-type]
+        SchedulerMetrics(),
+        batch_size=25,
+        recovery_grace_hours=36,
+        scheduler_max_sleep_seconds=300,
+    )
+
+    claimed = await service.run_iteration(datetime(2026, 3, 24, tzinfo=UTC))
+
+    assert claimed == 2
+    assert gateway.sent_anniversary_batches == [batch_token]
+    assert repository.completed_calls == [([1, 2], 880, None)]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_completes_birthday_dm_as_skipped_when_member_cannot_be_dmed() -> None:
+    event = _single_event(
+        11,
+        "birthday_dm",
+        {
+            "template": "Happy birthday {user.display_name}",
+            "birth_month": 3,
+            "birth_day": 24,
+            "timezone": "UTC",
+        },
+    )
+    repository = FakeSchedulerRepository(
+        pending_batches={"unused": [event]},
+        batch_claim=AnnouncementBatchClaim(status="claimed", batch=None),
+    )
+    gateway = FakeGateway(dm_result=DirectSendResult(status="dm_closed"))
+    service = BirthdaySchedulerService(
+        repository,  # type: ignore[arg-type]
+        gateway,  # type: ignore[arg-type]
+        SchedulerMetrics(),
+        batch_size=25,
+        recovery_grace_hours=36,
+        scheduler_max_sleep_seconds=300,
+    )
+
+    claimed = await service.run_iteration(datetime(2026, 3, 24, tzinfo=UTC))
+
+    assert claimed == 1
+    assert repository.single_skipped_calls == [(11, "dm_closed")]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_marks_recurring_announcement_complete() -> None:
+    event = _single_event(
+        12,
+        "recurring_announcement",
+        {
+            "channel_id": 123,
+            "event_name": "Server birthday",
+            "event_month": 3,
+            "event_day": 24,
+        },
+    )
+    repository = FakeSchedulerRepository(
+        pending_batches={"unused": [event]},
+        batch_claim=AnnouncementBatchClaim(status="claimed", batch=None),
+    )
+    gateway = FakeGateway(recurring_result=DirectSendResult(status="sent", message_id=991))
+    service = BirthdaySchedulerService(
+        repository,  # type: ignore[arg-type]
+        gateway,  # type: ignore[arg-type]
+        SchedulerMetrics(),
+        batch_size=25,
+        recovery_grace_hours=36,
+        scheduler_max_sleep_seconds=300,
+    )
+
+    claimed = await service.run_iteration(datetime(2026, 3, 24, tzinfo=UTC))
+
+    assert claimed == 1
+    assert repository.completed_calls == [([12], 991, None)]
 
 
 @pytest.mark.asyncio
 async def test_scheduler_skips_role_end_when_member_is_missing() -> None:
-    event = _role_event(10, "role_end")
+    event = _single_event(10, "role_end", {"role_id": 999})
     repository = FakeSchedulerRepository(
         pending_batches={"unused": [event]},
         batch_claim=AnnouncementBatchClaim(status="claimed", batch=None),

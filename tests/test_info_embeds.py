@@ -5,12 +5,15 @@ from importlib.metadata import PackageNotFoundError
 from bdayblaze.discord.ui import info
 
 
-def test_build_help_embed_mentions_setup_and_test_flow() -> None:
+def test_build_help_embed_mentions_operator_flows() -> None:
     embed = info.build_help_embed()
 
     assert embed.title == "Bdayblaze help"
     assert any(field.name == "Getting started" for field in embed.fields)
     assert "/birthday test-message" in embed.fields[0].value
+    admin_field = next(field for field in embed.fields if field.name == "Admin commands")
+    assert "/birthday import" in admin_field.value
+    assert "/birthday anniversary ..." in admin_field.value
 
 
 def test_build_about_embed_uses_package_metadata(monkeypatch) -> None:

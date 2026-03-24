@@ -122,8 +122,10 @@ def active_window_candidate_birthdays(now_utc: datetime) -> tuple[tuple[int, int
     for offset_days in (-1, 0, 1):
         candidate_date = (now_utc + timedelta(days=offset_days)).date()
         candidate_pairs.add((candidate_date.month, candidate_date.day))
-        if candidate_date.month == 2 and candidate_date.day == 28 and not isleap(
-            candidate_date.year
+        if (
+            candidate_date.month == 2
+            and candidate_date.day == 28
+            and not isleap(candidate_date.year)
         ):
             candidate_pairs.add((2, 29))
     return tuple(sorted(candidate_pairs))
@@ -133,3 +135,16 @@ def compute_age(birth_year: int | None, celebration_date: date) -> int | None:
     if birth_year is None:
         return None
     return celebration_date.year - birth_year
+
+
+def anniversary_month_day(joined_at_utc: datetime, timezone_name: str) -> tuple[int, int]:
+    zone = validate_timezone(timezone_name)
+    local_join_date = joined_at_utc.astimezone(zone).date()
+    return local_join_date.month, local_join_date.day
+
+
+def membership_age_days(joined_at_utc: datetime | None, *, now_utc: datetime) -> int | None:
+    if joined_at_utc is None:
+        return None
+    delta = now_utc.astimezone(UTC) - joined_at_utc.astimezone(UTC)
+    return max(0, delta.days)

@@ -22,6 +22,7 @@ from bdayblaze.services.scheduler import (
     AnnouncementSendResult,
     BirthdaySchedulerRunner,
     BirthdaySchedulerService,
+    DirectSendResult,
 )
 from bdayblaze.services.settings_service import SettingsService
 
@@ -117,6 +118,15 @@ class _DeferredGateway:
         raise RuntimeError("Gateway not attached yet.")
 
     async def send_birthday_announcement(self, **_: object) -> AnnouncementSendResult:
+        raise RuntimeError("Gateway not attached yet.")
+
+    async def send_anniversary_announcement(self, **_: object) -> AnnouncementSendResult:
+        raise RuntimeError("Gateway not attached yet.")
+
+    async def send_birthday_dm(self, **_: object) -> DirectSendResult:
+        raise RuntimeError("Gateway not attached yet.")
+
+    async def send_recurring_announcement(self, **_: object) -> DirectSendResult:
         raise RuntimeError("Gateway not attached yet.")
 
     async def add_birthday_role(self, **_: object) -> str:
