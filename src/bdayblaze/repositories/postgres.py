@@ -5,8 +5,11 @@ from datetime import datetime, timedelta
 
 import asyncpg
 
+from bdayblaze.domain.announcement_template import DEFAULT_ANNOUNCEMENT_TEMPLATE
 from bdayblaze.domain.birthday_logic import celebration_end_at_utc, next_occurrence_after_current
 from bdayblaze.domain.models import (
+    AnnouncementBatch,
+    AnnouncementBatchClaim,
     BirthdayPreview,
     CelebrationEvent,
     GuildSettings,
@@ -39,9 +42,10 @@ class PostgresRepository:
                     announcements_enabled,
                     role_enabled,
                     celebration_mode,
+                    announcement_template,
                     updated_at_utc
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
                 ON CONFLICT (guild_id) DO UPDATE SET
                     announcement_channel_id = EXCLUDED.announcement_channel_id,
                     default_timezone = EXCLUDED.default_timezone,
@@ -49,6 +53,7 @@ class PostgresRepository:
                     announcements_enabled = EXCLUDED.announcements_enabled,
                     role_enabled = EXCLUDED.role_enabled,
                     celebration_mode = EXCLUDED.celebration_mode,
+                    announcement_template = EXCLUDED.announcement_template,
                     updated_at_utc = NOW()
                 RETURNING *
                 """,
@@ -59,6 +64,7 @@ class PostgresRepository:
                 settings.announcements_enabled,
                 settings.role_enabled,
                 settings.celebration_mode,
+                settings.announcement_template,
             )
         return self._map_guild_settings(row)
 
@@ -185,7 +191,8 @@ class PostgresRepository:
                         gs.birthday_role_id,
                         COALESCE(gs.announcements_enabled, FALSE) AS announcements_enabled,
                         COALESCE(gs.role_enabled, FALSE) AS role_enabled,
-                        COALESCE(gs.celebration_mode, 'quiet') AS celebration_mode
+                        COALESCE(gs.celebration_mode, 'quiet') AS celebration_mode,
+                        gs.announcement_template
                     FROM member_birthdays AS mb
                     LEFT JOIN guild_settings AS gs
                         ON gs.guild_id = mb.guild_id
@@ -214,9 +221,29 @@ class PostgresRepository:
                         ),
                     )
 
+                for (guild_id, scheduled_for_utc, channel_id), batch_token in batch_tokens.items():
+                    await connection.execute(
+                        """
+                        INSERT INTO announcement_batches (
+                            batch_token,
+                            guild_id,
+                            channel_id,
+                            scheduled_for_utc
+                        )
+                        VALUES ($1, $2, $3, $4)
+                        ON CONFLICT (batch_token) DO NOTHING
+                        """,
+                        batch_token,
+                        guild_id,
+                        channel_id,
+                        scheduled_for_utc,
+                    )
+
                 inserted = 0
                 for row in rows:
-                    effective_timezone = row["timezone_override"] or row["effective_default_timezone"]
+                    effective_timezone = (
+                        row["timezone_override"] or row["effective_default_timezone"]
+                    )
                     current_occurrence = row["next_occurrence_at_utc"]
                     next_occurrence = next_occurrence_after_current(
                         birth_month=row["birth_month"],
@@ -276,6 +303,11 @@ class PostgresRepository:
                                     "channel_id": row["announcement_channel_id"],
                                     "batch_token": batch_token,
                                     "celebration_mode": row["celebration_mode"],
+                                    "template": row["announcement_template"]
+                                    or DEFAULT_ANNOUNCEMENT_TEMPLATE,
+                                    "birth_month": row["birth_month"],
+                                    "birth_day": row["birth_day"],
+                                    "timezone": effective_timezone,
                                 }
                             ),
                         )
@@ -330,7 +362,9 @@ class PostgresRepository:
                 if not rows:
                     return 0
                 for row in rows:
-                    effective_timezone = row["timezone_override"] or row["effective_default_timezone"]
+                    effective_timezone = (
+                        row["timezone_override"] or row["effective_default_timezone"]
+                    )
                     next_occurrence = next_occurrence_after_current(
                         birth_month=row["birth_month"],
                         birth_day=row["birth_day"],
@@ -376,8 +410,7 @@ class PostgresRepository:
                     if removal_at is None or role_id is None:
                         continue
                     event_key = (
-                        f"role-end:{row['guild_id']}:{row['user_id']}:"
-                        f"{int(removal_at.timestamp())}"
+                        f"role-end:{row['guild_id']}:{row['user_id']}:{int(removal_at.timestamp())}"
                     )
                     await connection.execute(
                         """
@@ -427,7 +460,9 @@ class PostgresRepository:
             )
         return _parse_affected_rows(result)
 
-    async def claim_pending_events(self, now_utc: datetime, batch_size: int) -> list[CelebrationEvent]:
+    async def claim_pending_events(
+        self, now_utc: datetime, batch_size: int
+    ) -> list[CelebrationEvent]:
         async with self._pool.acquire() as connection:
             rows = await connection.fetch(
                 """
@@ -454,7 +489,9 @@ class PostgresRepository:
             )
         return [self._map_celebration_event(row) for row in rows]
 
-    async def mark_events_completed(self, event_ids: list[int], message_id: int | None = None) -> None:
+    async def mark_events_completed(
+        self, event_ids: list[int], message_id: int | None = None
+    ) -> None:
         if not event_ids:
             return
         async with self._pool.acquire() as connection:
@@ -548,28 +585,7 @@ class PostgresRepository:
             )
         return _parse_affected_rows(result)
 
-    async def find_processing_announcement_batch(
-        self,
-        guild_id: int,
-        batch_token: str,
-    ) -> list[CelebrationEvent]:
-        async with self._pool.acquire() as connection:
-            rows = await connection.fetch(
-                """
-                SELECT *
-                FROM celebration_events
-                WHERE guild_id = $1
-                  AND event_kind = 'announcement'
-                  AND state = 'processing'
-                  AND payload ->> 'batch_token' = $2
-                ORDER BY id ASC
-                """,
-                guild_id,
-                batch_token,
-            )
-        return [self._map_celebration_event(row) for row in rows]
-
-    async def claim_announcement_batch(
+    async def claim_announcement_events_batch(
         self,
         guild_id: int,
         batch_token: str,
@@ -606,6 +622,107 @@ class PostgresRepository:
                 )
         return [self._map_celebration_event(row) for row in rows]
 
+    async def claim_announcement_batch_delivery(
+        self,
+        batch_token: str,
+        *,
+        guild_id: int,
+        channel_id: int,
+        scheduled_for_utc: datetime,
+        claimed_at_utc: datetime,
+        stale_started_before_utc: datetime,
+    ) -> AnnouncementBatchClaim:
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                row = await connection.fetchrow(
+                    """
+                    SELECT *
+                    FROM announcement_batches
+                    WHERE batch_token = $1
+                    FOR UPDATE
+                    """,
+                    batch_token,
+                )
+                if row is None:
+                    row = await connection.fetchrow(
+                        """
+                        INSERT INTO announcement_batches (
+                            batch_token,
+                            guild_id,
+                            channel_id,
+                            scheduled_for_utc
+                        )
+                        VALUES ($1, $2, $3, $4)
+                        RETURNING *
+                        """,
+                        batch_token,
+                        guild_id,
+                        channel_id,
+                        scheduled_for_utc,
+                    )
+                    assert row is not None
+
+                batch = self._map_announcement_batch(row)
+                if batch.state == "sent":
+                    return AnnouncementBatchClaim(status="already_sent", batch=batch)
+                if (
+                    batch.state == "sending"
+                    and batch.send_started_at_utc is not None
+                    and batch.send_started_at_utc > stale_started_before_utc
+                ):
+                    return AnnouncementBatchClaim(status="in_flight", batch=batch)
+
+                updated = await connection.fetchrow(
+                    """
+                    UPDATE announcement_batches
+                    SET state = 'sending',
+                        send_started_at_utc = $2,
+                        updated_at_utc = NOW()
+                    WHERE batch_token = $1
+                    RETURNING *
+                    """,
+                    batch_token,
+                    claimed_at_utc,
+                )
+        assert updated is not None
+        return AnnouncementBatchClaim(
+            status="claimed",
+            batch=self._map_announcement_batch(updated),
+            needs_history_check=batch.state == "sending",
+        )
+
+    async def mark_announcement_batch_sent(
+        self,
+        batch_token: str,
+        *,
+        message_id: int | None,
+    ) -> None:
+        async with self._pool.acquire() as connection:
+            await connection.execute(
+                """
+                UPDATE announcement_batches
+                SET state = 'sent',
+                    message_id = $2,
+                    updated_at_utc = NOW()
+                WHERE batch_token = $1
+                """,
+                batch_token,
+                message_id,
+            )
+
+    async def reset_announcement_batch_delivery(self, batch_token: str) -> None:
+        async with self._pool.acquire() as connection:
+            await connection.execute(
+                """
+                UPDATE announcement_batches
+                SET state = 'pending',
+                    send_started_at_utc = NULL,
+                    updated_at_utc = NOW()
+                WHERE batch_token = $1
+                """,
+                batch_token,
+            )
+
     async def next_due_timestamp(self) -> datetime | None:
         async with self._pool.acquire() as connection:
             row = await connection.fetchrow(
@@ -627,7 +744,9 @@ class PostgresRepository:
             )
         return row["next_due_at"] if row is not None else None
 
-    async def fetch_scheduler_backlog(self, now_utc: datetime, stale_for: timedelta) -> SchedulerBacklog:
+    async def fetch_scheduler_backlog(
+        self, now_utc: datetime, stale_for: timedelta
+    ) -> SchedulerBacklog:
         async with self._pool.acquire() as connection:
             row = await connection.fetchrow(
                 """
@@ -667,6 +786,7 @@ class PostgresRepository:
             announcements_enabled=row["announcements_enabled"],
             role_enabled=row["role_enabled"],
             celebration_mode=row["celebration_mode"],
+            announcement_template=row["announcement_template"],
             created_at_utc=row["created_at_utc"],
             updated_at_utc=row["updated_at_utc"],
         )
@@ -708,6 +828,20 @@ class PostgresRepository:
             updated_at_utc=row["updated_at_utc"],
             completed_at_utc=row["completed_at_utc"],
             processing_started_at_utc=row["processing_started_at_utc"],
+        )
+
+    @staticmethod
+    def _map_announcement_batch(row: asyncpg.Record) -> AnnouncementBatch:
+        return AnnouncementBatch(
+            batch_token=row["batch_token"],
+            guild_id=row["guild_id"],
+            channel_id=row["channel_id"],
+            scheduled_for_utc=row["scheduled_for_utc"],
+            state=row["state"],
+            message_id=row["message_id"],
+            send_started_at_utc=row["send_started_at_utc"],
+            created_at_utc=row["created_at_utc"],
+            updated_at_utc=row["updated_at_utc"],
         )
 
 

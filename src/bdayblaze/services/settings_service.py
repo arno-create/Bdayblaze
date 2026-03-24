@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Final
 
 import discord
 
+from bdayblaze.domain.announcement_template import validate_announcement_template
 from bdayblaze.domain.birthday_logic import validate_timezone
 from bdayblaze.domain.models import CelebrationMode, GuildSettings
 from bdayblaze.repositories.postgres import PostgresRepository
 from bdayblaze.services.errors import ValidationError
 
 
-UNSET: Final = object()
+class _UnsetType:
+    pass
+
+
+UNSET = _UnsetType()
 
 
 class SettingsService:
@@ -19,32 +23,70 @@ class SettingsService:
         self._repository = repository
 
     async def get_settings(self, guild_id: int) -> GuildSettings:
-        return await self._repository.fetch_guild_settings(guild_id) or GuildSettings.default(guild_id)
+        stored = await self._repository.fetch_guild_settings(guild_id)
+        return stored or GuildSettings.default(guild_id)
 
     async def update_settings(
         self,
         guild: discord.Guild,
         *,
-        announcement_channel_id: int | None | object = UNSET,
-        default_timezone: str | object = UNSET,
-        birthday_role_id: int | None | object = UNSET,
-        announcements_enabled: bool | object = UNSET,
-        role_enabled: bool | object = UNSET,
-        celebration_mode: CelebrationMode | object = UNSET,
+        announcement_channel_id: int | None | _UnsetType = UNSET,
+        default_timezone: str | _UnsetType = UNSET,
+        birthday_role_id: int | None | _UnsetType = UNSET,
+        announcements_enabled: bool | _UnsetType = UNSET,
+        role_enabled: bool | _UnsetType = UNSET,
+        celebration_mode: CelebrationMode | _UnsetType = UNSET,
+        announcement_template: str | None | _UnsetType = UNSET,
     ) -> GuildSettings:
         current = await self.get_settings(guild.id)
+        merged_announcement_channel_id = (
+            current.announcement_channel_id
+            if isinstance(announcement_channel_id, _UnsetType)
+            else announcement_channel_id
+        )
+        merged_default_timezone = (
+            current.default_timezone
+            if isinstance(default_timezone, _UnsetType)
+            else default_timezone
+        )
+        merged_birthday_role_id = (
+            current.birthday_role_id
+            if isinstance(birthday_role_id, _UnsetType)
+            else birthday_role_id
+        )
+        merged_announcements_enabled = (
+            current.announcements_enabled
+            if isinstance(announcements_enabled, _UnsetType)
+            else announcements_enabled
+        )
+        merged_role_enabled = (
+            current.role_enabled if isinstance(role_enabled, _UnsetType) else role_enabled
+        )
+        merged_celebration_mode = (
+            current.celebration_mode
+            if isinstance(celebration_mode, _UnsetType)
+            else celebration_mode
+        )
+        merged_announcement_template = (
+            current.announcement_template
+            if isinstance(announcement_template, _UnsetType)
+            else announcement_template
+        )
+        try:
+            normalized_announcement_template = validate_announcement_template(
+                merged_announcement_template
+            )
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from exc
         merged = replace(
             current,
-            announcement_channel_id=current.announcement_channel_id
-            if announcement_channel_id is UNSET
-            else announcement_channel_id,
-            default_timezone=current.default_timezone if default_timezone is UNSET else default_timezone,
-            birthday_role_id=current.birthday_role_id if birthday_role_id is UNSET else birthday_role_id,
-            announcements_enabled=current.announcements_enabled
-            if announcements_enabled is UNSET
-            else announcements_enabled,
-            role_enabled=current.role_enabled if role_enabled is UNSET else role_enabled,
-            celebration_mode=current.celebration_mode if celebration_mode is UNSET else celebration_mode,
+            announcement_channel_id=merged_announcement_channel_id,
+            default_timezone=merged_default_timezone,
+            birthday_role_id=merged_birthday_role_id,
+            announcements_enabled=merged_announcements_enabled,
+            role_enabled=merged_role_enabled,
+            celebration_mode=merged_celebration_mode,
+            announcement_template=normalized_announcement_template,
         )
         self._validate_settings(guild, merged)
         return await self._repository.upsert_guild_settings(merged)
@@ -55,7 +97,6 @@ class SettingsService:
             validate_timezone(settings.default_timezone)
         except ValueError as exc:
             raise ValidationError(str(exc)) from exc
-
         bot_member = guild.me
         if bot_member is None:
             raise ValidationError("Bot member state is unavailable. Try again in a few seconds.")
@@ -63,11 +104,18 @@ class SettingsService:
         if settings.announcement_channel_id is not None:
             channel = guild.get_channel(settings.announcement_channel_id)
             if not isinstance(channel, discord.TextChannel):
-                raise ValidationError("Announcement channel must be a text or announcement channel.")
-            permissions = channel.permissions_for(bot_member)
-            if not permissions.view_channel or not permissions.send_messages or not permissions.embed_links:
                 raise ValidationError(
-                    "The bot needs View Channel, Send Messages, and Embed Links in the announcement channel."
+                    "Announcement channel must be a text or announcement channel."
+                )
+            permissions = channel.permissions_for(bot_member)
+            if (
+                not permissions.view_channel
+                or not permissions.send_messages
+                or not permissions.embed_links
+            ):
+                raise ValidationError(
+                    "The bot needs View Channel, Send Messages, and Embed Links in the "
+                    "announcement channel."
                 )
         elif settings.announcements_enabled:
             raise ValidationError("Select an announcement channel before enabling announcements.")
@@ -77,10 +125,18 @@ class SettingsService:
             if role is None:
                 raise ValidationError("The selected birthday role no longer exists.")
             if role.is_default() or role.managed:
-                raise ValidationError("Choose a dedicated, manually managed role for birthday assignment.")
+                raise ValidationError(
+                    "Choose a dedicated, manually managed role for birthday assignment."
+                )
             if not bot_member.guild_permissions.manage_roles:
-                raise ValidationError("The bot needs Manage Roles before a birthday role can be saved.")
+                raise ValidationError(
+                    "The bot needs Manage Roles before a birthday role can be saved."
+                )
             if bot_member.top_role <= role:
-                raise ValidationError("Move the bot's highest role above the birthday role before saving.")
+                raise ValidationError(
+                    "Move the bot's highest role above the birthday role before saving."
+                )
         elif settings.role_enabled:
-            raise ValidationError("Select a dedicated birthday role before enabling role assignment.")
+            raise ValidationError(
+                "Select a dedicated birthday role before enabling role assignment."
+            )

@@ -8,12 +8,13 @@
   - day
   - optional year
   - optional timezone override
-- Age is hidden by default.
+- Age is not shown publicly and there is no cross-server birthday visibility feature in this version.
 - No message content is collected or required.
 
 ## Logging rules
 
 - Do not log birth dates, birth years, or full timezone-linked birthday records.
+- Do not log raw announcement-template content when it may contain personal data.
 - Store only redacted error codes in celebration event retry metadata.
 - Prefer hashed identifiers for operational correlation where needed.
 
@@ -22,7 +23,8 @@
 - `/birthday view` only exposes the caller's own stored record.
 - `/birthday remove` provides a direct deletion path.
 - `/birthday upcoming` is guild-scoped and intentionally omits year and age.
-- `/bdayblaze privacy` explains what is stored and why.
+- `/birthday privacy` explains what is stored and why.
+- `/birthday message` is admin-only and edits the announcement body only; reliable user mentions remain system-generated outside the custom template.
 
 ## Threat model summary
 
@@ -31,6 +33,7 @@
 - Birthday records
 - Guild configuration
 - Celebration event queue
+- Announcement batch state
 - Bot token and database credentials
 
 ### Primary risks
@@ -45,7 +48,7 @@
 
 - Least-privilege intents and permissions.
 - Guild-scoped storage and optional birth year.
-- Durable event queue with restart recovery.
+- Durable event queue plus persisted announcement-batch state for restart recovery.
 - Health command for stale config, permissions, and scheduler lag.
 - Graceful handling when members, roles, or channels disappear.
 

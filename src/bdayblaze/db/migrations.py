@@ -4,7 +4,6 @@ from pathlib import Path
 
 import asyncpg
 
-
 MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "migrations"
 
 

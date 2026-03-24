@@ -55,3 +55,7 @@ strict = true
 warn_unused_configs = true
 packages = ["bdayblaze"]
 exclude = ["tests"]
+
+[[tool.mypy.overrides]]
+module = ["asyncpg", "asyncpg.*", "structlog", "structlog.*"]
+ignore_missing_imports = true

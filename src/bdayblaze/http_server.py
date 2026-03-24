@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from json import dumps
+from typing import Any
 
 from bdayblaze.domain.models import SchedulerMetrics
 from bdayblaze.logging import get_logger
@@ -14,8 +15,9 @@ class HttpHealthServer:
     metrics: SchedulerMetrics
     host: str
     port: int
+    scheduler_max_sleep_seconds: int
     _server: asyncio.base_events.Server | None = field(init=False, default=None)
-    _logger: object = field(init=False)
+    _logger: Any = field(init=False)
 
     def __post_init__(self) -> None:
         self._logger = get_logger(component="http_health")
@@ -55,8 +57,7 @@ class HttpHealthServer:
                     break
 
         if path in {"/", "/health", "/healthz"}:
-            status_code = "200 OK"
-            payload = self._build_payload()
+            status_code, payload = self._build_response()
         else:
             status_code = "404 Not Found"
             payload = {"status": "not_found"}
@@ -76,16 +77,29 @@ class HttpHealthServer:
         writer.close()
         await writer.wait_closed()
 
-    def _build_payload(self) -> dict[str, str | int | bool | None]:
-        return {
-            "status": "ok",
-            "utc": datetime.now(UTC).isoformat(),
-            "scheduler_recovery_completed": self.metrics.recovery_completed,
-            "scheduler_iterations": self.metrics.iterations,
-            "scheduler_last_iteration_at_utc": (
-                self.metrics.last_iteration_at_utc.isoformat()
-                if self.metrics.last_iteration_at_utc is not None
-                else None
-            ),
-            "scheduler_last_error_code": self.metrics.last_error_code,
-        }
+    def _build_response(self) -> tuple[str, dict[str, str | int | bool | None]]:
+        stale_window = timedelta(seconds=max(self.scheduler_max_sleep_seconds * 2, 600))
+        now_utc = datetime.now(UTC)
+        last_iteration = self.metrics.last_iteration_at_utc
+        heartbeat_stale = last_iteration is None or now_utc - last_iteration > stale_window
+
+        if not self.metrics.recovery_completed:
+            status = "error" if heartbeat_stale and last_iteration is not None else "starting"
+        elif heartbeat_stale:
+            status = "error"
+        else:
+            status = "ok"
+
+        return (
+            "503 Service Unavailable" if status == "error" else "200 OK",
+            {
+                "status": status,
+                "utc": now_utc.isoformat(),
+                "scheduler_recovery_completed": self.metrics.recovery_completed,
+                "scheduler_iterations": self.metrics.iterations,
+                "scheduler_last_iteration_at_utc": (
+                    last_iteration.isoformat() if last_iteration is not None else None
+                ),
+                "scheduler_last_error_code": self.metrics.last_error_code,
+            },
+        )

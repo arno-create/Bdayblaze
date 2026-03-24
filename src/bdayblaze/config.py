@@ -42,6 +42,7 @@ class Settings:
     def from_env(cls) -> Settings:
         token = getenv("DISCORD_TOKEN", "").strip()
         database_url = getenv("DATABASE_URL", "").strip()
+        port = getenv("PORT")
         if not token:
             raise RuntimeError("DISCORD_TOKEN is required.")
         if not database_url:
@@ -56,5 +57,5 @@ class Settings:
             scheduler_batch_size=_parse_int("BDAYBLAZE_SCHEDULER_BATCH_SIZE", 25),
             guild_sync_ids=_parse_int_list("BDAYBLAZE_GUILD_SYNC_IDS"),
             bind_host=getenv("BDAYBLAZE_BIND_HOST", "0.0.0.0").strip() or "0.0.0.0",
-            bind_port=int(getenv("PORT")) if getenv("PORT") else None,
+            bind_port=int(port) if port else None,
         )

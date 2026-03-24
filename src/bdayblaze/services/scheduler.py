@@ -5,7 +5,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
-from bdayblaze.domain.models import CelebrationEvent, SchedulerMetrics
+from bdayblaze.domain.models import (
+    AnnouncementRecipientSnapshot,
+    CelebrationEvent,
+    SchedulerMetrics,
+)
 from bdayblaze.logging import get_logger
 from bdayblaze.repositories.postgres import PostgresRepository
 
@@ -41,9 +45,10 @@ class SchedulerGateway(Protocol):
         *,
         guild_id: int,
         channel_id: int,
-        user_ids: list[int],
+        recipients: list[AnnouncementRecipientSnapshot],
         celebration_mode: str,
         batch_token: str,
+        template: str,
     ) -> AnnouncementSendResult: ...
 
     async def add_birthday_role(self, *, guild_id: int, user_id: int, role_id: int) -> str: ...
@@ -78,7 +83,9 @@ class BirthdaySchedulerService:
     async def recover(self, now_utc: datetime | None = None) -> None:
         current = now_utc or datetime.now(UTC)
         skipped_birthdays = await self._skip_stale_birthdays(current)
-        skipped_events = await self._repository.skip_stale_start_events(current - self._recovery_grace)
+        skipped_events = await self._repository.skip_stale_start_events(
+            current - self._recovery_grace
+        )
         reclaimed = await self._repository.requeue_stale_processing_events(
             current - self._stale_processing_after
         )
@@ -98,8 +105,12 @@ class BirthdaySchedulerService:
         for _ in range(10):
             await self._skip_stale_birthdays(current)
             await self._repository.skip_stale_start_events(current - self._recovery_grace)
-            claimed_birthdays = await self._repository.claim_due_birthdays(current, self._batch_size)
-            claimed_removals = await self._repository.claim_due_role_removals(current, self._batch_size)
+            claimed_birthdays = await self._repository.claim_due_birthdays(
+                current, self._batch_size
+            )
+            claimed_removals = await self._repository.claim_due_role_removals(
+                current, self._batch_size
+            )
             pending_events = await self._repository.claim_pending_events(current, self._batch_size)
             total_claimed += claimed_birthdays + claimed_removals + len(pending_events)
             if not pending_events and claimed_birthdays == 0 and claimed_removals == 0:
@@ -145,39 +156,79 @@ class BirthdaySchedulerService:
         guild_id: int,
         batch_token: str,
     ) -> None:
-        batch_events = await self._repository.claim_announcement_batch(guild_id, batch_token)
+        batch_events = await self._repository.claim_announcement_events_batch(guild_id, batch_token)
         if not batch_events:
             return
-        channel_id = int(batch_events[0].payload["channel_id"])
-        celebration_mode = str(batch_events[0].payload.get("celebration_mode", "quiet"))
-        existing_message_id = await self._gateway.find_announcement_message(
+        first_event = batch_events[0]
+        channel_id = int(first_event.payload["channel_id"])
+        celebration_mode = str(first_event.payload.get("celebration_mode", "quiet"))
+        template = str(first_event.payload["template"])
+        event_ids = [event.id for event in batch_events]
+        batch_claim = await self._repository.claim_announcement_batch_delivery(
+            batch_token,
             guild_id=guild_id,
             channel_id=channel_id,
-            batch_token=batch_token,
+            scheduled_for_utc=first_event.scheduled_for_utc,
+            claimed_at_utc=now_utc,
+            stale_started_before_utc=now_utc - self._stale_processing_after,
         )
-        event_ids = [event.id for event in batch_events]
-        if existing_message_id is not None:
-            await self._repository.mark_events_completed(event_ids, existing_message_id)
+        if batch_claim.status == "already_sent":
+            message_id = batch_claim.batch.message_id if batch_claim.batch is not None else None
+            await self._repository.mark_events_completed(event_ids, message_id)
+            return
+        if batch_claim.status == "in_flight":
             return
 
-        user_ids = [event.user_id for event in batch_events if event.user_id is not None]
-        if not user_ids:
+        if batch_claim.needs_history_check:
+            existing_message_id = await self._gateway.find_announcement_message(
+                guild_id=guild_id,
+                channel_id=channel_id,
+                batch_token=batch_token,
+            )
+            if existing_message_id is not None:
+                await self._repository.mark_announcement_batch_sent(
+                    batch_token,
+                    message_id=existing_message_id,
+                )
+                await self._repository.mark_events_completed(event_ids, existing_message_id)
+                return
+
+        recipients = [
+            AnnouncementRecipientSnapshot(
+                user_id=event.user_id,
+                birth_month=int(event.payload["birth_month"]),
+                birth_day=int(event.payload["birth_day"]),
+                timezone=str(event.payload["timezone"]),
+            )
+            for event in batch_events
+            if event.user_id is not None
+        ]
+        if not recipients:
+            await self._repository.mark_announcement_batch_sent(batch_token, message_id=None)
             await self._repository.mark_events_completed(event_ids)
             return
         try:
             result = await self._gateway.send_birthday_announcement(
                 guild_id=guild_id,
                 channel_id=channel_id,
-                user_ids=user_ids,
+                recipients=recipients,
                 celebration_mode=celebration_mode,
                 batch_token=batch_token,
+                template=template,
             )
         except GatewaySkipError as exc:
+            await self._repository.mark_announcement_batch_sent(batch_token, message_id=None)
             await self._repository.complete_events_as_skipped(event_ids, exc.code)
             return
         except GatewayRetryableError as exc:
-            await self._repository.reschedule_events(event_ids, now_utc + self._retry_delay, exc.code)
+            await self._repository.reset_announcement_batch_delivery(batch_token)
+            await self._repository.reschedule_events(
+                event_ids, now_utc + self._retry_delay, exc.code
+            )
             return
+        await self._repository.mark_announcement_batch_sent(
+            batch_token, message_id=result.message_id
+        )
         await self._repository.mark_events_completed(event_ids, result.message_id)
 
     async def _handle_role_event(self, now_utc: datetime, event: CelebrationEvent) -> None:
@@ -199,7 +250,9 @@ class BirthdaySchedulerService:
                     role_id=role_id,
                 )
         except GatewayRetryableError as exc:
-            await self._repository.reschedule_events([event.id], now_utc + self._retry_delay, exc.code)
+            await self._repository.reschedule_events(
+                [event.id], now_utc + self._retry_delay, exc.code
+            )
             return
 
         if status in {"applied", "already_present", "already_absent"}:

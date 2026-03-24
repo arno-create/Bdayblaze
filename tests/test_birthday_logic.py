@@ -7,6 +7,7 @@ import pytest
 from bdayblaze.domain.birthday_logic import celebration_end_at_utc, next_occurrence_at_utc
 from bdayblaze.domain.models import GuildSettings, MemberBirthday
 from bdayblaze.services.birthday_service import BirthdayService
+from bdayblaze.services.errors import ValidationError
 
 
 class FakeBirthdayRepository:
@@ -25,7 +26,11 @@ class FakeBirthdayRepository:
         return self.settings
 
     async def fetch_member_birthday(self, guild_id: int, user_id: int) -> MemberBirthday | None:
-        if self.existing and self.existing.guild_id == guild_id and self.existing.user_id == user_id:
+        if (
+            self.existing
+            and self.existing.guild_id == guild_id
+            and self.existing.user_id == user_id
+        ):
             return self.existing
         return None
 
@@ -104,3 +109,20 @@ async def test_birthday_service_preserves_active_role_cleanup_on_timezone_change
     assert birthday.next_role_removal_at_utc == existing.next_role_removal_at_utc
     assert birthday.active_birthday_role_id == existing.active_birthday_role_id
     assert birthday.timezone_override == "Asia/Yerevan"
+
+
+@pytest.mark.asyncio
+async def test_birthday_service_returns_clean_error_for_invalid_month_day() -> None:
+    repository = FakeBirthdayRepository(settings=GuildSettings.default(1))
+    service = BirthdayService(repository)  # type: ignore[arg-type]
+
+    with pytest.raises(ValidationError, match="valid birthday"):
+        await service.set_birthday(
+            guild_id=1,
+            user_id=42,
+            month=2,
+            day=31,
+            birth_year=None,
+            timezone_override="UTC",
+            now_utc=datetime(2026, 1, 1, tzinfo=UTC),
+        )

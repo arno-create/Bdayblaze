@@ -71,6 +71,7 @@ async def _run_bot(settings: Settings) -> None:
             metrics=container.scheduler_metrics,
             host=settings.bind_host,
             port=settings.bind_port,
+            scheduler_max_sleep_seconds=settings.scheduler_max_sleep_seconds,
         )
         if settings.bind_port is not None
         else None

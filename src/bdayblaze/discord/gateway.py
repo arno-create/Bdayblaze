@@ -1,9 +1,16 @@
 from __future__ import annotations
 
-from typing import Iterable
+import asyncio
+from collections.abc import Iterable
 
 import discord
 
+from bdayblaze.domain.announcement_template import (
+    DEFAULT_ANNOUNCEMENT_TEMPLATE,
+    AnnouncementRenderRecipient,
+    render_announcement_template,
+)
+from bdayblaze.domain.models import AnnouncementRecipientSnapshot
 from bdayblaze.logging import get_logger, redact_identifier
 from bdayblaze.services.scheduler import (
     AnnouncementSendResult,
@@ -47,9 +54,10 @@ class DiscordSchedulerGateway:
         *,
         guild_id: int,
         channel_id: int,
-        user_ids: list[int],
+        recipients: list[AnnouncementRecipientSnapshot],
         celebration_mode: str,
         batch_token: str,
+        template: str,
     ) -> AnnouncementSendResult:
         guild = self._bot.get_guild(guild_id)
         if guild is None:
@@ -57,10 +65,29 @@ class DiscordSchedulerGateway:
         channel = guild.get_channel(channel_id)
         if not isinstance(channel, discord.TextChannel):
             raise GatewaySkipError("announcement_channel_missing")
-        members = await self._resolve_members(guild, user_ids)
-        if not members:
+        resolved = await self._resolve_recipients(guild, recipients)
+        if not resolved:
             raise GatewaySkipError("members_missing")
-        embed = self._build_announcement_embed(members, celebration_mode, batch_token)
+        members = [member for _, member in resolved]
+        render_recipients = [
+            AnnouncementRenderRecipient(
+                mention=member.mention,
+                display_name=member.display_name,
+                username=member.name,
+                birth_month=snapshot.birth_month,
+                birth_day=snapshot.birth_day,
+                timezone=snapshot.timezone,
+            )
+            for snapshot, member in resolved
+        ]
+        embed = self._build_announcement_embed(
+            members=members,
+            celebration_mode=celebration_mode,
+            batch_token=batch_token,
+            template=template,
+            server_name=guild.name,
+            recipients=render_recipients,
+        )
         content = " ".join(member.mention for member in members)
         try:
             message = await channel.send(
@@ -134,12 +161,24 @@ class DiscordSchedulerGateway:
         guild: discord.Guild,
         user_ids: Iterable[int],
     ) -> list[discord.Member]:
-        members: list[discord.Member] = []
-        for user_id in user_ids:
-            member = await self._fetch_member(guild, user_id)
-            if member is not None:
-                members.append(member)
-        return members
+        tasks = [self._fetch_member(guild, user_id) for user_id in user_ids]
+        resolved = await asyncio.gather(*tasks)
+        return [member for member in resolved if member is not None]
+
+    async def _resolve_recipients(
+        self,
+        guild: discord.Guild,
+        recipients: list[AnnouncementRecipientSnapshot],
+    ) -> list[tuple[AnnouncementRecipientSnapshot, discord.Member]]:
+        members = await self._resolve_members(
+            guild, (recipient.user_id for recipient in recipients)
+        )
+        by_user_id = {member.id: member for member in members}
+        return [
+            (recipient, member)
+            for recipient in recipients
+            if (member := by_user_id.get(recipient.user_id)) is not None
+        ]
 
     async def _fetch_member(self, guild: discord.Guild, user_id: int) -> discord.Member | None:
         member = guild.get_member(user_id)
@@ -154,28 +193,34 @@ class DiscordSchedulerGateway:
 
     @staticmethod
     def _build_announcement_embed(
+        *,
         members: list[discord.Member],
         celebration_mode: str,
         batch_token: str,
+        template: str,
+        server_name: str,
+        recipients: list[AnnouncementRenderRecipient],
     ) -> discord.Embed:
         if len(members) == 1:
             title = "Happy birthday"
-            description = f"Celebrating {members[0].mention} today."
         else:
             title = "Birthday crew"
-            joined_mentions = ", ".join(member.mention for member in members)
-            description = f"Celebrating {joined_mentions} today."
         color = discord.Color.gold() if celebration_mode == "party" else discord.Color.blurple()
+        try:
+            description = render_announcement_template(
+                template,
+                server_name=server_name,
+                celebration_mode="party" if celebration_mode == "party" else "quiet",
+                recipients=recipients,
+            )
+        except ValueError:
+            description = render_announcement_template(
+                DEFAULT_ANNOUNCEMENT_TEMPLATE,
+                server_name=server_name,
+                celebration_mode="party" if celebration_mode == "party" else "quiet",
+                recipients=recipients,
+            )
         embed = discord.Embed(title=title, description=description, color=color)
-        embed.add_field(
-            name="Mode",
-            value=(
-                "Party mode is enabled for this server."
-                if celebration_mode == "party"
-                else "Quiet mode keeps celebrations clean and low-noise."
-            ),
-            inline=False,
-        )
         embed.set_footer(text=_batch_footer(batch_token))
         return embed
 

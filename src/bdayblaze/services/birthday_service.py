@@ -27,13 +27,20 @@ class BirthdayService:
         timezone_override: str | None,
         now_utc: datetime | None = None,
     ) -> MemberBirthday:
-        validate_birth_date(month, day)
+        try:
+            validate_birth_date(month, day)
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from exc
         effective_now = now_utc or datetime.now(UTC)
         if birth_year is not None and (birth_year < 1900 or birth_year > effective_now.year):
             raise ValidationError("Birth year must be between 1900 and the current year.")
         settings = await self._repository.fetch_guild_settings(guild_id)
         normalized_timezone = timezone_override.strip() if timezone_override else None
-        effective_timezone = normalized_timezone or (settings.default_timezone if settings else "UTC")
+        if normalized_timezone == "":
+            normalized_timezone = None
+        effective_timezone = normalized_timezone or (
+            settings.default_timezone if settings else "UTC"
+        )
         try:
             validate_timezone(effective_timezone)
         except ValueError as exc:
@@ -71,5 +78,7 @@ class BirthdayService:
             raise NotFoundError("You do not have stored birthday data in this server.")
         return deleted
 
-    async def list_upcoming_birthdays(self, guild_id: int, limit: int = 10) -> list[BirthdayPreview]:
+    async def list_upcoming_birthdays(
+        self, guild_id: int, limit: int = 10
+    ) -> list[BirthdayPreview]:
         return await self._repository.list_upcoming_birthdays(guild_id, limit)

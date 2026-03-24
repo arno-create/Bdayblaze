@@ -4,12 +4,17 @@ from calendar import isleap
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from bdayblaze.domain.timezones import timezone_examples_text
+
 
 def validate_timezone(timezone_name: str) -> ZoneInfo:
     try:
         return ZoneInfo(timezone_name)
     except ZoneInfoNotFoundError as exc:
-        raise ValueError(f"Unknown timezone '{timezone_name}'. Use an IANA timezone like Europe/Berlin.") from exc
+        raise ValueError(
+            f"Unknown timezone '{timezone_name}'. Use an IANA timezone like "
+            f"{timezone_examples_text()}."
+        ) from exc
 
 
 def validate_birth_date(month: int, day: int) -> None:

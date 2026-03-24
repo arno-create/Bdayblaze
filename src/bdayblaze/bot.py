@@ -5,7 +5,6 @@ from discord import app_commands
 from discord.ext import commands
 
 from bdayblaze.container import ServiceContainer
-from bdayblaze.discord.cogs.admin import BdayblazeGroup
 from bdayblaze.discord.cogs.birthday import BirthdayGroup
 from bdayblaze.logging import get_logger
 from bdayblaze.services.errors import BdayblazeError
@@ -21,15 +20,10 @@ class BdayblazeBot(commands.Bot):
         self._scheduler_started = False
 
     async def setup_hook(self) -> None:
-        self.tree.on_error = self.on_app_command_error
+        self.tree.error(self.on_app_command_error)
         await self.add_cog(
             BirthdayGroup(
                 birthday_service=self.container.birthday_service,
-                settings_service=self.container.settings_service,
-            )
-        )
-        await self.add_cog(
-            BdayblazeGroup(
                 settings_service=self.container.settings_service,
                 health_service=self.container.health_service,
             )

@@ -32,7 +32,7 @@ class HealthService:
                     severity="warning",
                     code="missing_config",
                     summary="Server setup is still using defaults.",
-                    action="Run /bdayblaze setup to configure timezone, channel, and optional role.",
+                    action="Run /birthday setup to configure timezone, channel, and optional role.",
                 )
             )
         else:
@@ -44,7 +44,7 @@ class HealthService:
                         severity="error",
                         code="invalid_timezone",
                         summary="The saved default timezone is invalid.",
-                        action="Open /bdayblaze setup and save a valid IANA timezone.",
+                        action="Open /birthday setup and save a valid IANA timezone.",
                     )
                 )
 
@@ -55,7 +55,7 @@ class HealthService:
                         severity="warning",
                         code="bot_member_unavailable",
                         summary="The bot member state is not ready yet.",
-                        action="Wait a few seconds and re-run /bdayblaze health.",
+                        action="Wait a few seconds and re-run /birthday health.",
                     )
                 )
             else:
@@ -66,7 +66,7 @@ class HealthService:
                                 severity="error",
                                 code="announcement_channel_missing",
                                 summary="Announcements are enabled without a configured channel.",
-                                action="Select a valid announcement channel in /bdayblaze setup.",
+                                action="Select a valid announcement channel in /birthday setup.",
                             )
                         )
                     else:
@@ -76,8 +76,13 @@ class HealthService:
                                 HealthIssue(
                                     severity="error",
                                     code="announcement_channel_deleted",
-                                    summary="The configured announcement channel is missing or invalid.",
-                                    action="Pick a new text or announcement channel in /bdayblaze setup.",
+                                    summary=(
+                                        "The configured announcement channel is missing or invalid."
+                                    ),
+                                    action=(
+                                        "Pick a new text or announcement channel in /birthday "
+                                        "setup."
+                                    ),
                                 )
                             )
                         else:
@@ -91,8 +96,14 @@ class HealthService:
                                     HealthIssue(
                                         severity="error",
                                         code="announcement_permissions",
-                                        summary="The bot cannot announce birthdays in the configured channel.",
-                                        action="Grant View Channel, Send Messages, and Embed Links there.",
+                                        summary=(
+                                            "The bot cannot announce birthdays in the configured "
+                                            "channel."
+                                        ),
+                                        action=(
+                                            "Grant View Channel, Send Messages, and Embed Links "
+                                            "there."
+                                        ),
                                     )
                                 )
 
@@ -103,7 +114,7 @@ class HealthService:
                                 severity="error",
                                 code="birthday_role_missing",
                                 summary="Role assignment is enabled without a configured role.",
-                                action="Select a dedicated birthday role in /bdayblaze setup.",
+                                action="Select a dedicated birthday role in /birthday setup.",
                             )
                         )
                     else:
@@ -124,7 +135,10 @@ class HealthService:
                                         severity="error",
                                         code="manage_roles_missing",
                                         summary="The bot is missing Manage Roles.",
-                                        action="Grant Manage Roles or disable birthday role assignment.",
+                                        action=(
+                                            "Grant Manage Roles or disable birthday role "
+                                            "assignment."
+                                        ),
                                     )
                                 )
                             elif bot_member.top_role <= role:
@@ -132,8 +146,14 @@ class HealthService:
                                     HealthIssue(
                                         severity="error",
                                         code="role_hierarchy_invalid",
-                                        summary="The birthday role is above the bot in the role hierarchy.",
-                                        action="Move the bot's top role above the dedicated birthday role.",
+                                        summary=(
+                                            "The birthday role is above the bot in the role "
+                                            "hierarchy."
+                                        ),
+                                        action=(
+                                            "Move the bot's top role above the dedicated birthday "
+                                            "role."
+                                        ),
                                     )
                                 )
 
@@ -142,7 +162,15 @@ class HealthService:
         backlog = await self._repository.fetch_scheduler_backlog(now_utc, stale_window)
 
         oldest_due = min(
-            [ts for ts in [backlog.oldest_due_birthday_utc, backlog.oldest_due_role_removal_utc, backlog.oldest_due_event_utc] if ts is not None],
+            [
+                ts
+                for ts in [
+                    backlog.oldest_due_birthday_utc,
+                    backlog.oldest_due_role_removal_utc,
+                    backlog.oldest_due_event_utc,
+                ]
+                if ts is not None
+            ],
             default=None,
         )
         if oldest_due is not None:
@@ -153,7 +181,10 @@ class HealthService:
                         severity="error",
                         code="scheduler_recovery_window_exceeded",
                         summary="Scheduler backlog is older than the configured recovery window.",
-                        action="Inspect the worker, then manually reconcile missed celebrations before resuming.",
+                        action=(
+                            "Inspect the worker, then manually reconcile missed celebrations "
+                            "before resuming."
+                        ),
                     )
                 )
             elif lag > timedelta(minutes=10):
@@ -171,7 +202,9 @@ class HealthService:
                 HealthIssue(
                     severity="warning",
                     code="stale_processing_events",
-                    summary="Some celebration events were left mid-processing and had to be recovered.",
+                    summary=(
+                        "Some celebration events were left mid-processing and had to be recovered."
+                    ),
                     action="Review logs for Discord API errors and confirm celebrations completed.",
                 )
             )
@@ -182,7 +215,7 @@ class HealthService:
                     severity="warning",
                     code="scheduler_not_started",
                     summary="Scheduler has not recorded a run yet.",
-                    action="Wait for startup to finish, then re-run /bdayblaze health.",
+                    action="Wait for startup to finish, then re-run /birthday health.",
                 )
             )
         elif now_utc - self._metrics.last_iteration_at_utc > stale_window:
@@ -201,7 +234,7 @@ class HealthService:
                     severity="info",
                     code="recovery_incomplete",
                     summary="Startup recovery has not completed yet.",
-                    action="Re-run /bdayblaze health after the bot has been online for a minute.",
+                    action="Re-run /birthday health after the bot has been online for a minute.",
                 )
             )
 

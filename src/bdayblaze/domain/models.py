@@ -4,11 +4,12 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
 
-
 CelebrationMode = Literal["quiet", "party"]
 EventKind = Literal["announcement", "role_start", "role_end"]
 EventState = Literal["pending", "processing", "completed"]
 HealthSeverity = Literal["info", "warning", "error"]
+AnnouncementBatchState = Literal["pending", "sending", "sent"]
+AnnouncementBatchClaimStatus = Literal["missing", "claimed", "already_sent", "in_flight"]
 
 
 @dataclass(slots=True, frozen=True)
@@ -20,6 +21,7 @@ class GuildSettings:
     announcements_enabled: bool
     role_enabled: bool
     celebration_mode: CelebrationMode
+    announcement_template: str | None
     created_at_utc: datetime | None = None
     updated_at_utc: datetime | None = None
 
@@ -33,6 +35,7 @@ class GuildSettings:
             announcements_enabled=False,
             role_enabled=False,
             celebration_mode="quiet",
+            announcement_template=None,
         )
 
 
@@ -85,6 +88,34 @@ class BirthdayPreview:
     birth_day: int
     next_occurrence_at_utc: datetime
     effective_timezone: str
+
+
+@dataclass(slots=True, frozen=True)
+class AnnouncementRecipientSnapshot:
+    user_id: int
+    birth_month: int
+    birth_day: int
+    timezone: str
+
+
+@dataclass(slots=True, frozen=True)
+class AnnouncementBatch:
+    batch_token: str
+    guild_id: int
+    channel_id: int
+    scheduled_for_utc: datetime
+    state: AnnouncementBatchState
+    message_id: int | None
+    send_started_at_utc: datetime | None
+    created_at_utc: datetime
+    updated_at_utc: datetime
+
+
+@dataclass(slots=True, frozen=True)
+class AnnouncementBatchClaim:
+    status: AnnouncementBatchClaimStatus
+    batch: AnnouncementBatch | None
+    needs_history_check: bool = False
 
 
 @dataclass(slots=True, frozen=True)

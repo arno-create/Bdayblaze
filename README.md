@@ -5,8 +5,8 @@ Bdayblaze is a production-minded Discord birthday bot foundation focused on reli
 ## MVP highlights
 
 - Guild-scoped birthday storage with optional birth year and timezone override.
-- Slash-first admin configuration with ephemeral setup UX.
-- Restart-safe scheduler with persisted next-occurrence fields and celebration event idempotency.
+- Slash-first birthday commands with ephemeral admin setup and message-template UX.
+- Restart-safe scheduler with persisted next-occurrence fields, durable announcement batches, and event idempotency.
 - Health diagnostics for missing config, permissions, hierarchy issues, and scheduler lag.
 - SQL migration workflow with direct async Postgres access.
 
@@ -97,7 +97,7 @@ src/bdayblaze/
   - `BDAYBLAZE_LOG_LEVEL=INFO`
   - `PORT` is injected by Render automatically; do not set it yourself
 
-The bot now starts a tiny built-in HTTP health server when `PORT` is present so Render port detection succeeds without changing Discord bot behavior. The repository includes [render.yaml](C:\Users\arnoa\OneDrive\Рабочий стол\Bdayblaze\render.yaml) and [runtime.txt](C:\Users\arnoa\OneDrive\Рабочий стол\Bdayblaze\runtime.txt) so Render can pick the correct web-service shape and Python version.
+The bot now starts a tiny built-in HTTP health server when `PORT` is present so Render port detection succeeds without changing Discord bot behavior. The repository includes `render.yaml` and `runtime.txt` so Render can pick the correct web-service shape and Python version.
 
 ## Commands
 
@@ -105,10 +105,10 @@ The bot now starts a tiny built-in HTTP health server when `PORT` is present so 
 - `/birthday view`
 - `/birthday remove`
 - `/birthday upcoming`
-- `/bdayblaze setup`
-- `/bdayblaze config`
-- `/bdayblaze health`
-- `/bdayblaze privacy`
+- `/birthday setup`
+- `/birthday message`
+- `/birthday health`
+- `/birthday privacy`
 
 ## Testing and checks
 
@@ -122,4 +122,6 @@ mypy src
 
 - Leap-day birthdays celebrate on February 28 during non-leap years.
 - Announcements are scheduled from the member's effective timezone, not a global guild midnight.
+- Birthday announcement text is customizable through a strict placeholder whitelist; reliable user mentions are still system-generated outside the template body.
 - Mid-cycle config changes apply to future celebrations; active role-removal uses the role snapshot captured when the celebration started.
+- Birthdays remain server-scoped in this version. Cross-server public birthday visibility is intentionally not enabled yet.
