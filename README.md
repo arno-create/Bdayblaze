@@ -75,7 +75,7 @@ src/bdayblaze/
 
 ### Render
 
-- Deploy this bot as a `Background Worker`, not a `Web Service`.
+- Deploy this bot as a `Web Service`.
 - Recommended Python runtime: `3.12.x`.
 - Build command:
 
@@ -95,8 +95,9 @@ src/bdayblaze/
 - Recommended environment variables:
   - `BDAYBLAZE_AUTO_RUN_MIGRATIONS=true` for the first deploy so the schema is created automatically
   - `BDAYBLAZE_LOG_LEVEL=INFO`
+  - `PORT` is injected by Render automatically; do not set it yourself
 
-The repository includes [render.yaml](C:\Users\arnoa\OneDrive\Рабочий стол\Bdayblaze\render.yaml) and [runtime.txt](C:\Users\arnoa\OneDrive\Рабочий стол\Bdayblaze\runtime.txt) so Render can pick the correct worker shape and Python version.
+The bot now starts a tiny built-in HTTP health server when `PORT` is present so Render port detection succeeds without changing Discord bot behavior. The repository includes [render.yaml](C:\Users\arnoa\OneDrive\Рабочий стол\Bdayblaze\render.yaml) and [runtime.txt](C:\Users\arnoa\OneDrive\Рабочий стол\Bdayblaze\runtime.txt) so Render can pick the correct web-service shape and Python version.
 
 ## Commands
 

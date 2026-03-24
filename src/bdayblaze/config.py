@@ -35,6 +35,8 @@ class Settings:
     scheduler_max_sleep_seconds: int
     scheduler_batch_size: int
     guild_sync_ids: tuple[int, ...]
+    bind_host: str
+    bind_port: int | None
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -53,4 +55,6 @@ class Settings:
             scheduler_max_sleep_seconds=_parse_int("BDAYBLAZE_SCHEDULER_MAX_SLEEP_SECONDS", 300),
             scheduler_batch_size=_parse_int("BDAYBLAZE_SCHEDULER_BATCH_SIZE", 25),
             guild_sync_ids=_parse_int_list("BDAYBLAZE_GUILD_SYNC_IDS"),
+            bind_host=getenv("BDAYBLAZE_BIND_HOST", "0.0.0.0").strip() or "0.0.0.0",
+            bind_port=int(getenv("PORT")) if getenv("PORT") else None,
         )

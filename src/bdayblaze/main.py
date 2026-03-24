@@ -13,6 +13,7 @@ from bdayblaze.db.migrations import apply_migrations
 from bdayblaze.db.pool import create_pool
 from bdayblaze.discord.gateway import DiscordSchedulerGateway
 from bdayblaze.domain.models import SchedulerMetrics
+from bdayblaze.http_server import HttpHealthServer
 from bdayblaze.logging import configure_logging, get_logger
 from bdayblaze.repositories.postgres import PostgresRepository
 from bdayblaze.services.birthday_service import BirthdayService
@@ -55,6 +56,7 @@ async def _build_container(settings: Settings) -> ServiceContainer:
         birthday_service=birthday_service,
         settings_service=settings_service,
         health_service=health_service,
+        scheduler_metrics=metrics,
         scheduler_service=scheduler_service,
         scheduler_runner=BirthdaySchedulerRunner(scheduler_service),
     )
@@ -64,7 +66,22 @@ async def _run_bot(settings: Settings) -> None:
     container = await _build_container(settings)
     bot = BdayblazeBot(container)
     container.scheduler_service.attach_gateway(DiscordSchedulerGateway(bot))
-    await bot.start(settings.discord_token)
+    http_server = (
+        HttpHealthServer(
+            metrics=container.scheduler_metrics,
+            host=settings.bind_host,
+            port=settings.bind_port,
+        )
+        if settings.bind_port is not None
+        else None
+    )
+    try:
+        if http_server is not None:
+            await http_server.start()
+        await bot.start(settings.discord_token)
+    finally:
+        if http_server is not None:
+            await http_server.stop()
 
 
 async def _run_migrations(settings: Settings) -> None:
