@@ -42,10 +42,11 @@ class PostgresRepository:
                     announcements_enabled,
                     role_enabled,
                     celebration_mode,
+                    announcement_theme,
                     announcement_template,
                     updated_at_utc
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
                 ON CONFLICT (guild_id) DO UPDATE SET
                     announcement_channel_id = EXCLUDED.announcement_channel_id,
                     default_timezone = EXCLUDED.default_timezone,
@@ -53,6 +54,7 @@ class PostgresRepository:
                     announcements_enabled = EXCLUDED.announcements_enabled,
                     role_enabled = EXCLUDED.role_enabled,
                     celebration_mode = EXCLUDED.celebration_mode,
+                    announcement_theme = EXCLUDED.announcement_theme,
                     announcement_template = EXCLUDED.announcement_template,
                     updated_at_utc = NOW()
                 RETURNING *
@@ -64,6 +66,7 @@ class PostgresRepository:
                 settings.announcements_enabled,
                 settings.role_enabled,
                 settings.celebration_mode,
+                settings.announcement_theme,
                 settings.announcement_template,
             )
         return self._map_guild_settings(row)
@@ -168,16 +171,113 @@ class PostgresRepository:
                 guild_id,
                 limit,
             )
-        return [
-            BirthdayPreview(
-                user_id=row["user_id"],
-                birth_month=row["birth_month"],
-                birth_day=row["birth_day"],
-                next_occurrence_at_utc=row["next_occurrence_at_utc"],
-                effective_timezone=row["effective_timezone"],
+        return [self._map_birthday_preview(row) for row in rows]
+
+    async def list_birthdays(
+        self,
+        guild_id: int,
+        limit: int,
+        *,
+        order_by_upcoming: bool,
+    ) -> list[BirthdayPreview]:
+        order_clause = (
+            "mb.next_occurrence_at_utc ASC"
+            if order_by_upcoming
+            else "mb.birth_month ASC, mb.birth_day ASC"
+        )
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(
+                f"""
+                SELECT
+                    mb.user_id,
+                    mb.birth_month,
+                    mb.birth_day,
+                    mb.next_occurrence_at_utc,
+                    COALESCE(mb.timezone_override, gs.default_timezone, 'UTC') AS effective_timezone
+                FROM member_birthdays AS mb
+                LEFT JOIN guild_settings AS gs
+                    ON gs.guild_id = mb.guild_id
+                WHERE mb.guild_id = $1
+                ORDER BY {order_clause}, mb.user_id ASC
+                LIMIT $2
+                """,
+                guild_id,
+                limit,
             )
-            for row in rows
-        ]
+        return [self._map_birthday_preview(row) for row in rows]
+
+    async def list_birthdays_for_month(
+        self,
+        guild_id: int,
+        month: int,
+        limit: int,
+        *,
+        order_by_upcoming: bool,
+    ) -> list[BirthdayPreview]:
+        order_clause = "mb.next_occurrence_at_utc ASC" if order_by_upcoming else "mb.birth_day ASC"
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(
+                f"""
+                SELECT
+                    mb.user_id,
+                    mb.birth_month,
+                    mb.birth_day,
+                    mb.next_occurrence_at_utc,
+                    COALESCE(mb.timezone_override, gs.default_timezone, 'UTC') AS effective_timezone
+                FROM member_birthdays AS mb
+                LEFT JOIN guild_settings AS gs
+                    ON gs.guild_id = mb.guild_id
+                WHERE mb.guild_id = $1
+                  AND mb.birth_month = $2
+                ORDER BY {order_clause}, mb.user_id ASC
+                LIMIT $3
+                """,
+                guild_id,
+                month,
+                limit,
+            )
+        return [self._map_birthday_preview(row) for row in rows]
+
+    async def list_birthdays_for_month_day_pairs(
+        self,
+        guild_id: int,
+        month_day_pairs: tuple[tuple[int, int], ...],
+        limit: int,
+    ) -> list[BirthdayPreview]:
+        if not month_day_pairs:
+            return []
+        conditions: list[str] = []
+        parameters: list[object] = [guild_id]
+        bind_index = 2
+        for month, day in month_day_pairs:
+            conditions.append(
+                f"(mb.birth_month = ${bind_index} AND mb.birth_day = ${bind_index + 1})"
+            )
+            parameters.extend((month, day))
+            bind_index += 2
+        parameters.append(limit)
+        limit_index = bind_index
+        where_clause = " OR ".join(conditions)
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(
+                f"""
+                SELECT
+                    mb.user_id,
+                    mb.birth_month,
+                    mb.birth_day,
+                    mb.next_occurrence_at_utc,
+                    COALESCE(mb.timezone_override, gs.default_timezone, 'UTC') AS effective_timezone
+                FROM member_birthdays AS mb
+                LEFT JOIN guild_settings AS gs
+                    ON gs.guild_id = mb.guild_id
+                WHERE mb.guild_id = $1
+                  AND ({where_clause})
+                ORDER BY mb.next_occurrence_at_utc ASC, mb.user_id ASC
+                LIMIT ${limit_index}
+                """,
+                *parameters,
+            )
+        return [self._map_birthday_preview(row) for row in rows]
 
     async def claim_due_birthdays(self, now_utc: datetime, batch_size: int) -> int:
         async with self._pool.acquire() as connection:
@@ -192,6 +292,7 @@ class PostgresRepository:
                         COALESCE(gs.announcements_enabled, FALSE) AS announcements_enabled,
                         COALESCE(gs.role_enabled, FALSE) AS role_enabled,
                         COALESCE(gs.celebration_mode, 'quiet') AS celebration_mode,
+                        COALESCE(gs.announcement_theme, 'classic') AS announcement_theme,
                         gs.announcement_template
                     FROM member_birthdays AS mb
                     LEFT JOIN guild_settings AS gs
@@ -303,6 +404,7 @@ class PostgresRepository:
                                     "channel_id": row["announcement_channel_id"],
                                     "batch_token": batch_token,
                                     "celebration_mode": row["celebration_mode"],
+                                    "announcement_theme": row["announcement_theme"],
                                     "template": row["announcement_template"]
                                     or DEFAULT_ANNOUNCEMENT_TEMPLATE,
                                     "birth_month": row["birth_month"],
@@ -786,9 +888,20 @@ class PostgresRepository:
             announcements_enabled=row["announcements_enabled"],
             role_enabled=row["role_enabled"],
             celebration_mode=row["celebration_mode"],
+            announcement_theme=row["announcement_theme"],
             announcement_template=row["announcement_template"],
             created_at_utc=row["created_at_utc"],
             updated_at_utc=row["updated_at_utc"],
+        )
+
+    @staticmethod
+    def _map_birthday_preview(row: asyncpg.Record) -> BirthdayPreview:
+        return BirthdayPreview(
+            user_id=row["user_id"],
+            birth_month=row["birth_month"],
+            birth_day=row["birth_day"],
+            next_occurrence_at_utc=row["next_occurrence_at_utc"],
+            effective_timezone=row["effective_timezone"],
         )
 
     @staticmethod

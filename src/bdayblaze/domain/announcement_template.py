@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from calendar import month_name
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Literal
 
 from bdayblaze.domain.models import CelebrationMode
 
@@ -52,6 +52,12 @@ class AnnouncementRenderRecipient:
     timezone: str
 
 
+@dataclass(slots=True, frozen=True)
+class TemplateSegment:
+    kind: Literal["text", "placeholder"]
+    value: str
+
+
 def supported_placeholders() -> tuple[tuple[str, str], ...]:
     return tuple(
         (placeholder, PLACEHOLDER_DESCRIPTIONS[placeholder]) for placeholder in _PLACEHOLDER_ORDER
@@ -79,8 +85,14 @@ def validate_announcement_template(template: str | None) -> str | None:
         raise ValueError(
             f"Announcement messages must be {MAX_TEMPLATE_LENGTH} characters or fewer."
         )
-    tokens = _extract_placeholders(normalized)
-    unknown = sorted({token for token, _, _ in tokens if token not in _ALLOWED_PLACEHOLDERS})
+    segments = _parse_template_segments(normalized)
+    unknown = sorted(
+        {
+            segment.value
+            for segment in segments
+            if segment.kind == "placeholder" and segment.value not in _ALLOWED_PLACEHOLDERS
+        }
+    )
     if unknown:
         formatted = ", ".join(f"{{{token}}}" for token in unknown)
         raise ValueError(f"Unknown placeholder(s): {formatted}")
@@ -97,8 +109,14 @@ def render_announcement_template(
     if not recipients:
         raise ValueError("At least one recipient is required to render an announcement.")
     normalized = normalize_announcement_template(template)
-    tokens = _extract_placeholders(normalized)
-    unknown = sorted({token for token, _, _ in tokens if token not in _ALLOWED_PLACEHOLDERS})
+    segments = _parse_template_segments(normalized)
+    unknown = sorted(
+        {
+            segment.value
+            for segment in segments
+            if segment.kind == "placeholder" and segment.value not in _ALLOWED_PLACEHOLDERS
+        }
+    )
     if unknown:
         formatted = ", ".join(f"{{{token}}}" for token in unknown)
         raise ValueError(f"Unknown placeholder(s): {formatted}")
@@ -109,12 +127,11 @@ def render_announcement_template(
         recipients=recipients,
     )
     output: list[str] = []
-    cursor = 0
-    for token, start, end in tokens:
-        output.append(normalized[cursor:start])
-        output.append(mapping[token])
-        cursor = end
-    output.append(normalized[cursor:])
+    for segment in segments:
+        if segment.kind == "text":
+            output.append(segment.value)
+            continue
+        output.append(mapping[segment.value])
     return "".join(output)
 
 
@@ -153,17 +170,30 @@ def _build_placeholder_values(
     }
 
 
-def _extract_placeholders(template: str) -> list[tuple[str, int, int]]:
-    placeholders: list[tuple[str, int, int]] = []
+def _parse_template_segments(template: str) -> list[TemplateSegment]:
+    segments: list[TemplateSegment] = []
+    text_buffer: list[str] = []
     index = 0
     while index < len(template):
         character = template[index]
-        if character == "}":
+        if character == "}" and not template.startswith("}}", index):
             raise ValueError("Templates cannot contain unmatched '}' characters.")
+        if template.startswith("{{", index):
+            text_buffer.append("{")
+            index += 2
+            continue
+        if template.startswith("}}", index):
+            text_buffer.append("}")
+            index += 2
+            continue
         if character != "{":
+            text_buffer.append(character)
             index += 1
             continue
 
+        if text_buffer:
+            segments.append(TemplateSegment(kind="text", value="".join(text_buffer)))
+            text_buffer.clear()
         end = template.find("}", index + 1)
         if end == -1:
             raise ValueError("Templates cannot contain unmatched '{' characters.")
@@ -172,9 +202,11 @@ def _extract_placeholders(template: str) -> list[tuple[str, int, int]]:
             raise ValueError(
                 "Templates can only use plain text and full placeholders like {birthday.mentions}."
             )
-        placeholders.append((token, index, end + 1))
+        segments.append(TemplateSegment(kind="placeholder", value=token))
         index = end + 1
-    return placeholders
+    if text_buffer:
+        segments.append(TemplateSegment(kind="text", value="".join(text_buffer)))
+    return segments
 
 
 def _format_date(month: int, day: int) -> str:

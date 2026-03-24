@@ -38,6 +38,9 @@ class SchedulerGateway(Protocol):
         guild_id: int,
         channel_id: int,
         batch_token: str,
+        announcement_theme: str,
+        scheduled_for_utc: datetime,
+        send_started_at_utc: datetime | None,
     ) -> int | None: ...
 
     async def send_birthday_announcement(
@@ -47,6 +50,7 @@ class SchedulerGateway(Protocol):
         channel_id: int,
         recipients: list[AnnouncementRecipientSnapshot],
         celebration_mode: str,
+        announcement_theme: str,
         batch_token: str,
         template: str,
     ) -> AnnouncementSendResult: ...
@@ -162,6 +166,7 @@ class BirthdaySchedulerService:
         first_event = batch_events[0]
         channel_id = int(first_event.payload["channel_id"])
         celebration_mode = str(first_event.payload.get("celebration_mode", "quiet"))
+        announcement_theme = str(first_event.payload.get("announcement_theme", "classic"))
         template = str(first_event.payload["template"])
         event_ids = [event.id for event in batch_events]
         batch_claim = await self._repository.claim_announcement_batch_delivery(
@@ -184,6 +189,11 @@ class BirthdaySchedulerService:
                 guild_id=guild_id,
                 channel_id=channel_id,
                 batch_token=batch_token,
+                announcement_theme=announcement_theme,
+                scheduled_for_utc=first_event.scheduled_for_utc,
+                send_started_at_utc=(
+                    batch_claim.batch.send_started_at_utc if batch_claim.batch is not None else None
+                ),
             )
             if existing_message_id is not None:
                 await self._repository.mark_announcement_batch_sent(
@@ -213,6 +223,7 @@ class BirthdaySchedulerService:
                 channel_id=channel_id,
                 recipients=recipients,
                 celebration_mode=celebration_mode,
+                announcement_theme=announcement_theme,
                 batch_token=batch_token,
                 template=template,
             )

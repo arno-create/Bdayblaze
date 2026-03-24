@@ -22,9 +22,11 @@
 
 - `/birthday view` only exposes the caller's own stored record.
 - `/birthday remove` provides a direct deletion path.
-- `/birthday upcoming` is guild-scoped and intentionally omits year and age.
+- `/birthday upcoming`, `/birthday today`, `/birthday next`, `/birthday month`, and `/birthday twins` are guild-scoped and intentionally omit year and age.
 - `/birthday privacy` explains what is stored and why.
+- `/birthday list` and `/birthday member ...` are admin-only and private to the admin using them.
 - `/birthday message` is admin-only and edits the announcement body only; reliable user mentions remain system-generated outside the custom template.
+- `/birthday test-message` sends a private preview only and reports live-delivery readiness separately from preview success.
 
 ## Threat model summary
 
@@ -49,6 +51,7 @@
 - Least-privilege intents and permissions.
 - Guild-scoped storage and optional birth year.
 - Durable event queue plus persisted announcement-batch state for restart recovery.
+- Bounded stale-send recovery scans only bot-authored messages in a narrow time window for the exact batch footer token.
 - Health command for stale config, permissions, and scheduler lag.
 - Graceful handling when members, roles, or channels disappear.
 
@@ -64,3 +67,4 @@
 - Leap-day birthdays celebrate on February 28 in non-leap years.
 - If a member changes timezone during an active celebration, the active role-removal window is preserved and the new timezone applies to future occurrences.
 - If a member leaves the server, celebrations are skipped safely and active role cleanup is attempted if the member returns before the removal event expires.
+- If a crash happens after an announcement is sent but before sent state is persisted, Bdayblaze uses a small bounded recovery scan to try to detect the existing message. If that original message is gone or outside the bounded recovery window, one duplicate announcement can still happen.

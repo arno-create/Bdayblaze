@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-import asyncio
-from collections.abc import Iterable
+from datetime import UTC, datetime, timedelta
 
 import discord
 
-from bdayblaze.domain.announcement_template import (
-    DEFAULT_ANNOUNCEMENT_TEMPLATE,
-    AnnouncementRenderRecipient,
-    render_announcement_template,
-)
+from bdayblaze.discord.announcements import batch_footer, build_announcement_message
+from bdayblaze.discord.member_resolution import MemberResolutionError, resolve_guild_members
+from bdayblaze.domain.announcement_template import AnnouncementRenderRecipient
 from bdayblaze.domain.models import AnnouncementRecipientSnapshot
 from bdayblaze.logging import get_logger, redact_identifier
 from bdayblaze.services.scheduler import (
@@ -30,6 +27,9 @@ class DiscordSchedulerGateway:
         guild_id: int,
         channel_id: int,
         batch_token: str,
+        announcement_theme: str,
+        scheduled_for_utc: datetime,
+        send_started_at_utc: datetime | None,
     ) -> int | None:
         guild = self._bot.get_guild(guild_id)
         if guild is None:
@@ -37,14 +37,33 @@ class DiscordSchedulerGateway:
         channel = guild.get_channel(channel_id)
         if not isinstance(channel, discord.TextChannel):
             return None
+        lower_bound = scheduled_for_utc - timedelta(minutes=15)
+        upper_anchor = send_started_at_utc or scheduled_for_utc
+        upper_bound = max(upper_anchor, scheduled_for_utc).astimezone(UTC) + timedelta(minutes=15)
+        before: datetime | None = upper_bound
         try:
-            async for message in channel.history(limit=25):
-                if self._bot.user is None or message.author.id != self._bot.user.id:
-                    continue
-                for embed in message.embeds:
-                    footer = embed.footer.text if embed.footer else None
-                    if footer == _batch_footer(batch_token):
-                        return message.id
+            for _ in range(3):
+                history = [
+                    message
+                    async for message in channel.history(
+                        limit=10,
+                        before=before,
+                        after=lower_bound,
+                        oldest_first=False,
+                    )
+                ]
+                if not history:
+                    return None
+                for message in history:
+                    if message.created_at < lower_bound:
+                        return None
+                    if self._bot.user is None or message.author.id != self._bot.user.id:
+                        continue
+                    for embed in message.embeds:
+                        footer = embed.footer.text if embed.footer else None
+                        if footer == batch_footer(announcement_theme, batch_token):
+                            return message.id
+                before = min(message.created_at for message in history)
         except discord.HTTPException:
             return None
         return None
@@ -56,6 +75,7 @@ class DiscordSchedulerGateway:
         channel_id: int,
         recipients: list[AnnouncementRecipientSnapshot],
         celebration_mode: str,
+        announcement_theme: str,
         batch_token: str,
         template: str,
     ) -> AnnouncementSendResult:
@@ -80,19 +100,18 @@ class DiscordSchedulerGateway:
             )
             for snapshot, member in resolved
         ]
-        embed = self._build_announcement_embed(
-            members=members,
-            celebration_mode=celebration_mode,
-            batch_token=batch_token,
-            template=template,
+        prepared = build_announcement_message(
             server_name=guild.name,
             recipients=render_recipients,
+            celebration_mode=celebration_mode,
+            announcement_theme=announcement_theme,  # type: ignore[arg-type]
+            template=template,
+            batch_token=batch_token,
         )
-        content = " ".join(member.mention for member in members)
         try:
             message = await channel.send(
-                content=content,
-                embed=embed,
+                content=prepared.content,
+                embed=prepared.embed,
                 allowed_mentions=discord.AllowedMentions(users=True),
             )
         except discord.Forbidden as exc:
@@ -156,24 +175,20 @@ class DiscordSchedulerGateway:
         )
         return "applied"
 
-    async def _resolve_members(
-        self,
-        guild: discord.Guild,
-        user_ids: Iterable[int],
-    ) -> list[discord.Member]:
-        tasks = [self._fetch_member(guild, user_id) for user_id in user_ids]
-        resolved = await asyncio.gather(*tasks)
-        return [member for member in resolved if member is not None]
-
     async def _resolve_recipients(
         self,
         guild: discord.Guild,
         recipients: list[AnnouncementRecipientSnapshot],
     ) -> list[tuple[AnnouncementRecipientSnapshot, discord.Member]]:
-        members = await self._resolve_members(
-            guild, (recipient.user_id for recipient in recipients)
-        )
-        by_user_id = {member.id: member for member in members}
+        try:
+            resolved_members = await resolve_guild_members(
+                guild,
+                (recipient.user_id for recipient in recipients),
+                raise_on_http_error=True,
+            )
+        except MemberResolutionError as exc:
+            raise GatewayRetryableError("member_lookup_http_error") from exc
+        by_user_id = {user_id: member for user_id, member in resolved_members}
         return [
             (recipient, member)
             for recipient in recipients
@@ -181,49 +196,14 @@ class DiscordSchedulerGateway:
         ]
 
     async def _fetch_member(self, guild: discord.Guild, user_id: int) -> discord.Member | None:
-        member = guild.get_member(user_id)
-        if member is not None:
-            return member
         try:
-            return await guild.fetch_member(user_id)
-        except discord.NotFound:
-            return None
-        except discord.HTTPException as exc:
+            resolved = await resolve_guild_members(
+                guild,
+                (user_id,),
+                raise_on_http_error=True,
+            )
+        except MemberResolutionError as exc:
             raise GatewayRetryableError("member_lookup_http_error") from exc
-
-    @staticmethod
-    def _build_announcement_embed(
-        *,
-        members: list[discord.Member],
-        celebration_mode: str,
-        batch_token: str,
-        template: str,
-        server_name: str,
-        recipients: list[AnnouncementRenderRecipient],
-    ) -> discord.Embed:
-        if len(members) == 1:
-            title = "Happy birthday"
-        else:
-            title = "Birthday crew"
-        color = discord.Color.gold() if celebration_mode == "party" else discord.Color.blurple()
-        try:
-            description = render_announcement_template(
-                template,
-                server_name=server_name,
-                celebration_mode="party" if celebration_mode == "party" else "quiet",
-                recipients=recipients,
-            )
-        except ValueError:
-            description = render_announcement_template(
-                DEFAULT_ANNOUNCEMENT_TEMPLATE,
-                server_name=server_name,
-                celebration_mode="party" if celebration_mode == "party" else "quiet",
-                recipients=recipients,
-            )
-        embed = discord.Embed(title=title, description=description, color=color)
-        embed.set_footer(text=_batch_footer(batch_token))
-        return embed
-
-
-def _batch_footer(batch_token: str) -> str:
-    return f"Bdayblaze | {batch_token}"
+        if not resolved:
+            return None
+        return resolved[0][1]

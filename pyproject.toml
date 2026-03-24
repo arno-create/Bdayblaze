@@ -15,6 +15,9 @@ dependencies = [
   "structlog>=25.2,<26.0",
 ]
 
+[project.urls]
+Repository = "https://github.com/arno-create/Bdayblaze"
+
 [project.optional-dependencies]
 dev = [
   "mypy>=1.15,<2.0",

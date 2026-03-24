@@ -1,19 +1,16 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import discord
 import pytest
 
-from bdayblaze.discord.cogs.birthday import _resolve_upcoming_members
-from bdayblaze.domain.models import BirthdayPreview
+from bdayblaze.discord.member_resolution import resolve_guild_members
 
 
 class FakeMember:
     def __init__(self, user_id: int) -> None:
         self.id = user_id
-        self.mention = f"<@{user_id}>"
 
 
 class FakeGuild:
@@ -33,20 +30,10 @@ class FakeGuild:
         return self.fetched[user_id]
 
 
-def _preview(user_id: int) -> BirthdayPreview:
-    return BirthdayPreview(
-        user_id=user_id,
-        birth_month=3,
-        birth_day=24,
-        next_occurrence_at_utc=datetime(2026, 3, 24, tzinfo=UTC),
-        effective_timezone="UTC",
-    )
-
-
 @pytest.mark.asyncio
-async def test_resolve_upcoming_members_uses_cache_then_fetch_and_skips_missing() -> None:
+async def test_resolve_guild_members_uses_cache_then_fetch_and_skips_missing() -> None:
     guild = FakeGuild()
 
-    resolved = await _resolve_upcoming_members(guild, [_preview(1), _preview(2), _preview(3)])  # type: ignore[arg-type]
+    resolved = await resolve_guild_members(guild, [1, 2, 3])  # type: ignore[arg-type]
 
     assert [member.id for _, member in resolved] == [1, 2]

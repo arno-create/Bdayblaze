@@ -6,6 +6,7 @@ from discord.ext import commands
 
 from bdayblaze.container import ServiceContainer
 from bdayblaze.discord.cogs.birthday import BirthdayGroup
+from bdayblaze.discord.cogs.info import InfoCog
 from bdayblaze.logging import get_logger
 from bdayblaze.services.errors import BdayblazeError
 
@@ -28,6 +29,7 @@ class BdayblazeBot(commands.Bot):
                 health_service=self.container.health_service,
             )
         )
+        await self.add_cog(InfoCog())
         if self.container.settings.guild_sync_ids:
             for guild_id in self.container.settings.guild_sync_ids:
                 await self.tree.sync(guild=discord.Object(id=guild_id))

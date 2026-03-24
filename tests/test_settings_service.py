@@ -88,3 +88,27 @@ async def test_settings_service_resets_blank_template_to_default_storage() -> No
     )
 
     assert saved.announcement_template is None
+
+
+@pytest.mark.asyncio
+async def test_settings_service_saves_announcement_theme() -> None:
+    repository = FakeSettingsRepository(GuildSettings.default(1))
+    service = SettingsService(repository)  # type: ignore[arg-type]
+
+    saved = await service.update_settings(
+        FakeGuild(1),  # type: ignore[arg-type]
+        announcement_theme="cute",
+    )
+
+    assert saved.announcement_theme == "cute"
+
+
+@pytest.mark.asyncio
+async def test_describe_announcement_delivery_reports_disabled_announcements() -> None:
+    repository = FakeSettingsRepository(GuildSettings.default(1))
+    service = SettingsService(repository)  # type: ignore[arg-type]
+
+    readiness = await service.describe_announcement_delivery(FakeGuild(1))  # type: ignore[arg-type]
+
+    assert readiness.status == "blocked"
+    assert "disabled" in readiness.summary

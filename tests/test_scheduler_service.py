@@ -129,6 +129,9 @@ class FakeGateway:
         guild_id: int,
         channel_id: int,
         batch_token: str,
+        announcement_theme: str,
+        scheduled_for_utc: datetime,
+        send_started_at_utc: datetime | None,
     ) -> int | None:
         self.history_checks.append(batch_token)
         return self.existing_message_id
@@ -140,6 +143,7 @@ class FakeGateway:
         channel_id: int,
         recipients: list[object],
         celebration_mode: str,
+        announcement_theme: str,
         batch_token: str,
         template: str,
     ) -> AnnouncementSendResult:
@@ -187,6 +191,7 @@ def _announcement_event(event_id: int, batch_token: str) -> CelebrationEvent:
             "channel_id": 123,
             "batch_token": batch_token,
             "celebration_mode": "quiet",
+            "announcement_theme": "classic",
             "template": "Happy birthday {birthday.mentions}",
             "birth_month": 3,
             "birth_day": 24,

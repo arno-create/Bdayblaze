@@ -46,6 +46,26 @@ def test_validate_template_treats_blank_as_default_reset() -> None:
     assert normalize_announcement_template(None) == DEFAULT_ANNOUNCEMENT_TEMPLATE
 
 
+def test_render_template_supports_escaped_literal_braces() -> None:
+    rendered = render_announcement_template(
+        "Use {{braces}} for fun, {user.display_name}.",
+        server_name="Birthday Club",
+        celebration_mode="quiet",
+        recipients=[
+            _recipient(
+                mention="@Arman",
+                display_name="Arman",
+                username="arman",
+                month=3,
+                day=24,
+                timezone="Asia/Yerevan",
+            )
+        ],
+    )
+
+    assert rendered == "Use {braces} for fun, Arman."
+
+
 def test_render_template_handles_single_user_placeholders() -> None:
     rendered = render_announcement_template(
         "Happy birthday {user.display_name} in {server.name} on {birthday.date} ({timezone})!",

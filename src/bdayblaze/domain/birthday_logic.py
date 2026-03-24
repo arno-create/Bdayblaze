@@ -80,6 +80,55 @@ def celebration_end_at_utc(start_at_utc: datetime, timezone_name: str) -> dateti
     return next_local_midnight.astimezone(UTC)
 
 
+def current_celebration_window_utc(
+    *,
+    birth_month: int,
+    birth_day: int,
+    timezone_name: str,
+    now_utc: datetime,
+) -> tuple[datetime, datetime] | None:
+    if now_utc.tzinfo is None:
+        raise ValueError("now_utc must be timezone-aware.")
+    zone = validate_timezone(timezone_name)
+    local_now = now_utc.astimezone(zone)
+    local_birthday = normalize_birthday_for_year(birth_month, birth_day, local_now.year)
+    if local_birthday != local_now.date():
+        return None
+    start_at_utc = datetime.combine(local_birthday, time.min, tzinfo=zone).astimezone(UTC)
+    return start_at_utc, celebration_end_at_utc(start_at_utc, timezone_name)
+
+
+def is_birthday_active_now(
+    *,
+    birth_month: int,
+    birth_day: int,
+    timezone_name: str,
+    now_utc: datetime,
+) -> bool:
+    window = current_celebration_window_utc(
+        birth_month=birth_month,
+        birth_day=birth_day,
+        timezone_name=timezone_name,
+        now_utc=now_utc,
+    )
+    if window is None:
+        return False
+    start_at_utc, end_at_utc = window
+    return start_at_utc <= now_utc < end_at_utc
+
+
+def active_window_candidate_birthdays(now_utc: datetime) -> tuple[tuple[int, int], ...]:
+    candidate_pairs: set[tuple[int, int]] = set()
+    for offset_days in (-1, 0, 1):
+        candidate_date = (now_utc + timedelta(days=offset_days)).date()
+        candidate_pairs.add((candidate_date.month, candidate_date.day))
+        if candidate_date.month == 2 and candidate_date.day == 28 and not isleap(
+            candidate_date.year
+        ):
+            candidate_pairs.add((2, 29))
+    return tuple(sorted(candidate_pairs))
+
+
 def compute_age(birth_year: int | None, celebration_date: date) -> int | None:
     if birth_year is None:
         return None

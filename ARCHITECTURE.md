@@ -18,7 +18,7 @@
 - `services`
   - Birthday registration, guild settings, scheduler orchestration, and health checks.
 - `discord`
-  - Slash commands, embeds, and setup interactions.
+  - Slash commands, embeds, top-level info aliases, and setup interactions.
   - Keep business logic out of cogs.
 - `db`
   - Connection pool and migration runner.
@@ -36,7 +36,7 @@
 ### `guild_settings`
 
 - One row per guild.
-- Stores channel, timezone, role, toggles, celebration mode, and an optional custom announcement template.
+- Stores channel, timezone, role, toggles, celebration mode, a compact announcement theme preset, and an optional custom announcement template.
 
 ### `member_birthdays`
 
@@ -45,6 +45,7 @@
   - `next_occurrence_at_utc`
   - `next_role_removal_at_utc`
   - `active_birthday_role_id`
+- Uses a compact `(guild_id, birth_month, birth_day)` index for month browsing, twins, and active-birthday candidate lookups.
 
 ### `celebration_events`
 
@@ -69,7 +70,7 @@
 - On startup:
   - reclaim stale `processing` celebration events
   - claim overdue birthday starts and role removals inside a grace window
-  - recover uncertain announcement batches
+  - recover uncertain announcement batches with a strictly bounded fallback history scan
   - execute pending work
 - Normal loop:
   - claim newly due birthday starts
@@ -85,13 +86,16 @@
 - Failed work is retried with bounded backoff.
 - Active role removal uses a stored role snapshot so admin config changes do not orphan active birthday roles.
 - Channel-history scans are reserved for narrow stale-send recovery instead of normal dedupe.
+- Stale-send recovery is capped at 3 history requests of 10 messages each and only searches bot-authored messages inside a narrow time window for the exact batch footer token.
 
 ## Privacy and UX decisions
 
 - Birthdays are stored per guild membership, never globally shared.
 - Birth year is optional and hidden by default.
 - Admin setup, health output, and message-template flows are ephemeral.
+- Admin browsing, admin member-management, and operator preview flows are ephemeral.
 - Upcoming birthdays do not reveal birth year or age.
+- Public browsing stays lightweight and private to the caller: `/birthday month`, `/birthday today`, `/birthday next`, and `/birthday twins` respond ephemerally and do not reveal years.
 - Logs and diagnostics never include birth dates, birth years, or raw announcement-template content.
 
 ## Extension seams

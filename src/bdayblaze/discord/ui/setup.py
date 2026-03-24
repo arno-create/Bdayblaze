@@ -4,12 +4,20 @@ from typing import Final
 
 import discord
 
+from bdayblaze.discord.announcements import (
+    build_announcement_message,
+    preview_batch_recipients,
+    preview_single_recipients,
+)
 from bdayblaze.domain.announcement_template import (
     DEFAULT_ANNOUNCEMENT_TEMPLATE,
-    AnnouncementRenderRecipient,
     celebration_mode_label,
-    render_announcement_template,
     supported_placeholders,
+)
+from bdayblaze.domain.announcement_theme import (
+    announcement_theme_description,
+    announcement_theme_label,
+    supported_announcement_themes,
 )
 from bdayblaze.domain.models import CelebrationMode, GuildSettings
 from bdayblaze.domain.timezones import timezone_guidance
@@ -42,7 +50,8 @@ def build_setup_embed(settings: GuildSettings, note: str | None = None) -> disco
         value=(
             f"Status: {'Enabled' if settings.announcements_enabled else 'Disabled'}\n"
             f"Channel: {channel_value}\n"
-            f"Style: {celebration_mode_label(settings.celebration_mode)}"
+            f"Style: {celebration_mode_label(settings.celebration_mode)}\n"
+            f"Theme: {announcement_theme_label(settings.announcement_theme)}"
         ),
         inline=False,
     )
@@ -96,8 +105,6 @@ def build_message_template_embed(
     settings: GuildSettings,
     *,
     note: str | None = None,
-    preview_single: str | None = None,
-    preview_batch: str | None = None,
 ) -> discord.Embed:
     current_template = settings.announcement_template or DEFAULT_ANNOUNCEMENT_TEMPLATE
     embed = discord.Embed(
@@ -107,6 +114,15 @@ def build_message_template_embed(
             "Mentions are still sent separately so notification behavior stays reliable."
         ),
         color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="Current presentation",
+        value=(
+            f"Mode: {celebration_mode_label(settings.celebration_mode)}\n"
+            f"Theme: {announcement_theme_label(settings.announcement_theme)}\n"
+            f"{announcement_theme_description(settings.announcement_theme)}"
+        ),
+        inline=False,
     )
     embed.add_field(name="Current template", value=_code_block(current_template), inline=False)
     embed.add_field(
@@ -121,6 +137,11 @@ def build_message_template_embed(
             "shared date when the whole batch matches, otherwise they fall back to generic "
             "multi-birthday text."
         ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Template tips",
+        value="Use `{{` and `}}` for literal braces in your message.",
         inline=False,
     )
     person_lines = [
@@ -143,10 +164,6 @@ def build_message_template_embed(
         value="\n".join(batch_lines),
         inline=False,
     )
-    if preview_single is not None:
-        embed.add_field(name="Single-user preview", value=_code_block(preview_single), inline=False)
-    if preview_batch is not None:
-        embed.add_field(name="Batch preview", value=_code_block(preview_batch), inline=False)
     if note:
         embed.add_field(name="Saved", value=note, inline=False)
     return embed
@@ -387,6 +404,7 @@ class MessageTemplateView(discord.ui.View):
         self.settings_service = settings_service
         self.settings = settings
         self.owner_id = owner_id
+        self.add_item(AnnouncementThemeSelect(self))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.owner_id:
@@ -417,51 +435,31 @@ class MessageTemplateView(discord.ui.View):
         interaction: discord.Interaction,
         _: discord.ui.Button[MessageTemplateView],
     ) -> None:
-        template = self.settings.announcement_template or DEFAULT_ANNOUNCEMENT_TEMPLATE
-        single_preview = render_announcement_template(
-            template,
+        single_preview = build_announcement_message(
             server_name="Bdayblaze HQ",
+            recipients=preview_single_recipients(),
             celebration_mode=self.settings.celebration_mode,
-            recipients=[
-                AnnouncementRenderRecipient(
-                    mention="@Arman",
-                    display_name="Arman",
-                    username="arman",
-                    birth_month=3,
-                    birth_day=24,
-                    timezone="Asia/Yerevan",
-                )
-            ],
+            announcement_theme=self.settings.announcement_theme,
+            template=self.settings.announcement_template,
+            preview_label="Preview only - single birthday example",
         )
-        batch_preview = render_announcement_template(
-            template,
+        batch_preview = build_announcement_message(
             server_name="Bdayblaze HQ",
+            recipients=preview_batch_recipients(),
             celebration_mode=self.settings.celebration_mode,
-            recipients=[
-                AnnouncementRenderRecipient(
-                    mention="@Arman",
-                    display_name="Arman",
-                    username="arman",
-                    birth_month=3,
-                    birth_day=24,
-                    timezone="Asia/Yerevan",
-                ),
-                AnnouncementRenderRecipient(
-                    mention="@Lia",
-                    display_name="Lia",
-                    username="lia",
-                    birth_month=3,
-                    birth_day=24,
-                    timezone="Asia/Tokyo",
-                ),
-            ],
+            announcement_theme=self.settings.announcement_theme,
+            template=self.settings.announcement_template,
+            preview_label="Preview only - multi-birthday example",
         )
         await interaction.response.edit_message(
-            embed=build_message_template_embed(
-                self.settings,
-                preview_single=single_preview,
-                preview_batch=batch_preview,
-            ),
+            embeds=[
+                build_message_template_embed(
+                    self.settings,
+                    note="Preview examples refreshed below.",
+                ),
+                single_preview.embed,
+                batch_preview.embed,
+            ],
             view=MessageTemplateView(
                 settings_service=self.settings_service,
                 settings=self.settings,
@@ -508,6 +506,56 @@ class MessageTemplateView(discord.ui.View):
                 settings=latest,
                 owner_id=self.owner_id,
                 guild=interaction.guild,
+            ),
+        )
+
+
+class AnnouncementThemeSelect(discord.ui.Select["MessageTemplateView"]):
+    def __init__(self, message_view: MessageTemplateView) -> None:
+        options = [
+            discord.SelectOption(
+                label=spec.label,
+                value=spec.key,
+                description=spec.description,
+                default=spec.key == message_view.settings.announcement_theme,
+            )
+            for spec in supported_announcement_themes()
+        ]
+        super().__init__(
+            placeholder=(
+                "Theme: "
+                f"{announcement_theme_label(message_view.settings.announcement_theme)}"
+            ),
+            min_values=1,
+            max_values=1,
+            options=options,
+            row=1,
+        )
+        self.message_view = message_view
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+        try:
+            await self.message_view.settings_service.update_settings(
+                interaction.guild,
+                announcement_theme=self.values[0],  # type: ignore[arg-type]
+            )
+        except ValidationError as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
+        latest = await self.message_view.settings_service.get_settings(interaction.guild.id)
+        await interaction.response.edit_message(
+            embed=build_message_template_embed(
+                latest,
+                note=(
+                    "Announcement theme saved as "
+                    f"{announcement_theme_label(latest.announcement_theme)}."
+                ),
+            ),
+            view=MessageTemplateView(
+                settings_service=self.message_view.settings_service,
+                settings=latest,
+                owner_id=self.message_view.owner_id,
             ),
         )
 
@@ -565,7 +613,7 @@ class TimezoneModal(discord.ui.Modal, title="Set default timezone"):
 class TemplateEditModal(discord.ui.Modal, title="Edit birthday message"):
     template_input: discord.ui.TextInput[TemplateEditModal] = discord.ui.TextInput(
         label="Announcement body",
-        placeholder=DEFAULT_ANNOUNCEMENT_TEMPLATE,
+        placeholder="Use placeholders like {birthday.mentions}. Escape braces with {{ and }}.",
         required=False,
         style=discord.TextStyle.paragraph,
         max_length=500,

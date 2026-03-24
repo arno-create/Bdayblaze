@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from bdayblaze.domain.birthday_logic import (
+    active_window_candidate_birthdays,
+    is_birthday_active_now,
     next_occurrence_at_utc,
     validate_birth_date,
     validate_timezone,
@@ -67,18 +69,120 @@ class BirthdayService:
         return await self._repository.upsert_member_birthday(birthday)
 
     async def get_birthday(self, guild_id: int, user_id: int) -> MemberBirthday:
+        return await self.require_birthday(
+            guild_id,
+            user_id,
+            missing_message="You have not registered a birthday in this server yet.",
+        )
+
+    async def require_birthday(
+        self,
+        guild_id: int,
+        user_id: int,
+        *,
+        missing_message: str,
+    ) -> MemberBirthday:
         birthday = await self._repository.fetch_member_birthday(guild_id, user_id)
         if birthday is None:
-            raise NotFoundError("You have not registered a birthday in this server yet.")
+            raise NotFoundError(missing_message)
         return birthday
 
     async def remove_birthday(self, guild_id: int, user_id: int) -> MemberBirthday:
+        return await self.remove_member_birthday(
+            guild_id,
+            user_id,
+            missing_message="You do not have stored birthday data in this server.",
+        )
+
+    async def remove_member_birthday(
+        self,
+        guild_id: int,
+        user_id: int,
+        *,
+        missing_message: str,
+    ) -> MemberBirthday:
         deleted = await self._repository.delete_member_birthday(guild_id, user_id)
         if deleted is None:
-            raise NotFoundError("You do not have stored birthday data in this server.")
+            raise NotFoundError(missing_message)
         return deleted
 
     async def list_upcoming_birthdays(
         self, guild_id: int, limit: int = 10
     ) -> list[BirthdayPreview]:
         return await self._repository.list_upcoming_birthdays(guild_id, limit)
+
+    async def list_birthdays_for_month(
+        self,
+        guild_id: int,
+        *,
+        month: int,
+        limit: int,
+        order_by_upcoming: bool,
+    ) -> list[BirthdayPreview]:
+        return await self._repository.list_birthdays_for_month(
+            guild_id,
+            month,
+            limit,
+            order_by_upcoming=order_by_upcoming,
+        )
+
+    async def list_birthdays(
+        self,
+        guild_id: int,
+        *,
+        limit: int,
+        order_by_upcoming: bool,
+    ) -> list[BirthdayPreview]:
+        return await self._repository.list_birthdays(
+            guild_id,
+            limit,
+            order_by_upcoming=order_by_upcoming,
+        )
+
+    async def list_current_birthdays(
+        self,
+        guild_id: int,
+        *,
+        limit: int,
+        now_utc: datetime | None = None,
+    ) -> list[BirthdayPreview]:
+        effective_now = now_utc or datetime.now(UTC)
+        candidates = await self._repository.list_birthdays_for_month_day_pairs(
+            guild_id,
+            active_window_candidate_birthdays(effective_now),
+            max(limit * 3, limit),
+        )
+        active = [
+            preview
+            for preview in candidates
+            if is_birthday_active_now(
+                birth_month=preview.birth_month,
+                birth_day=preview.birth_day,
+                timezone_name=preview.effective_timezone,
+                now_utc=effective_now,
+            )
+        ]
+        active.sort(key=lambda preview: preview.next_occurrence_at_utc)
+        return active[:limit]
+
+    async def list_birthday_twins(
+        self,
+        guild_id: int,
+        user_id: int,
+        *,
+        limit: int,
+    ) -> tuple[MemberBirthday, list[BirthdayPreview]]:
+        birthday = await self.require_birthday(
+            guild_id,
+            user_id,
+            missing_message=(
+                "Save your birthday first, then you can look for birthday twins in this server."
+            ),
+        )
+        matches = await self._repository.list_birthdays_for_month_day_pairs(
+            guild_id,
+            ((birthday.birth_month, birthday.birth_day),),
+            limit + 1,
+        )
+        twins = [preview for preview in matches if preview.user_id != user_id]
+        return birthday, twins[:limit]
