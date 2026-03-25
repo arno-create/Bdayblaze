@@ -450,10 +450,7 @@ class BirthdayGroup(
 
     @app_commands.command(
         name="test-message",
-        description=(
-            "Send a private dry-run preview for a birthday, DM, anniversary, "
-            "server anniversary, or recurring event."
-        ),
+        description="Send a private dry-run preview for any supported celebration type.",
     )
     @app_commands.describe(
         kind="Which delivery type to preview",
