@@ -2307,27 +2307,27 @@ def _build_quest_status_embed(
         "Current progress",
         (
             (
-                f"\N{WRAPPED PRESENT} Wishes unlocked: "
+                f"\U0001F381 Wishes unlocked: "
                 f"{celebration.revealed_wish_count}/{celebration.quest_wish_target}"
             ),
             (
-                f"\N{PARTY POPPER} Reactions on birthday post: "
+                f"\U0001F389 Reactions on birthday post: "
                 f"{celebration.quest_reaction_count}/{celebration.quest_reaction_target}"
                 if celebration.quest_reaction_target > 0
                 else (
-                    "\N{PARTY POPPER} Reactions on birthday post: "
+                    "\U0001F389 Reactions on birthday post: "
                     "not required for this celebration"
                 )
             ),
             (
-                "\N{ROUND PUSHPIN} Check-in complete"
+                "\U0001F4CD Check-in complete"
                 if celebration.quest_checked_in_at_utc is not None
-                else "\N{ROUND PUSHPIN} Check in with `/birthday quest check-in`"
+                else "\U0001F4CD Check in with `/birthday quest check-in`"
                 if celebration.quest_checkin_required
-                else "\N{ROUND PUSHPIN} No check-in needed"
+                else "\U0001F4CD No check-in needed"
             ),
             (
-                f"\N{CHEQUERED FLAG} Quest badge earned: "
+                f"\U0001F3C1 Quest badge earned: "
                 f"{'Yes' if celebration.quest_completed_at_utc else 'No'}"
             ),
         ),
@@ -2375,56 +2375,56 @@ def _build_timeline_embed(
     active = timeline.active_celebration
     if active is not None:
         current_lines = [
-            "\N{BIRTHDAY CAKE} Status: celebrating right now"
+            "\U0001F382 Status: celebrating right now"
             if active_now
             else (
-                f"\N{BIRTHDAY CAKE} Countdown: "
+                f"\U0001F382 Countdown: "
                 f"{discord.utils.format_dt(timeline.next_countdown_at_utc, 'R')}"
             ),
-            f"\N{PACKAGE} Capsule: {_capsule_state_label(active)}",
+            f"\U0001F4E6 Capsule: {_capsule_state_label(active)}",
             (
-                f"\N{WRAPPED PRESENT} Quest wishes: "
+                f"\U0001F381 Quest wishes: "
                 f"{active.revealed_wish_count}/{active.quest_wish_target}"
                 if active.quest_enabled
-                else "\N{WRAPPED PRESENT} Quest wishes: quest disabled for this celebration"
+                else "\U0001F381 Quest wishes: quest disabled for this celebration"
             ),
         ]
         if active.quest_enabled:
             current_lines.append(
                 (
-                    f"\N{PARTY POPPER} Quest reactions: "
+                    f"\U0001F389 Quest reactions: "
                     f"{active.quest_reaction_count}/{active.quest_reaction_target}"
                     if active.quest_reaction_target > 0
-                    else "\N{PARTY POPPER} Quest reactions: public reaction goal unavailable"
+                    else "\U0001F389 Quest reactions: public reaction goal unavailable"
                 )
             )
             current_lines.append(
                 (
-                    "\N{ROUND PUSHPIN} Check-in: complete"
+                    "\U0001F4CD Check-in: complete"
                     if active.quest_checked_in_at_utc is not None
-                    else "\N{ROUND PUSHPIN} Check-in: required"
+                    else "\U0001F4CD Check-in: required"
                     if active.quest_checkin_required
-                    else "\N{ROUND PUSHPIN} Check-in: not required"
+                    else "\U0001F4CD Check-in: not required"
                 )
             )
             current_lines.append(
-                "\N{CHEQUERED FLAG} Quest badge: earned"
+                "\U0001F3C1 Quest badge: earned"
                 if active.quest_completed_at_utc is not None
-                else "\N{CHEQUERED FLAG} Quest badge: in progress"
+                else "\U0001F3C1 Quest badge: in progress"
             )
         if active.surprise_reward_label is not None:
-            current_lines.append(f"\N{GIFT} Birthday Surprise: {active.surprise_reward_label}")
+            current_lines.append(f"\U0001F381 Birthday Surprise: {active.surprise_reward_label}")
         if active.nitro_fulfillment_status == "pending":
             current_lines.append(
-                "\N{SHIELD} Nitro concierge: awaiting manual admin fulfillment"
+                "\U0001F6E1 Nitro concierge: awaiting manual admin fulfillment"
             )
         elif active.nitro_fulfillment_status is not None:
             current_lines.append(
-                "\N{SHIELD} Nitro concierge: "
+                "\U0001F6E1 Nitro concierge: "
                 f"{active.nitro_fulfillment_status.replace('_', ' ')}"
             )
         if active.late_delivery:
-            current_lines.append(f"\N{ALARM CLOCK} {LATE_CELEBRATION_NOTE}")
+            current_lines.append(f"\u23F0 {LATE_CELEBRATION_NOTE}")
         embed.add_line_fields("Current celebration", tuple(current_lines), inline=False)
     extras = [
         f"Wishes received: {timeline.wishes_received_count}",
