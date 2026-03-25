@@ -134,29 +134,55 @@ def test_birthday_dm_section_calls_out_theme_only_visuals() -> None:
 
 def test_media_tools_embed_explains_probe_results() -> None:
     embed = build_media_tools_embed(
-        GuildSettings.default(1),
-        note="No changes were saved.",
+        replace(
+            GuildSettings.default(1),
+            announcement_image_url="https://cdn.example.com/current-banner.gif",
+            announcement_thumbnail_url="https://cdn.example.com/current-thumb.webp",
+        ),
+        note="No changes were saved. Your current saved media is unchanged.",
         image_probe=MediaProbeResult(
             label="Announcement image",
-            url="https://cdn.example.com/banner.gif?sig=abc",
-            classification="direct_media",
-            summary="Announcement image URL responded as direct media.",
-            direct_render_expected=True,
-            content_type="image/gif",
-            detected_kind="gif",
-        ),
-        thumbnail_probe=MediaProbeResult(
-            label="Announcement thumbnail",
-            url="https://www.example.com/gallery/photo-42",
+            url="https://tenor.com/view/funny-cat-happy-birthday-123456",
             classification="webpage",
-            summary="Announcement thumbnail URL responded as a webpage.",
+            summary=(
+                "Announcement image URL looks like a webpage, not a direct GIF/image file. "
+                "For Tenor, use the direct media file URL, not the page link."
+            ),
             direct_render_expected=False,
             content_type="text/html",
             detected_kind="html",
         ),
+        thumbnail_probe=MediaProbeResult(
+            label="Announcement thumbnail",
+            url=(
+                "https://www.google.com/imgres?imgurl=https%3A%2F%2Fcdn.example.com%2Fparty.gif"
+                "&imgrefurl=https%3A%2F%2Fexample.com%2Fpost"
+            ),
+            classification="webpage",
+            summary=(
+                "Announcement thumbnail URL looks like a webpage, not a direct GIF/image file. "
+                "Google image-result links are wrappers, not direct media files. "
+                "Try copying the image/GIF address itself, not the browser page URL."
+            ),
+            direct_render_expected=False,
+            content_type="text/html",
+            detected_kind="html",
+        ),
+        checked_image_url="https://tenor.com/view/funny-cat-happy-birthday-123456",
+        checked_thumbnail_url=(
+            "https://www.google.com/imgres?imgurl=https%3A%2F%2Fcdn.example.com%2Fparty.gif"
+            "&imgrefurl=https%3A%2F%2Fexample.com%2Fpost"
+        ),
     )
 
-    values = "\n".join(field.value for field in embed.fields)
-    assert "Likely direct media" in values
-    assert "Webpage URL" in values
-    assert "Discord will not render" in values
+    fields = {field.name: field.value for field in embed.fields}
+    values = "\n".join(fields.values())
+
+    assert fields["Updated"] == "No changes were saved. Your current saved media is unchanged."
+    assert "https://cdn.example.com/current-banner.gif" in fields["Current saved media"]
+    assert "https://tenor.com/view/funny-cat-happy-birthday-123456" not in fields["Current saved media"]
+    assert "https://tenor.com/view/funny-cat-happy-birthday-123456" in fields["Latest validation"]
+    assert "Webpage link rejected" in values
+    assert "Direct media accepted" in values
+    assert "For Tenor, use the direct media file URL, not the page link." in values
+    assert "Google image results: wrapper links are webpages, not direct media files." in values

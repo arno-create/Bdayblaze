@@ -19,6 +19,7 @@ def test_assess_media_url_accepts_realistic_signed_cdn_asset() -> None:
 
     assert assessment is not None
     assert assessment.classification == "direct_media"
+    assert "direct media file" in assessment.summary
 
 
 def test_assess_media_url_marks_extensionless_object_url_for_validation() -> None:
@@ -61,6 +62,45 @@ def test_assess_media_url_rejects_webpage_suffix() -> None:
 
     assert assessment is not None
     assert assessment.classification == "webpage"
+    assert "webpage, not a direct GIF/image file" in assessment.summary
+
+
+def test_assess_media_url_rejects_tenor_page_link_with_guidance() -> None:
+    assessment = assess_media_url(
+        "https://tenor.com/view/funny-cat-happy-birthday-123456",
+        label="Announcement image",
+    )
+
+    assert assessment is not None
+    assert assessment.classification == "webpage"
+    assert "For Tenor" in assessment.summary
+    assert "page link" in assessment.summary
+
+
+def test_assess_media_url_rejects_giphy_page_link_with_guidance() -> None:
+    assessment = assess_media_url(
+        "https://giphy.com/gifs/happy-birthday-party-abc123",
+        label="Announcement image",
+    )
+
+    assert assessment is not None
+    assert assessment.classification == "webpage"
+    assert "For Giphy" in assessment.summary
+    assert "page link" in assessment.summary
+
+
+def test_assess_media_url_rejects_google_image_wrapper_with_guidance() -> None:
+    assessment = assess_media_url(
+        (
+            "https://www.google.com/imgres?imgurl=https%3A%2F%2Fcdn.example.com%2Fparty.gif"
+            "&imgrefurl=https%3A%2F%2Fexample.com%2Fpost"
+        ),
+        label="Announcement image",
+    )
+
+    assert assessment is not None
+    assert assessment.classification == "webpage"
+    assert "Google image-result links are wrappers" in assessment.summary
 
 
 def test_assess_media_url_flags_unsupported_media_suffix() -> None:
@@ -71,6 +111,7 @@ def test_assess_media_url_flags_unsupported_media_suffix() -> None:
 
     assert assessment is not None
     assert assessment.classification == "unsupported_media"
+    assert "unsupported .mp4 content" in assessment.summary
 
 
 def test_assess_media_url_rejects_private_host_and_unsafe_tokens() -> None:
@@ -85,8 +126,10 @@ def test_assess_media_url_rejects_private_host_and_unsafe_tokens() -> None:
 
     assert private_host is not None
     assert private_host.classification == "invalid_or_unsafe"
+    assert "local or private IP address" in private_host.summary
     assert unsafe_keyword is not None
     assert unsafe_keyword.classification == "invalid_or_unsafe"
+    assert "blocked unsafe keywords" in unsafe_keyword.summary
 
 
 class _FakeContent:
@@ -184,6 +227,7 @@ async def test_probe_once_rejects_html_webpage() -> None:
 
     assert result is not None
     assert result.classification == "webpage"
+    assert "direct GIF/image file" in result.summary
 
 
 @pytest.mark.asyncio
@@ -257,6 +301,18 @@ async def test_probe_media_url_returns_validation_unavailable_on_timeout(
 
     assert result is not None
     assert result.classification == "validation_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_probe_media_url_rejects_tenor_page_without_fetching() -> None:
+    result = await probe_media_url(
+        "https://tenor.com/view/funny-cat-happy-birthday-123456",
+        label="Announcement image",
+    )
+
+    assert result is not None
+    assert result.classification == "webpage"
+    assert "For Tenor" in result.summary
 
 
 @pytest.mark.asyncio

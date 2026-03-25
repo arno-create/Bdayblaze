@@ -8,6 +8,7 @@ MAX_MEDIA_URL_LENGTH = 500
 VALIDATED_DIRECT_MEDIA_FRAGMENT = "bdayblaze-media-ok"
 
 ALLOWED_MEDIA_EXTENSIONS = frozenset({".gif", ".jpeg", ".jpg", ".png", ".webp"})
+WEBPAGE_EXTENSIONS = frozenset({".htm", ".html"})
 BLOCKED_MEDIA_EXTENSIONS = frozenset(
     {
         ".avi",
@@ -15,8 +16,6 @@ BLOCKED_MEDIA_EXTENSIONS = frozenset(
         ".css",
         ".csv",
         ".exe",
-        ".htm",
-        ".html",
         ".ico",
         ".js",
         ".json",
@@ -37,6 +36,11 @@ BLOCKED_MEDIA_EXTENSIONS = frozenset(
     }
 )
 AMBIGUOUS_PAGE_EXTENSIONS = frozenset({".asp", ".aspx", ".cfm", ".cgi", ".jsp", ".jspx", ".php"})
+TENOR_PAGE_HOSTS = frozenset({"tenor.com", "www.tenor.com"})
+GIPHY_PAGE_HOSTS = frozenset({"giphy.com", "www.giphy.com"})
+GOOGLE_HOSTS = frozenset({"google.com", "www.google.com", "images.google.com"})
+GOOGLE_IMAGE_RESULT_QUERY_KEYS = frozenset({"imgrefurl", "imgurl"})
+GENERIC_WRAPPER_QUERY_KEYS = frozenset({"imgrefurl", "imgurl", "mediaurl"})
 UNSAFE_HOSTS = frozenset(
     {
         "localhost",
@@ -76,10 +80,10 @@ class MediaUrlAssessment:
 
     def status_label(self) -> str:
         return {
-            "direct_media": "Likely direct media",
-            "webpage": "Webpage URL",
-            "invalid_or_unsafe": "Invalid or unsafe",
-            "unsupported_media": "Unsupported media URL",
+            "direct_media": "Direct media accepted",
+            "webpage": "Webpage link rejected",
+            "invalid_or_unsafe": "Invalid or unsafe URL rejected",
+            "unsupported_media": "Unsupported media rejected",
             "needs_validation": "Needs validation",
         }[self.classification]
 
@@ -187,14 +191,31 @@ def assess_media_url(
         )
 
     extension = path_extension(path_segment)
+    webpage_summary = describe_webpage_media_issue(normalized, label=label)
+    if webpage_summary is not None:
+        return MediaUrlAssessment(
+            label=label,
+            normalized_url=normalized,
+            classification="webpage",
+            summary=webpage_summary,
+            direct_render_expected=False,
+        )
+    if extension in WEBPAGE_EXTENSIONS:
+        return MediaUrlAssessment(
+            label=label,
+            normalized_url=normalized,
+            classification="webpage",
+            summary=default_webpage_media_guidance(label),
+            direct_render_expected=False,
+        )
     if extension in BLOCKED_MEDIA_EXTENSIONS:
         return MediaUrlAssessment(
             label=label,
             normalized_url=normalized,
             classification="unsupported_media",
             summary=(
-                f"{label} URL points to an unsupported file type. "
-                "Use a direct image, GIF, or WebP asset URL instead."
+                f"{label} URL points to unsupported {extension} content. "
+                "Use a direct HTTPS image, GIF, or WebP file URL instead."
             ),
             direct_render_expected=False,
         )
@@ -203,7 +224,9 @@ def assess_media_url(
             label=label,
             normalized_url=normalized,
             classification="direct_media",
-            summary=f"{label} URL looks like a direct media asset.",
+            summary=(
+                f"{label} URL looks like a direct media file Discord can usually embed."
+            ),
             direct_render_expected=True,
         )
     if validated_marker:
@@ -228,7 +251,9 @@ def assess_media_url(
         label=label,
         normalized_url=normalized,
         classification="needs_validation",
-        summary=f"{label} URL may be direct media, but it needs validation first.",
+        summary=(
+            f"{label} URL may still be direct media, but it needs validation first."
+        ),
         direct_render_expected=False,
     )
 
@@ -320,11 +345,65 @@ def content_type_kind(content_type: str | None) -> str | None:
     return normalized
 
 
+def describe_webpage_media_issue(value: str | None, *, label: str) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    parsed = urlparse(normalized)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    path = (parsed.path or "").lower()
+    query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
+    query_keys = {name.lower() for name, _ in query_pairs}
+
+    if host in TENOR_PAGE_HOSTS:
+        return (
+            f"{label} URL looks like a webpage, not a direct GIF/image file. "
+            "For Tenor, use the direct media file URL, not the page link."
+        )
+    if host in GIPHY_PAGE_HOSTS:
+        return (
+            f"{label} URL looks like a webpage, not a direct GIF/image file. "
+            "For Giphy, use the direct media file URL, not the page link."
+        )
+    if _is_google_image_result_wrapper(host, path, query_keys):
+        return (
+            f"{label} URL looks like a webpage, not a direct GIF/image file. "
+            "Google image-result links are wrappers, not direct media files. "
+            "Try copying the image/GIF address itself, not the browser page URL."
+        )
+    if query_keys.intersection(GENERIC_WRAPPER_QUERY_KEYS):
+        return default_webpage_media_guidance(label)
+    return None
+
+
+def default_webpage_media_guidance(label: str) -> str:
+    return (
+        f"{label} URL looks like a webpage, not a direct GIF/image file. "
+        "Try copying the image/GIF address itself, not the browser page URL."
+    )
+
+
 def path_extension(path_segment: str) -> str | None:
     stem, separator, suffix = path_segment.rpartition(".")
     if not separator or not stem or not suffix:
         return None
     return f".{suffix.lower()}"
+
+
+def _is_google_image_result_wrapper(
+    host: str,
+    path: str,
+    query_keys: set[str],
+) -> bool:
+    if host not in GOOGLE_HOSTS and not host.endswith(".google.com"):
+        return False
+    if path == "/imgres":
+        return True
+    if path == "/search" and "tbm" in query_keys:
+        return True
+    return bool(query_keys.intersection(GOOGLE_IMAGE_RESULT_QUERY_KEYS))
 
 
 def _host_issue(hostname: str) -> str | None:

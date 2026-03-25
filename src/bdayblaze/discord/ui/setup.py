@@ -2,7 +2,7 @@
 
 import asyncio
 from calendar import month_name
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Final, Literal
 
 import discord
@@ -327,30 +327,58 @@ def build_media_tools_embed(
     note: str | None = None,
     image_probe: MediaProbeResult | None = None,
     thumbnail_probe: MediaProbeResult | None = None,
+    checked_image_url: str | None = None,
+    checked_thumbnail_url: str | None = None,
 ) -> discord.Embed:
     budget = BudgetedEmbed.create(
         title="Media Tools",
         description=(
-            "Save only direct image, GIF, or WebP asset URLs here. Regular webpages are not "
-            "used as embed images."
+            "Save only direct HTTPS image, GIF, or WebP file URLs here. Browser page links "
+            "from Tenor, Giphy, Google image results, and similar wrappers are rejected."
         ),
         color=discord.Color.blurple(),
     )
     if note:
         budget.add_field(name="Updated", value=note, inline=False)
     budget.add_line_fields(
-        "Current media",
+        "Current saved media",
         (
-            _media_state_line(
-                settings.announcement_image_url,
-                label="Announcement image",
-                probe=image_probe,
-            ),
+            _media_state_line(settings.announcement_image_url, label="Announcement image"),
             _media_state_line(
                 settings.announcement_thumbnail_url,
                 label="Announcement thumbnail",
-                probe=thumbnail_probe,
             ),
+        ),
+        inline=False,
+    )
+    if (
+        image_probe is not None
+        or thumbnail_probe is not None
+        or (checked_image_url is not None and checked_image_url.strip())
+        or (checked_thumbnail_url is not None and checked_thumbnail_url.strip())
+    ):
+        budget.add_line_fields(
+            "Latest validation",
+            (
+                _media_validation_line(
+                    checked_image_url,
+                    label="Announcement image",
+                    probe=image_probe,
+                ),
+                _media_validation_line(
+                    checked_thumbnail_url,
+                    label="Announcement thumbnail",
+                    probe=thumbnail_probe,
+                ),
+            ),
+            inline=False,
+        )
+    budget.add_field(
+        name="Common fixes",
+        value=(
+            "Tenor/Giphy: use the direct media file URL, not the page link.\n"
+            "Google image results: wrapper links are webpages, not direct media files.\n"
+            "Tip: copy the image or GIF address itself, not the browser page URL."
         ),
         inline=False,
     )
@@ -358,24 +386,24 @@ def build_media_tools_embed(
         name="Validation flow",
         value=(
             "Edit media validates both URLs before save. Use Validate current to re-check saved "
-            "URLs without changing them."
+            "URLs without changing them. Failed validation never removes saved media."
         ),
         inline=False,
     )
     budget.add_field(
         name="Reset behavior",
-        value="Reset media clears only the shared image and thumbnail fields.",
+        value="Reset media clears only the saved shared image and thumbnail fields.",
         inline=False,
     )
     budget.add_field(
         name="State guide",
         value=(
-            "Likely direct media: Discord preview should usually work.\n"
-            "Webpage URL: Discord will not render that page as an image.\n"
-            "Unsupported media URL: the link points to a file type Discord will not render here.\n"
-            "Needs validation: use Validate current before trusting it.\n"
-            "Invalid or unsafe: replace the URL before saving.\n"
-            "Validation unavailable: the probe could not confirm it right now."
+            "✅ Direct media accepted: Discord should usually render it.\n"
+            "⚠️ Webpage link rejected: this looks like a page, not an image/GIF file.\n"
+            "⛔ Unsupported media rejected: the link points to a non-image/GIF/WebP file.\n"
+            "🔎 Needs validation: the URL may still be direct media, but it needs checking.\n"
+            "⛔ Invalid or unsafe URL rejected: replace the URL before saving.\n"
+            "⚠️ Validation unavailable: the probe could not confirm it right now."
         ),
         inline=False,
     )
@@ -716,17 +744,56 @@ def _media_state_line(
     value: str | None,
     *,
     label: str,
-    probe: MediaProbeResult | None = None,
 ) -> str:
     if value is None or not value.strip():
         return f"{label}: Not set"
-    if probe is not None:
-        return f"{label}: {probe.status_label()} | {truncate_text(probe.url, 72)}"
     assessment = assess_media_url(value, label=label)
     if assessment is None:
         return f"{label}: Not set"
     display_url = strip_validated_direct_media_marker(assessment.normalized_url)
     return f"{label}: {assessment.status_label()} | {truncate_text(display_url or '', 72)}"
+
+
+def _media_validation_line(
+    value: str | None,
+    *,
+    label: str,
+    probe: MediaProbeResult | None = None,
+) -> str:
+    if value is None or not value.strip():
+        return f"ℹ️ {label}: Not provided"
+    if probe is not None:
+        display_url = strip_validated_direct_media_marker(probe.url)
+        return (
+            f"{_media_status_icon(probe.classification)} {label}: {probe.status_label()} | "
+            f"{truncate_text(display_url or '', 72)} | {_short_media_summary(probe.summary, label)}"
+        )
+    assessment = assess_media_url(value, label=label)
+    if assessment is None:
+        return f"ℹ️ {label}: Not provided"
+    display_url = strip_validated_direct_media_marker(assessment.normalized_url)
+    return (
+        f"{_media_status_icon(assessment.classification)} {label}: {assessment.status_label()} | "
+        f"{truncate_text(display_url or '', 72)} | {_short_media_summary(assessment.summary, label)}"
+    )
+
+
+def _media_status_icon(classification: str) -> str:
+    return {
+        "direct_media": "✅",
+        "webpage": "⚠️",
+        "invalid_or_unsafe": "⛔",
+        "unsupported_media": "⛔",
+        "needs_validation": "🔎",
+        "validation_unavailable": "⚠️",
+    }.get(classification, "ℹ️")
+
+
+def _short_media_summary(summary: str, label: str) -> str:
+    prefix = f"{label} URL "
+    if summary.startswith(prefix):
+        return summary[len(prefix) :]
+    return summary
 
 
 def _validated_media_storage_value(
@@ -2707,21 +2774,20 @@ class MediaEditModal(AdminPanelModal, title="Update shared media"):
             result is not None and result.classification != "direct_media"
             for result in (image_result, thumbnail_result)
         ):
+            latest = await self.settings_service.get_settings(interaction.guild.id)
             await interaction.response.send_message(
                 embed=build_media_tools_embed(
-                    replace(
-                        self.settings,
-                        announcement_image_url=image_value,
-                        announcement_thumbnail_url=thumbnail_value,
-                    ),
-                    note="No changes were saved.",
+                    latest,
+                    note="No changes were saved. Your current saved media is unchanged.",
                     image_probe=image_result,
                     thumbnail_probe=thumbnail_result,
+                    checked_image_url=image_value,
+                    checked_thumbnail_url=thumbnail_value,
                 ),
                 view=StudioMediaView(
                     settings_service=self.settings_service,
                     birthday_service=self.birthday_service,
-                    settings=self.settings,
+                    settings=latest,
                     owner_id=self.owner_id,
                     guild=self.guild,
                     section=self.section,
@@ -2746,6 +2812,8 @@ class MediaEditModal(AdminPanelModal, title="Update shared media"):
                 note="Shared media saved.",
                 image_probe=image_result,
                 thumbnail_probe=thumbnail_result,
+                checked_image_url=image_value,
+                checked_thumbnail_url=thumbnail_value,
             ),
             view=StudioMediaView(
                 settings_service=self.settings_service,
@@ -2812,13 +2880,17 @@ class StudioMediaView(AdminPanelView):
         _: discord.ui.Button[StudioMediaView],
     ) -> None:
         latest = await self.settings_service.get_settings(self.guild.id)
+        checked_image_url = strip_validated_direct_media_marker(latest.announcement_image_url)
+        checked_thumbnail_url = strip_validated_direct_media_marker(
+            latest.announcement_thumbnail_url
+        )
         image_result, thumbnail_result = await asyncio.gather(
             probe_media_url(
-                strip_validated_direct_media_marker(latest.announcement_image_url),
+                checked_image_url,
                 label="Announcement image",
             ),
             probe_media_url(
-                strip_validated_direct_media_marker(latest.announcement_thumbnail_url),
+                checked_thumbnail_url,
                 label="Announcement thumbnail",
             ),
         )
@@ -2828,6 +2900,8 @@ class StudioMediaView(AdminPanelView):
                 note="Current shared media was validated.",
                 image_probe=image_result,
                 thumbnail_probe=thumbnail_result,
+                checked_image_url=checked_image_url,
+                checked_thumbnail_url=checked_thumbnail_url,
             ),
             view=StudioMediaView(
                 settings_service=self.settings_service,

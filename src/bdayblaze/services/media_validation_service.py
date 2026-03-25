@@ -10,6 +10,8 @@ from bdayblaze.domain.media_validation import (
     MediaUrlAssessment,
     assess_media_url,
     content_type_kind,
+    default_webpage_media_guidance,
+    describe_webpage_media_issue,
     sniff_media_signature,
 )
 
@@ -34,10 +36,10 @@ class MediaProbeResult:
 
     def status_label(self) -> str:
         return {
-            "direct_media": "Likely direct media",
-            "webpage": "Webpage URL",
-            "invalid_or_unsafe": "Invalid or unsafe",
-            "unsupported_media": "Unsupported media URL",
+            "direct_media": "Direct media accepted",
+            "webpage": "Webpage link rejected",
+            "invalid_or_unsafe": "Invalid or unsafe URL rejected",
+            "unsupported_media": "Unsupported media rejected",
             "validation_unavailable": "Validation unavailable",
         }[self.classification]
 
@@ -163,7 +165,13 @@ async def _probe_once(
                 label=assessment.label,
                 url=assessment.normalized_url,
                 classification="webpage",
-                summary=f"{assessment.label} URL responded as a webpage, not a direct media asset.",
+                summary=(
+                    describe_webpage_media_issue(
+                        assessment.normalized_url,
+                        label=assessment.label,
+                    )
+                    or default_webpage_media_guidance(assessment.label)
+                ),
                 direct_render_expected=False,
                 content_type=content_type,
                 detected_kind=kind,
@@ -184,9 +192,17 @@ async def _probe_once(
             )
         classification = "webpage" if kind == "text" else "unsupported_media"
         summary = (
-            f"{assessment.label} URL responded as webpage content."
+            (
+                describe_webpage_media_issue(
+                    assessment.normalized_url,
+                    label=assessment.label,
+                )
+                or default_webpage_media_guidance(assessment.label)
+            )
             if classification == "webpage"
-            else f"{assessment.label} URL did not verify as a supported image, GIF, or WebP asset."
+            else (
+                f"{assessment.label} URL did not verify as a supported image, GIF, or WebP asset."
+            )
         )
         return MediaProbeResult(
             label=assessment.label,
