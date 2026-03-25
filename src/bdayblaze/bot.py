@@ -28,6 +28,7 @@ class BdayblazeBot(commands.Bot):
                 birthday_service=self.container.birthday_service,
                 settings_service=self.container.settings_service,
                 health_service=self.container.health_service,
+                studio_audit_logger=self.container.studio_audit_logger,
             )
         )
         await self.add_cog(InfoCog())
@@ -36,16 +37,20 @@ class BdayblazeBot(commands.Bot):
                 await self.tree.sync(guild=discord.Object(id=guild_id))
         else:
             await self.tree.sync()
+        self._logger.info("app_commands_synced", guild_sync_count=len(self.container.settings.guild_sync_ids))
 
     async def on_ready(self) -> None:
         if not self._scheduler_started:
             self.container.scheduler_runner.start()
             self._scheduler_started = True
+        self.container.runtime_status.bot_ready_at_utc = discord.utils.utcnow()
+        self.container.runtime_status.startup_phase = "bot_ready"
         self._logger.info("bot_ready", user=str(self.user), guild_count=len(self.guilds))
 
     async def close(self) -> None:
         if self._scheduler_started:
             await self.container.scheduler_runner.stop()
+        self._logger.info("bot_closing")
         await self.container.pool.close()
         await super().close()
 

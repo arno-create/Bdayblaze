@@ -9,6 +9,7 @@ from bdayblaze.domain.models import (
     AnniversaryRecipientSnapshot,
     AnnouncementRecipientSnapshot,
     CelebrationEvent,
+    RuntimeStatus,
     SchedulerMetrics,
 )
 from bdayblaze.logging import get_logger
@@ -565,8 +566,9 @@ class BirthdaySchedulerService:
 
 
 class BirthdaySchedulerRunner:
-    def __init__(self, service: BirthdaySchedulerService) -> None:
+    def __init__(self, service: BirthdaySchedulerService, runtime_status: RuntimeStatus) -> None:
         self._service = service
+        self._runtime_status = runtime_status
         self._stop_event = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._logger = get_logger(component="scheduler_runner")
@@ -582,10 +584,18 @@ class BirthdaySchedulerRunner:
 
     async def _run_loop(self) -> None:
         try:
+            self._runtime_status.scheduler_recovery_started_at_utc = datetime.now(UTC)
+            self._runtime_status.startup_phase = "scheduler_recovery"
+            self._logger.info("scheduler_recovery_started")
             await self._service.recover()
+            self._runtime_status.scheduler_recovery_completed_at_utc = datetime.now(UTC)
+            self._runtime_status.startup_phase = "scheduler_running"
+            self._logger.info("scheduler_recovery_completed")
         except Exception as exc:
             self._service._metrics.last_error_code = type(exc).__name__
             self._service._metrics.recent_errors.append(type(exc).__name__)
+            self._runtime_status.scheduler_recovery_failed_at_utc = datetime.now(UTC)
+            self._runtime_status.startup_phase = "scheduler_recovery_failed"
             self._logger.exception("scheduler_recovery_failed", error_code=type(exc).__name__)
         while not self._stop_event.is_set():
             now_utc = datetime.now(UTC)
@@ -600,6 +610,7 @@ class BirthdaySchedulerRunner:
                 await asyncio.wait_for(self._stop_event.wait(), timeout=sleep_for)
             except TimeoutError:
                 continue
+        self._logger.info("scheduler_runner_stopped")
 
 
 def _optional_str(value: object | None) -> str | None:

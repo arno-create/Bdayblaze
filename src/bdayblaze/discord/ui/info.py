@@ -10,7 +10,7 @@ from bdayblaze.discord.embed_budget import BudgetedEmbed
 
 def build_help_embed() -> discord.Embed:
     budget = BudgetedEmbed.create(
-        title="📘 Bdayblaze Help",
+        title="❓ Bdayblaze Help",
         description=(
             "Birthday tracking for Discord servers with privacy-first defaults and "
             "lightweight admin controls."
@@ -57,6 +57,17 @@ def build_help_embed() -> discord.Embed:
         inline=False,
     )
     budget.add_field(
+        name="Studio media and safety",
+        value=(
+            "Use `/birthday studio` -> Media Tools for shared image and thumbnail URLs.\n"
+            "Direct media URLs can preview as embeds. Regular webpages are shown as webpage URLs "
+            "and should not be used as images.\n"
+            "Studio also blocks obvious profanity, NSFW wording, slurs, harassment-style text, "
+            "and unsafe URL patterns."
+        ),
+        inline=False,
+    )
+    budget.add_field(
         name="Privacy",
         value=(
             "Birthdays stay scoped to the current server. Month/day is required, year is optional, "
@@ -73,7 +84,7 @@ def build_about_embed() -> discord.Embed:
     package_version = _package_version()
 
     budget = BudgetedEmbed.create(
-        title="📌 About Bdayblaze",
+        title="ℹ️ About Bdayblaze",
         description=(
             "Bdayblaze helps Discord servers celebrate birthdays with server-scoped storage, "
             "private setup tools, and restart-safe scheduling."
@@ -102,8 +113,15 @@ def build_about_embed() -> discord.Embed:
         name="Permissions and config",
         value=(
             "Announcements and birthday roles only work when this server's settings, "
-            "channel access, "
-            "and role permissions allow them."
+            "channel access, and role permissions allow them."
+        ),
+        inline=False,
+    )
+    budget.add_field(
+        name="Health and uptime",
+        value=(
+            "Use `/birthday health` for server-specific issues. On hosted deployments, monitor "
+            "`/readyz` for readiness and `/healthz` for detailed runtime state."
         ),
         inline=False,
     )

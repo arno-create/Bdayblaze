@@ -3,51 +3,21 @@ from __future__ import annotations
 from calendar import month_name
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
-from ipaddress import ip_address
 from typing import Final, Literal
-from urllib.parse import urlparse
 
 from bdayblaze.domain.models import (
     AnnouncementKind,
     AnnouncementStudioPresentation,
     CelebrationMode,
 )
+from bdayblaze.domain.media_validation import (
+    MAX_MEDIA_URL_LENGTH as MAX_URL_LENGTH,
+    validate_direct_media_url,
+)
 
 MAX_TEMPLATE_LENGTH: Final = 1200
 MAX_TITLE_LENGTH: Final = 256
 MAX_FOOTER_LENGTH: Final = 512
-MAX_URL_LENGTH: Final = 500
-_ALLOWED_IMAGE_EXTENSIONS: Final[frozenset[str]] = frozenset(
-    {".png", ".jpg", ".jpeg", ".gif", ".webp"}
-)
-_BLOCKED_MEDIA_EXTENSIONS: Final[frozenset[str]] = frozenset(
-    {
-        ".avi",
-        ".bmp",
-        ".css",
-        ".csv",
-        ".exe",
-        ".htm",
-        ".html",
-        ".ico",
-        ".js",
-        ".json",
-        ".m4a",
-        ".mkv",
-        ".mov",
-        ".mp3",
-        ".mp4",
-        ".pdf",
-        ".rar",
-        ".svg",
-        ".tar",
-        ".txt",
-        ".wav",
-        ".webm",
-        ".xml",
-        ".zip",
-    }
-)
 DEFAULT_ANNOUNCEMENT_TEMPLATE: Final = (
     "Happy birthday {birthday.mentions}! Wishing you a great day in {server.name}."
 )
@@ -223,36 +193,7 @@ def validate_studio_text(value: str | None, *, label: str, max_length: int) -> s
 
 
 def validate_media_url(value: str | None, *, label: str) -> str | None:
-    if value is None:
-        return None
-    normalized = value.strip()
-    if not normalized:
-        return None
-    if len(normalized) > MAX_URL_LENGTH:
-        raise ValueError(f"{label} URL must be {MAX_URL_LENGTH} characters or fewer.")
-    if any(character.isspace() for character in normalized):
-        raise ValueError(f"{label} URL cannot contain spaces.")
-    if not normalized.startswith("https://"):
-        raise ValueError(f"{label} URL must use HTTPS.")
-    parsed = urlparse(normalized)
-    if parsed.scheme != "https" or not parsed.netloc or parsed.hostname is None:
-        raise ValueError(f"{label} URL must point to a valid HTTPS media file.")
-    if parsed.username or parsed.password:
-        raise ValueError(f"{label} URL cannot include embedded credentials.")
-    if not _is_plausible_media_host(parsed.hostname):
-        raise ValueError(f"{label} URL host is not valid.")
-    path = parsed.path or ""
-    if not path or path == "/" or path.endswith("/"):
-        raise ValueError(f"{label} URL must include a file path.")
-    path_segment = path.rsplit("/", 1)[-1]
-    if not path_segment or path_segment in {".", ".."}:
-        raise ValueError(f"{label} URL must include a valid file path.")
-    extension = _path_extension(path_segment)
-    if extension in _BLOCKED_MEDIA_EXTENSIONS:
-        raise ValueError(
-            f"{label} URL looks like a non-image file. Use an HTTPS image or GIF URL instead."
-        )
-    return normalized
+    return validate_direct_media_url(value, label=label)
 
 
 def validate_announcement_presentation(
@@ -453,28 +394,6 @@ def _format_date(month: int | None, day: int | None) -> str:
     if month is None or day is None:
         return MULTIPLE_DATES_LABEL
     return f"{month_name[month]} {day}"
-
-
-def _is_plausible_media_host(hostname: str) -> bool:
-    if "." in hostname and not hostname.startswith(".") and not hostname.endswith("."):
-        return True
-    try:
-        ip_address(hostname)
-    except ValueError:
-        return False
-    return True
-
-
-def _path_extension(path_segment: str) -> str | None:
-    stem, separator, suffix = path_segment.rpartition(".")
-    if not separator or not stem or not suffix:
-        return None
-    normalized_suffix = f".{suffix.lower()}"
-    if normalized_suffix in _ALLOWED_IMAGE_EXTENSIONS:
-        return normalized_suffix
-    return normalized_suffix
-
-
 def preview_context_for_kind(kind: AnnouncementKind) -> AnnouncementRenderContext:
     preview_now = datetime(2026, 3, 25, tzinfo=UTC)
     if kind == "birthday_dm":

@@ -66,6 +66,7 @@ class GuildSettings:
     ignore_bots: bool
     minimum_membership_days: int
     mention_suppression_threshold: int
+    studio_audit_channel_id: int | None = None
     created_at_utc: datetime | None = None
     updated_at_utc: datetime | None = None
 
@@ -95,6 +96,7 @@ class GuildSettings:
             ignore_bots=True,
             minimum_membership_days=0,
             mention_suppression_threshold=8,
+            studio_audit_channel_id=None,
         )
 
     def presentation(self) -> AnnouncementStudioPresentation:
@@ -317,3 +319,21 @@ class SchedulerMetrics:
     iterations: int = 0
     last_claimed_events: int = 0
     recent_errors: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class RuntimeStatus:
+    process_started_at_utc: datetime
+    db_pool_ready_at_utc: datetime | None = None
+    migrations_started_at_utc: datetime | None = None
+    migrations_completed_at_utc: datetime | None = None
+    migrations_failed_at_utc: datetime | None = None
+    health_server_started_at_utc: datetime | None = None
+    health_server_failed_at_utc: datetime | None = None
+    bot_login_started_at_utc: datetime | None = None
+    bot_ready_at_utc: datetime | None = None
+    scheduler_recovery_started_at_utc: datetime | None = None
+    scheduler_recovery_completed_at_utc: datetime | None = None
+    scheduler_recovery_failed_at_utc: datetime | None = None
+    unexpected_shutdown_at_utc: datetime | None = None
+    startup_phase: str = "starting"

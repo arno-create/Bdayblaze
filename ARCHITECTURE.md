@@ -3,167 +3,209 @@
 ## Goals
 
 - Reliable and restart-safe celebration delivery.
-- Privacy-first storage of birthday data and related server settings.
-- Low operational overhead on constrained infrastructure.
-- Compact seams for future features such as Quests, Capsules, Surprises, Studio expansion, Timeline, and Analytics.
+- Privacy-first storage of birthday data and guild settings.
+- Low operational cost on constrained hosting.
+- Compact seams for future features without introducing a second worker stack.
 
 ## Package boundaries
 
 - `domain`
-  - Pure date/time calculations, timezone helpers, theme presets, and strict template rendering.
+  - Pure date/time rules, theme presets, placeholder rendering, and media classification.
   - No Discord or database objects.
 - `repositories`
   - Thin async SQL layer over `asyncpg`.
   - Explicit queries, indexes, and transactions.
 - `services`
-  - Birthday registration, import/export, settings validation, health checks, diagnostics, and scheduler orchestration.
+  - Birthday flows, settings validation, content policy, scheduler orchestration, diagnostics, and health.
 - `discord`
-  - Slash commands, embeds, gateway side effects, top-level info commands, and setup/Celebration Studio interactions.
-  - Discord UX stays here; business rules stay in services/domain.
+  - Slash commands, embeds, setup/studio views, gateway delivery side effects, and top-level info commands.
 - `db`
-  - Connection pool and migration runner.
+  - Pool setup and migration runner.
 
-## Data flow
+## Core data flow
 
 1. A slash command hits a cog.
-2. The cog validates Discord-specific context, permissions, and member/guild scope.
+2. The cog validates Discord-specific context and permissions.
 3. The cog delegates to a service.
-4. Services call repositories and pure domain helpers.
-5. Scheduler claims due work from indexed timestamp columns and durable event rows.
-6. Discord side effects execute from persisted event payloads and batch state, then mark records complete.
+4. Services use repositories plus pure domain helpers.
+5. Scheduler claims due work from indexed timestamps and durable event rows.
+6. Discord side effects execute from persisted payloads, then records are completed.
 
 ## Persistence strategy
 
 ### `guild_settings`
 
-- One row per guild.
-- Stores:
-  - announcement channel and default timezone
-  - birthday role and celebration mode
-  - Celebration Studio presentation fields
-  - birthday announcement template
-  - birthday DM settings/template
-  - anniversary settings/template/channel override
-  - large-server controls such as eligibility role, ignore-bots, minimum membership days, and mention suppression threshold
+One row per guild. Stores:
+
+- announcement routing and default timezone
+- birthday role and celebration mode
+- Celebration Studio presentation fields
+- birthday, DM, and anniversary templates
+- anniversary channel override
+- eligibility controls
+- Studio audit channel
 
 ### `member_birthdays`
 
-- One row per `(guild_id, user_id)`.
-- Stores:
-  - month/day
-  - optional year
-  - optional timezone override
-  - `profile_visibility`
-  - next-occurrence scheduler state
-  - active birthday-role snapshot data for reliable cleanup
-- Uses compact browse indexes on `(guild_id, birth_month, birth_day)` plus visibility-aware browse paths.
+One row per `(guild_id, user_id)`. Stores:
+
+- month/day
+- optional year
+- optional timezone override
+- `profile_visibility`
+- next-occurrence timestamps
+- active birthday-role snapshot data
 
 ### `tracked_member_anniversaries`
 
-- One row per tracked member anniversary in a guild.
-- Stores the member's `joined_at_utc`, next occurrence timestamp, and source metadata.
-- Keeps anniversary scheduling cheap and bounded without full-guild scanning or privileged member sync.
-- Populated by birthday writes, admin member writes/imports, and explicit anniversary sync flows.
+One row per tracked anniversary. Stores `joined_at_utc`, next occurrence, and source metadata so anniversary scheduling stays bounded without full-guild scans.
 
 ### `recurring_celebrations`
 
-- One row per server-defined annual event.
-- Stores name, month/day, enabled flag, optional channel override, optional template override, next occurrence timestamp, and a compact `celebration_kind`.
-- `celebration_kind='server_anniversary'` is reserved for the single first-class server anniversary record in a guild.
-- Server anniversary can also store `use_guild_created_date` so the UX can default to the guild creation date without adding a second scheduler system.
-- Purpose-built for annual server events; not a generic cron or RRULE engine.
+One row per annual server-defined event. Stores:
+
+- name
+- month/day
+- enabled flag
+- optional channel override
+- optional template override
+- `celebration_kind`
+- `use_guild_created_date`
+- next occurrence
+
+`celebration_kind='server_anniversary'` is reserved for the single server-anniversary record in a guild.
 
 ### `celebration_events`
 
-- Durable idempotency and work queue for Discord side effects.
-- Current event kinds:
-  - `announcement`
-  - `birthday_role_add`
-  - `birthday_role_remove`
-  - `birthday_dm`
-  - `anniversary_announcement`
-  - `recurring_announcement`
-- Each event stores:
-  - `event_key`
-  - `event_kind`
-  - `scheduled_for_utc`
-  - `state`
-  - retry metadata
-  - compact JSON payload snapshot for delivery
+Durable work queue and idempotency layer for Discord side effects.
+
+Current event kinds:
+
+- `announcement`
+- `birthday_dm`
+- `anniversary_announcement`
+- `recurring_announcement`
+- `role_start`
+- `role_end`
 
 ### `announcement_batches`
 
-- One row per grouped announcement batch token.
-- Stores channel, scheduled time, send state, and sent message id when known.
-- Lets the scheduler dedupe and recover grouped sends without scanning channel history during normal operation.
+Grouped announcement send state. Used for dedupe and bounded stale-send recovery without normal-operation history scans.
 
 ## Scheduler model
 
 - Query indexed next-due timestamps instead of scanning full tables.
 - On startup:
-  - reclaim stale `processing` celebration events
-  - claim overdue birthday starts, anniversary starts, recurring events, and role removals inside a grace window
-  - recover uncertain announcement batches with a strictly bounded fallback history scan
-  - execute pending work
+  - reclaim stale `processing` work
+  - recover overdue birthdays, anniversaries, recurring events, and role removals inside the grace window
+  - recover uncertain announcement batches with a bounded fallback scan
 - Normal loop:
-  - claim newly due birthday starts
-  - claim newly due anniversaries
-  - claim newly due recurring celebrations
-  - claim newly due role removals
+  - claim due work
   - execute pending events
-  - sleep until the next indexed due timestamp or a bounded max sleep
+  - sleep until the next due timestamp or a bounded max sleep
+
+## Media validation model
+
+Media handling is intentionally split into two layers:
+
+1. Local classification in `domain.media_validation`
+   - distinguishes `direct_media`, `webpage`, `invalid_or_unsafe`, and `needs_validation`
+   - rejects unsafe hosts, private IPs, credentials, blocked suffixes, and unsafe URL keywords
+   - does not pretend every HTTPS URL is a renderable image
+
+2. Bounded admin-only probing in `services.media_validation_service`
+   - used only from Studio Media Tools
+   - short timeout
+   - small redirect cap
+   - HEAD first, then tiny ranged GET/body sniff fallback
+   - accepts real image/GIF/WebP content types or matching signatures
+   - classifies HTML as webpage content
+
+This keeps live sends cheap while giving admins a safer save/preview flow.
+
+## Moderation and abuse protection
+
+Studio/admin-authored inputs are checked by a deterministic content-policy layer:
+
+- birthday announcement template
+- birthday DM template
+- anniversary template
+- server-anniversary template
+- recurring event names and templates
+- title override
+- footer text
+- unsafe media URL patterns
+
+The policy is intentionally limited:
+
+- blocks obvious profanity, NSFW wording, slurs, and harassment-style phrases
+- does not use ML moderation
+- does not inspect remote image contents
+
+Blocked Studio/admin save attempts can optionally be logged to a configured audit channel with minimal metadata only.
 
 ## Delivery and diagnostics
 
-- Permission and readiness checks are centralized so setup, previews, health checks, and live delivery use the same wording and blockers.
-- Admin-heavy embeds use shared budget enforcement so setup, Celebration Studio, dry runs, health checks, import previews, and recurring-event summaries do not exceed Discord field or total embed limits.
-- Media validation is centralized and lightweight: HTTPS only, real host/path required, bounded length, signed/query/extensionless CDN URLs allowed, and obvious non-image suffixes rejected.
-- Preview builders use the same effective presentation rules as live delivery, so birthday DM previews do not drift from the actual DM payload.
-- Diagnostics cover:
-  - missing `View Channel`
-  - missing `Send Messages`
-  - missing `Embed Links`
-  - missing `Manage Roles`
-  - deleted channels/roles
-  - managed/default/hierarchy role issues
-  - DM unavailable
-  - invalid template/media configuration
-  - eligibility exclusions such as ignored bots, missing eligibility role, and minimum membership age
-- Discord 400 invalid-payload failures are classified as permanent config/operator issues instead of being retried like transient transport errors.
-- Live birthday announcements, birthday DMs, anniversaries, and recurring events all use the same persisted-event model.
-- Server anniversary stays on the recurring-announcement scheduler path internally, but renders as its own announcement kind in previews and live sends.
+Permission and readiness checks are centralized so setup, previews, health checks, and live delivery share the same blockers and wording.
+
+Diagnostics cover:
+
+- missing `View Channel`
+- missing `Send Messages`
+- missing `Embed Links`
+- missing `Manage Roles`
+- deleted channels or roles
+- role hierarchy issues
+- invalid or ambiguous media configuration
+- blocked saved Studio/admin content
+- eligibility exclusions
+
+Discord 400 invalid-payload failures are classified as permanent operator/config problems instead of retryable transport failures.
+
+## Runtime health model
+
+Runtime state is tracked explicitly in `RuntimeStatus` and exposed through the built-in HTTP server.
+
+Tracked phases include:
+
+- process start
+- DB pool ready
+- migrations start / complete / fail
+- health server start / fail
+- bot login start
+- bot ready
+- scheduler recovery start / complete / fail
+- unexpected shutdown
+
+HTTP endpoints:
+
+- `/livez` for basic liveness
+- `/readyz` for readiness
+- `/healthz` and `/health` for detailed JSON state
+
+`/readyz` is the canonical uptime-monitor endpoint.
 
 ## Reliability choices
 
 - Celebration events are persisted before Discord side effects run.
 - Event states are explicit: `pending`, `processing`, `completed`.
-- Announcement batches are explicit: `pending`, `sending`, `sent`.
-- Failed work retries with bounded backoff and non-sensitive retry metadata.
-- Permanent invalid media/payload failures complete as skipped with operator-safe error codes instead of entering noisy retry loops.
-- Active role cleanup uses a stored role snapshot so admin config changes do not orphan live birthday roles.
-- DM failures are recorded as skip outcomes without noisy retry loops.
-- Channel-history scans are reserved for narrow stale-send recovery instead of normal dedupe.
-- Stale-send recovery is capped at 3 history requests of 10 bot-authored messages each and only searches inside a narrow time window for the exact batch footer token.
-- Late recovered announcements may render graceful recovery wording, but dedupe behavior is unchanged.
+- Permanent invalid payload/media failures complete as skipped instead of looping forever.
+- Active role cleanup uses stored role snapshot data so config changes do not orphan roles.
+- DM failures are recorded as skip outcomes without noisy retries.
+- Stale-send recovery is bounded to 3 history requests of 10 bot-authored messages each.
 
-## Privacy and product decisions
+## Privacy choices
 
 - Birthdays are stored per guild membership, never as a cross-server profile.
 - Birth year is optional and hidden by default.
-- Visibility is server-scoped: `private` or `server_visible`.
-- Admin setup, health, import/export, member-management, and preview flows are ephemeral.
-- Non-admin browse flows never expose birth year and respect visibility settings.
-- Logs and diagnostics never include raw birth dates, birth years, or raw custom template bodies.
+- Admin setup, Studio, preview, health, and import/export flows are ephemeral.
+- Logs and diagnostics do not include raw birth dates, birth years, raw template text, or raw blocked payloads.
 - Message Content intent is not used.
-- There is no inactivity-based eligibility in this pass because the architecture does not maintain a safe, low-cost activity signal.
 
 ## Extension seams
 
-The current shape is intentionally compact but extensible:
-
-- `celebration_mode` remains small while leaving room for future announcement styles.
-- `AnnouncementStudioPresentation` can expand without turning into an arbitrary embed-builder.
-- Celebration Studio sections can grow without reintroducing one giant panel, because the current UI is already split into bounded pages and compact modal-return flows.
-- `celebration_events.payload` can carry future capsule/card/drop metadata.
-- `tracked_member_anniversaries` provides a clean seam for richer timeline or anniversary features later.
-- `recurring_celebrations` is purpose-built now but can back future server milestone experiences.
+- `AnnouncementStudioPresentation` can expand without turning into an arbitrary embed builder.
+- `celebration_events.payload` can carry future metadata for new event styles.
+- `tracked_member_anniversaries` remains a clean seam for richer anniversary features later.
+- `recurring_celebrations` can back future server milestone experiences.
+- Future generated cards/cakes can reuse the existing direct-media validation flow after an external asset service returns a URL.

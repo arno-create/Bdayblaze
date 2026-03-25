@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 
+from bdayblaze.domain.media_validation import mark_validated_direct_media_url
 from bdayblaze.domain.models import GuildSettings
 from bdayblaze.services.errors import ValidationError
 from bdayblaze.services.settings_service import SettingsService
@@ -134,12 +136,60 @@ async def test_settings_service_accepts_signed_extensionless_media_url() -> None
     repository = FakeSettingsRepository(GuildSettings.default(1))
     service = SettingsService(repository)  # type: ignore[arg-type]
 
-    saved = await service.update_settings(
-        FakeGuild(1),  # type: ignore[arg-type]
-        announcement_image_url="https://cdn.example.com/assets/banner?sig=abc123",
+    with pytest.raises(ValidationError, match="Media Tools first"):
+        await service.update_settings(
+            FakeGuild(1),  # type: ignore[arg-type]
+            announcement_image_url="https://cdn.example.com/assets/banner?sig=abc123",
+        )
+
+
+@pytest.mark.asyncio
+async def test_settings_service_accepts_validated_extensionless_media_url() -> None:
+    repository = FakeSettingsRepository(GuildSettings.default(1))
+    service = SettingsService(repository)  # type: ignore[arg-type]
+    validated_url = mark_validated_direct_media_url(
+        "https://cdn.example.com/assets/banner?sig=abc123"
     )
 
-    assert saved.announcement_image_url == "https://cdn.example.com/assets/banner?sig=abc123"
+    saved = await service.update_validated_media(
+        FakeGuild(1),  # type: ignore[arg-type]
+        announcement_image_url=validated_url,
+    )
+
+    assert saved.announcement_image_url == validated_url
+
+
+@pytest.mark.asyncio
+async def test_settings_service_rejects_unvalidated_extensionless_media_url() -> None:
+    repository = FakeSettingsRepository(GuildSettings.default(1))
+    service = SettingsService(repository)  # type: ignore[arg-type]
+
+    with pytest.raises(ValidationError, match="Media Tools first"):
+        await service.update_validated_media(
+            FakeGuild(1),  # type: ignore[arg-type]
+            announcement_image_url="https://cdn.example.com/assets/banner?sig=abc123",
+        )
+
+
+@pytest.mark.asyncio
+async def test_settings_service_preserves_validated_media_on_unrelated_update() -> None:
+    repository = FakeSettingsRepository(
+        replace(
+            GuildSettings.default(1),
+            announcement_image_url=mark_validated_direct_media_url(
+                "https://cdn.example.com/assets/banner?sig=abc123"
+            ),
+        )
+    )
+    service = SettingsService(repository)  # type: ignore[arg-type]
+
+    saved = await service.update_settings(
+        FakeGuild(1),  # type: ignore[arg-type]
+        announcement_theme="cute",
+    )
+
+    assert saved.announcement_theme == "cute"
+    assert saved.announcement_image_url is not None
 
 
 @pytest.mark.asyncio
@@ -163,6 +213,30 @@ async def test_settings_service_rejects_invalid_studio_accent_color() -> None:
         await service.update_settings(
             FakeGuild(1),  # type: ignore[arg-type]
             announcement_accent_color="#GGGGGG",
+        )
+
+
+@pytest.mark.asyncio
+async def test_settings_service_blocks_profane_announcement_template() -> None:
+    repository = FakeSettingsRepository(GuildSettings.default(1))
+    service = SettingsService(repository)  # type: ignore[arg-type]
+
+    with pytest.raises(ValidationError, match="blocked profane or vulgar language"):
+        await service.update_settings(
+            FakeGuild(1),  # type: ignore[arg-type]
+            announcement_template="Happy birthday you bitch",
+        )
+
+
+@pytest.mark.asyncio
+async def test_settings_service_blocks_unsafe_media_url_keyword() -> None:
+    repository = FakeSettingsRepository(GuildSettings.default(1))
+    service = SettingsService(repository)  # type: ignore[arg-type]
+
+    with pytest.raises(ValidationError, match="blocked unsafe keywords"):
+        await service.update_validated_media(
+            FakeGuild(1),  # type: ignore[arg-type]
+            announcement_thumbnail_url="https://cdn.example.com/nsfw/banner.png",
         )
 
 

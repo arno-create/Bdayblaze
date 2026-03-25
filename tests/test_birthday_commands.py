@@ -12,6 +12,7 @@ from bdayblaze.discord.cogs.birthday import (
     _require_ready_delivery,
     _visible_only_for_scope,
 )
+from bdayblaze.domain.media_validation import mark_validated_direct_media_url
 from bdayblaze.domain.models import (
     AnnouncementDeliveryReadiness,
     GuildSettings,
@@ -250,6 +251,49 @@ async def test_build_preview_embed_surfaces_invalid_saved_media() -> None:
             settings,
             service,  # type: ignore[arg-type]
             kind="birthday_announcement",
+            member=None,
+            event_id=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_build_preview_embed_accepts_validated_extensionless_media() -> None:
+    service = FakeBirthdayService()
+    settings = replace(
+        GuildSettings.default(1),
+        announcements_enabled=True,
+        announcement_image_url=mark_validated_direct_media_url(
+            "https://cdn.example.com/assets/banner?sig=abc123"
+        ),
+    )
+
+    embed = await _build_preview_embed(
+        FakeGuild(1),
+        settings,
+        service,  # type: ignore[arg-type]
+        kind="birthday_announcement",
+        member=None,
+        event_id=None,
+    )
+
+    assert embed.description
+
+
+@pytest.mark.asyncio
+async def test_build_preview_embed_blocks_unsafe_anniversary_copy() -> None:
+    service = FakeBirthdayService()
+    settings = replace(
+        GuildSettings.default(1),
+        announcements_enabled=True,
+        anniversary_template="Happy anniversary, go die",
+    )
+
+    with pytest.raises(ValidationError, match="blocked harassment or threat language"):
+        await _build_preview_embed(
+            FakeGuild(1),
+            settings,
+            service,  # type: ignore[arg-type]
+            kind="anniversary",
             member=None,
             event_id=None,
         )

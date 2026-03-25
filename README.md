@@ -1,21 +1,22 @@
 # Bdayblaze
 
-Bdayblaze is a production-minded Discord birthday bot focused on reliable celebrations, privacy-first storage, low-noise operator tooling, and clean extension points for later premium features.
+Bdayblaze is a production-minded Discord birthday bot focused on privacy-first storage, low-noise admin UX, bounded recovery work, and release-grade operator tooling.
 
 ## Highlights
 
-- Guild-scoped birthday storage with optional birth year, per-user timezone override, and server-scoped visibility controls.
-- Slash-first UX with top-level `/help` and `/about`, compact `/birthday` subcommands, ephemeral setup flows, and private dry-run previews.
-- Restart-safe scheduler with persisted next-occurrence timestamps, durable event records, bounded stale-send recovery, and no Message Content intent.
-- Rich but compact Celebration Studio customization with strict placeholder validation, safe embed media settings, and bounded Discord-safe admin panels.
-- Practical operator tooling: permission diagnostics, health checks, admin member CRUD, CSV import/export, tracked join anniversaries, and annual recurring celebrations.
-- Large-server controls that stay cheap to run: eligibility role, ignore bots, minimum membership age, and mention suppression on large batches.
+- Guild-scoped birthday storage with optional birth year, per-user timezone override, and server-scoped visibility.
+- Slash-first UX with private `/birthday setup`, `/birthday studio`, and `/birthday test-message` flows.
+- Restart-safe scheduler with durable event records, bounded stale-send recovery, and no Message Content intent.
+- Celebration Studio with strict placeholder validation, guided media tools, compact previews, and explicit reset paths.
+- Deterministic abuse protection for saved Studio/admin text plus practical unsafe-URL blocking.
+- Built-in health endpoints for Render-style hosting with separate liveness and readiness signals.
 
 ## Tech stack
 
 - Python 3.12+
 - `discord.py` 2.x
 - `asyncpg`
+- `aiohttp`
 - PostgreSQL / Supabase
 
 ## Project layout
@@ -23,15 +24,15 @@ Bdayblaze is a production-minded Discord birthday bot focused on reliable celebr
 ```text
 src/bdayblaze/
   db/              Database pool and migration runner
-  discord/         Cogs, gateway, and interactive setup/message views
-  domain/          Pure birthday/date logic, templates, themes, and typed models
+  discord/         Cogs, gateway, embeds, and interactive admin views
+  domain/          Pure date logic, media/template validation, themes, and typed models
   repositories/    Thin async Postgres query layer
-  services/        Birthday flows, settings, health, diagnostics, and scheduler
+  services/        Birthday flows, settings, scheduler, diagnostics, and health
 ```
 
 ## Local setup
 
-1. Create a virtual environment and install dependencies:
+1. Create a virtual environment and install dependencies.
 
    ```bash
    python -m venv .venv
@@ -39,18 +40,17 @@ src/bdayblaze/
    pip install -e .[dev]
    ```
 
-2. Copy `.env.example` to `.env` and fill in:
-
+2. Copy `.env.example` to `.env` and set:
    - `DISCORD_TOKEN`
    - `DATABASE_URL`
 
-3. Run migrations:
+3. Run migrations.
 
    ```bash
    python -m bdayblaze.main migrate
    ```
 
-4. Start the bot:
+4. Start the bot.
 
    ```bash
    python -m bdayblaze.main run
@@ -59,46 +59,13 @@ src/bdayblaze/
 ## Discord application setup
 
 - Enable the `applications.commands` scope.
-- Bot permissions should stay minimal:
+- Required bot permissions:
   - `View Channels`
   - `Send Messages`
   - `Embed Links`
-  - `Manage Roles` only if birthday roles are enabled
-- Do not enable the Message Content intent.
-- Privileged intents are not required. Member resolution uses direct fetches and bounded lookups when needed.
-
-## Deployment notes
-
-- Run a single scheduler instance unless you have validated database-backed event claims in your own multi-worker environment.
-- Keep `BDAYBLAZE_RECOVERY_GRACE_HOURS` comfortably above worst-case deploy downtime.
-- For Supabase, use a pooled connection string and keep scheduler batch sizes modest on constrained hosts.
-- `BDAYBLAZE_AUTO_RUN_MIGRATIONS=true` can bootstrap schema automatically, but a separate migration step is safer for production.
-
-### Render
-
-- Deploy as a `Web Service`.
-- Recommended Python runtime: `3.12.x`.
-- Build command:
-
-  ```bash
-  pip install -e .
-  ```
-
-- Start command:
-
-  ```bash
-  python -m bdayblaze.main run
-  ```
-
-- Required environment variables:
-  - `DISCORD_TOKEN`
-  - `DATABASE_URL`
-- Recommended environment variables:
-  - `BDAYBLAZE_AUTO_RUN_MIGRATIONS=true` for the first deploy
-  - `BDAYBLAZE_LOG_LEVEL=INFO`
-  - `PORT` is injected by Render automatically; do not set it yourself
-
-When `PORT` is present, the bot starts a small built-in HTTP health server so Render port detection succeeds without changing Discord bot behavior. The repository includes `render.yaml` and `runtime.txt` for Render-friendly defaults.
+- `Manage Roles` is only needed if birthday roles are enabled.
+- Do not enable Message Content intent.
+- Privileged intents are not required.
 
 ## Command surface
 
@@ -138,96 +105,160 @@ When `PORT` is present, the bot starts a small built-in HTTP health server so Re
 - `/birthday event remove`
 - `/birthday health`
 
-## Product behavior
+## Celebration Studio
 
-### Privacy model
+`/birthday studio` is the canonical admin customization flow.
 
-- Birthday records are stored per server membership, never globally across servers.
+Studio covers:
+
+- birthday announcements
+- birthday DMs
+- member anniversaries
+- server anniversary
+- yearly recurring events overview
+
+### Media Tools
+
+Use `/birthday studio` -> `Media tools` for shared image and thumbnail URLs.
+
+Accepted states:
+
+- `Likely direct media`: Discord should usually render it as an embed image.
+- `Webpage URL`: the URL resolves to a page, not a direct image/GIF/WebP asset.
+- `Needs validation`: the URL looks safe but must be probed before saving.
+- `Invalid or unsafe`: the URL is blocked locally.
+
+Direct-media examples:
+
+- `https://cdn.example.com/birthday/banner.gif`
+- `https://images.example.com/render?id=42&sig=abc123`
+- `https://storage.example.com/assets/celebration`
+
+Webpage example:
+
+- `https://www.example.com/gallery/photo-42`
+
+Important behavior:
+
+- Studio save-time media validation is stricter than a plain `https://` check.
+- Query-string and signed URLs are supported.
+- Extensionless object-storage URLs are supported only through Media Tools validation.
+- HTML pages are not treated as image assets.
+- Shared media is never used for live birthday DMs.
+- `Reset media` clears only the shared image and thumbnail fields.
+
+### Preview and safety
+
+- `/birthday test-message` stays the canonical dry-run command.
+- Studio previews and `/birthday test-message` are private and never ping members.
+- Preview is the final Discord render check.
+- Studio blocks obvious profanity, NSFW wording, slurs, harassment-style language, and unsafe URL patterns.
+- The bot does not perform image-content moderation or NSFW vision scanning.
+
+### Optional audit logging
+
+`/birthday setup` now includes a `Studio safety` panel.
+
+- You can set an optional Studio audit channel for blocked Studio/admin save attempts.
+- Audit logs are minimal: actor, surface, field names, blocked category, and timestamp.
+- Raw blocked template text, raw blocked media URLs, birth dates, and birth years are not logged.
+- Audit logging is off by default.
+
+## Privacy and safety model
+
+- Birthday records are stored per guild membership, never globally across servers.
 - Birth year is optional and hidden by default.
 - Visibility is server-scoped:
-  - `private`: only the member and admins see the stored profile in browse/manage flows.
-  - `server_visible`: the member can appear in normal server browse commands.
-- Admin and preview workflows stay ephemeral by default.
-- Export/import is admin-only and should be treated as personal data handling.
+  - `private`: visible to the member and admins only
+  - `server_visible`: visible in normal browse commands for that server
+- Admin setup, Studio, preview, health, import/export, and member-management flows stay ephemeral.
+- Template rendering uses a strict placeholder whitelist.
+- There is no Jinja, eval, arbitrary attribute access, or free-form embed JSON.
 
-### Browsing and discovery
+## Deployment notes
 
-- `/birthday today` reflects members currently celebrating according to the scheduler's timezone-aware celebration window, not a simple guild-midnight list.
-- `/birthday next`, `/birthday upcoming`, `/birthday month`, `/birthday twins`, and `/birthday list` respect visibility settings for non-admin flows.
-- Admin browse flows can opt into private entries where appropriate.
-- Output stays bounded and mobile-friendly; large public dumps are intentionally avoided.
+- Run a single scheduler instance unless you have independently validated your multi-worker setup.
+- Keep `BDAYBLAZE_RECOVERY_GRACE_HOURS` above worst-case deploy downtime.
+- Use a pooled Postgres connection string on Supabase.
+- `BDAYBLAZE_AUTO_RUN_MIGRATIONS=true` is convenient for first deploys, but a separate migration step is safer in production.
 
-### Celebration Studio
+### Render
 
-- `/birthday studio` opens Celebration Studio, the private admin surface for:
-  - birthday announcements
-  - birthday DMs
-  - member anniversaries
-  - server anniversary
-  - custom annual event overview
-- The studio keeps announcement presentation compact and safe:
-  - theme preset
-  - optional title override
-  - description template
-  - optional footer text
-  - optional image URL
-  - optional thumbnail URL
-  - optional accent color override
-- Media URLs must use `https://`, include a real host and path, and stay within Discord-safe size limits.
-- Signed URLs, query-string URLs, and extensionless CDN/object URLs are allowed when they are safe enough for Discord to try rendering.
-- Clearly non-image URLs such as `.pdf`, `.zip`, `.mp4`, or `.svg` are rejected up front.
-- Theme presets include `classic`, `festive`, `minimal`, `cute`, `elegant`, and `gaming`.
-- Template rendering uses a strict placeholder whitelist. There is no Jinja, eval, or arbitrary embed builder.
-- Literal braces can be escaped with `{{` and `}}`.
-- Long templates, placeholder references, and diagnostics are chunked or trimmed inside the panel so Discord embed limits are not exceeded.
-- Preview is the final render check. `/birthday test-message` and Studio previews stay private, never ping members, and report live-readiness separately from preview success.
-- Studio reset actions are explicit:
-  - reset current copy
-  - reset shared visuals
-  - reset media only
-  - reset server anniversary back to the guild creation date
-- Studio modal saves return a compact confirmation card with a path back to the relevant studio section instead of spawning another full-size panel.
+- Deploy as a `Web Service`.
+- Recommended Python runtime: `3.12.x`.
+- Build command:
 
-### Event coverage
+  ```bash
+  pip install -e .
+  ```
 
-- Birthday announcements remain the primary event type.
-- Optional birthday DM greetings can be enabled per server.
-- Join anniversaries are supported as tracked annual announcements. This pass keeps them tracked-only rather than full-guild auto-discovery.
-- Server anniversary is a first-class annual celebration. It defaults to the guild creation date when Discord provides it, and admins can manage enable state, date source, channel override, preview, and reset with Discord-native controls.
-- Admins can also define compact annual recurring celebrations such as a community founding day.
+- Start command:
 
-### Large-server controls
+  ```bash
+  python -m bdayblaze.main run
+  ```
 
-- `eligibility_role_id`: only members with the configured role qualify.
-- `ignore_bots`: enabled by default.
-- `minimum_membership_days`: blocks celebrations for very new members when configured.
-- `mention_suppression_threshold`: avoids noisy large mention bursts in big batches.
-- There is no activity-based eligibility in this pass. Bdayblaze does not track message content or invent low-confidence inactivity heuristics.
+- Required environment variables:
+  - `DISCORD_TOKEN`
+  - `DATABASE_URL`
 
-### Reliability and recovery
+- Recommended environment variables:
+  - `BDAYBLAZE_AUTO_RUN_MIGRATIONS=true`
+  - `BDAYBLAZE_LOG_LEVEL=INFO`
+  - `BDAYBLAZE_RECOVERY_GRACE_HOURS=36`
+  - `BDAYBLAZE_SCHEDULER_MAX_SLEEP_SECONDS=300`
+  - `BDAYBLAZE_SCHEDULER_BATCH_SIZE=25`
+
+- `PORT` is provided by Render. Do not set it manually.
+- `render.yaml` sets `healthCheckPath: /readyz`.
+
+### Built-in health endpoints
+
+- `/livez`
+  - For process liveness only.
+  - Returns `200` when the process and event loop are up.
+
+- `/readyz`
+  - Recommended uptime-monitor target.
+  - Returns `200` only when the bot is ready, scheduler recovery completed, and the scheduler heartbeat is fresh.
+  - Returns `503` while starting or when runtime health is degraded.
+
+- `/healthz` and `/health`
+  - Detailed JSON for debugging and monitors that want phase/state data.
+  - Includes startup phase, scheduler counters, last iteration time, and runtime phase timestamps.
+
+Common failure causes to verify:
+
+- missing or invalid `DISCORD_TOKEN`
+- missing or invalid `DATABASE_URL`
+- failed migrations
+- failed health-server bind
+- stale scheduler heartbeat after a deploy/runtime issue
+- missing channel or role permissions
+- wrong Render linked branch or disabled auto-deploy in the Render dashboard
+
+The code can expose clearer startup state, but it cannot force Render to auto-deploy the correct branch. Verify that in Render itself.
+
+## Reliability notes
 
 - Leap-day birthdays celebrate on February 28 in non-leap years.
-- Announcements are scheduled from the member's effective timezone, not a global guild midnight.
+- Announcements are scheduled from each member's effective timezone.
 - Scheduler state is persisted before Discord side effects run.
-- `/birthday test-message` renders a private preview and separately reports live readiness.
-- Dry-run previews exist for birthday announcements, birthday DMs, member anniversaries, server anniversary, and recurring annual events.
-- Stale-send recovery only scans Discord history for stale `sending` batches, capped at 3 requests of 10 bot-authored messages each.
-- If an original sent message is deleted or falls outside that bounded recovery window before recovery runs, one duplicate announcement can still occur.
-- Late recovered announcements can use graceful wording without weakening dedupe guarantees.
+- Stale-send recovery is bounded to 3 history requests of 10 bot-authored messages each.
+- If a sent message is deleted or falls outside that bounded recovery window before recovery runs, one duplicate announcement can still occur.
 
 ## Schema notes
 
-- Migration `003_announcement_themes_and_birth_month_index.sql` adds compact theme presets and an index on `(guild_id, birth_month, birth_day)`.
+- Migration `003_announcement_themes_and_birth_month_index.sql` adds theme presets and a browse index on `(guild_id, birth_month, birth_day)`.
 - Migration `004_operator_ready_pass.sql` adds:
-  - birthday visibility controls
+  - visibility controls
   - Celebration Studio presentation fields
   - birthday DM and anniversary settings
   - large-server eligibility controls
   - tracked member anniversaries
   - recurring annual celebrations
-  - additional scheduler event kinds and browse/scheduler indexes
-- Migration `005_server_anniversary_kind.sql` adds recurring-celebration metadata so server anniversary can be stored as an explicit first-class annual event while still using the existing recurring scheduler path.
-- This Studio hardening pass does not require an additional migration; it stays on the existing schema and scheduler model.
+- Migration `005_server_anniversary_kind.sql` adds first-class server-anniversary metadata on recurring celebrations.
+- Migration `006_studio_audit_channel_and_runtime_notes.sql` adds nullable `studio_audit_channel_id` to `guild_settings`.
 
 ## Testing and checks
 

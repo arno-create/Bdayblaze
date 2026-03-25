@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from calendar import month_name
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Final, Literal
 
 import discord
@@ -16,6 +17,11 @@ from bdayblaze.domain.announcement_template import (
     preview_context_for_kind,
     supported_placeholder_groups,
 )
+from bdayblaze.domain.media_validation import (
+    assess_media_url,
+    mark_validated_direct_media_url,
+    strip_validated_direct_media_marker,
+)
 from bdayblaze.domain.announcement_theme import (
     announcement_theme_description,
     announcement_theme_label,
@@ -29,11 +35,13 @@ from bdayblaze.domain.models import (
 from bdayblaze.domain.timezones import timezone_guidance
 from bdayblaze.logging import get_logger, redact_identifier
 from bdayblaze.services.birthday_service import BirthdayService
+from bdayblaze.services.content_policy import ContentPolicyError, ensure_safe_announcement_inputs
 from bdayblaze.services.diagnostics import (
     build_presentation_diagnostics,
     classify_discord_http_failure,
 )
 from bdayblaze.services.errors import ValidationError
+from bdayblaze.services.media_validation_service import MediaProbeResult, probe_media_url
 from bdayblaze.services.settings_service import SettingsService
 
 _SETUP_TITLE: Final = "🛠 Birthday Setup"
@@ -120,6 +128,42 @@ async def _send_safe_ui_error(
         await interaction.response.send_message(message, ephemeral=True)
 
 
+async def _audit_blocked_attempt(
+    interaction: discord.Interaction,
+    *,
+    surface: str,
+    error: ContentPolicyError,
+) -> None:
+    container = getattr(interaction.client, "container", None)
+    studio_audit_logger = getattr(container, "studio_audit_logger", None)
+    if studio_audit_logger is None:
+        return
+    await studio_audit_logger.log_blocked_attempt(
+        interaction,
+        surface=surface,
+        error=error,
+    )
+
+
+async def _audit_blocked_media_attempt(
+    interaction: discord.Interaction,
+    *,
+    surface: str,
+    field_labels: tuple[str, ...],
+) -> None:
+    container = getattr(interaction.client, "container", None)
+    studio_audit_logger = getattr(container, "studio_audit_logger", None)
+    if studio_audit_logger is None:
+        return
+    await studio_audit_logger.log_blocked_fields(
+        interaction,
+        surface=surface,
+        field_labels=field_labels,
+        category_labels=("unsafe media URL",),
+        rule_codes=("unsafe_media_url",),
+    )
+
+
 class AdminPanelView(discord.ui.View):
     async def on_error(
         self,
@@ -199,6 +243,15 @@ def build_setup_embed(settings: GuildSettings, note: str | None = None) -> disco
     )
     if note:
         budget.add_field(name="✅ Updated", value=note, inline=False)
+    budget.add_field(
+        name="Studio safety",
+        value=(
+            "Blocked-attempt audit log: "
+            f"{_format_channel(settings.studio_audit_channel_id)}\n"
+            "Unsafe message text, event names, and media URLs are blocked."
+        ),
+        inline=False,
+    )
     budget.set_footer(
         "Open Celebration Studio from this panel to manage copy, media, previews, and resets."
     )
@@ -217,6 +270,105 @@ def build_timezone_help_embed(*, allow_server_default: bool) -> discord.Embed:
             "Use the full IANA timezone name.\n"
             "Examples: `Asia/Yerevan`, `Europe/London`, `Europe/Berlin`, "
             "`America/New_York`, `America/Los_Angeles`, `Asia/Tokyo`."
+        ),
+        inline=False,
+    )
+    return budget.build()
+
+
+def build_studio_safety_embed(
+    settings: GuildSettings,
+    *,
+    note: str | None = None,
+) -> discord.Embed:
+    budget = BudgetedEmbed.create(
+        title="Studio safety",
+        description=(
+            "Blocked content checks stay deterministic and private. Raw blocked content is "
+            "never echoed back into logs."
+        ),
+        color=discord.Color.blurple(),
+    )
+    if note:
+        budget.add_field(name="Updated", value=note, inline=False)
+    budget.add_field(
+        name="Audit channel",
+        value=_format_channel(settings.studio_audit_channel_id),
+        inline=False,
+    )
+    budget.add_field(
+        name="What gets blocked",
+        value=(
+            "Profanity, NSFW terms, slurs, harassment-style wording, and unsafe media URLs."
+        ),
+        inline=False,
+    )
+    budget.add_field(
+        name="What gets logged",
+        value=(
+            "Only the admin, surface, field names, and blocked category. "
+            "No raw template text or raw media URLs are logged."
+        ),
+        inline=False,
+    )
+    budget.set_footer("Set a channel to enable audit logging, or clear it to keep logging off.")
+    return budget.build()
+
+
+def build_media_tools_embed(
+    settings: GuildSettings,
+    *,
+    note: str | None = None,
+    image_probe: MediaProbeResult | None = None,
+    thumbnail_probe: MediaProbeResult | None = None,
+) -> discord.Embed:
+    budget = BudgetedEmbed.create(
+        title="Media Tools",
+        description=(
+            "Save only direct image, GIF, or WebP asset URLs here. Regular webpages are not "
+            "used as embed images."
+        ),
+        color=discord.Color.blurple(),
+    )
+    if note:
+        budget.add_field(name="Updated", value=note, inline=False)
+    budget.add_line_fields(
+        "Current media",
+        (
+            _media_state_line(
+                settings.announcement_image_url,
+                label="Announcement image",
+                probe=image_probe,
+            ),
+            _media_state_line(
+                settings.announcement_thumbnail_url,
+                label="Announcement thumbnail",
+                probe=thumbnail_probe,
+            ),
+        ),
+        inline=False,
+    )
+    budget.add_field(
+        name="Validation flow",
+        value=(
+            "Edit media validates both URLs before save. Use Validate current to re-check saved "
+            "URLs without changing them."
+        ),
+        inline=False,
+    )
+    budget.add_field(
+        name="Reset behavior",
+        value="Reset media clears only the shared image and thumbnail fields.",
+        inline=False,
+    )
+    budget.add_field(
+        name="State guide",
+        value=(
+            "Likely direct media: Discord preview should usually work.\n"
+            "Webpage URL: Discord will not render that page as an image.\n"
+            "Needs validation: use Validate current before trusting it.\n"
+            "Invalid or unsafe: replace the URL before saving.\n"
+            "Validation unavailable: the probe could not confirm it right now."
         ),
         inline=False,
     )
@@ -315,18 +467,28 @@ def build_message_template_embed(
             value=(
                 "`https://cdn.example.com/birthday/banner.gif`\n"
                 "`https://images.example.com/render?id=42&sig=abc123`\n"
-                "`https://media.example.com/assets/celebration`"
+                "`https://media.example.com/assets/celebration`\n"
+                "`https://www.example.com/gallery/photo-42` is a webpage, not direct media."
             ),
             inline=False,
         )
         budget.add_field(
             name="🧪 Preview and reset notes",
             value=(
-                "Media URLs must use HTTPS, include a real host and path, and can be signed, "
-                "query-string, or extensionless CDN URLs when they are safe enough to preview.\n"
-                "Preview is the final Discord render check. It never pings members.\n"
+                "Media Tools validates image and thumbnail URLs before save.\n"
+                "Signed, query-string, and extensionless URLs can work when validation proves "
+                "they are direct media assets.\n"
+                "Full preview is still the final Discord render check. It never pings members.\n"
                 "Reset copy restores the default template. Reset media clears only image and "
-                "thumbnail fields. Reset shared visuals clears title, footer, color, and media."
+                "thumbnail fields. Shared visuals now cover title, footer, and accent color."
+            ),
+            inline=False,
+        )
+        budget.add_field(
+            name="Safety limits",
+            value=(
+                "Studio blocks obvious profanity, NSFW wording, slurs, harassment-style text, "
+                "and unsafe media URLs. It does not do image-content moderation."
             ),
             inline=False,
         )
@@ -445,10 +607,45 @@ def _presentation_lines(settings: GuildSettings) -> tuple[str, ...]:
         f"Theme note: {announcement_theme_description(settings.announcement_theme)}",
         f"Title override: {settings.announcement_title_override or 'Default'}",
         f"Footer text: {settings.announcement_footer_text or 'Default'}",
-        f"Image URL: {settings.announcement_image_url or 'None'}",
-        f"Thumbnail URL: {settings.announcement_thumbnail_url or 'None'}",
+        _media_state_line(settings.announcement_image_url, label="Announcement image"),
+        _media_state_line(settings.announcement_thumbnail_url, label="Announcement thumbnail"),
         f"Accent color: {_format_accent_color(settings.announcement_accent_color)}",
     )
+
+
+def _media_state_line(
+    value: str | None,
+    *,
+    label: str,
+    probe: MediaProbeResult | None = None,
+) -> str:
+    if value is None or not value.strip():
+        return f"{label}: Not set"
+    if probe is not None:
+        return f"{label}: {probe.status_label()} | {truncate_text(probe.url, 72)}"
+    assessment = assess_media_url(value, label=label)
+    if assessment is None:
+        return f"{label}: Not set"
+    display_url = strip_validated_direct_media_marker(assessment.normalized_url)
+    return f"{label}: {assessment.status_label()} | {truncate_text(display_url or '', 72)}"
+
+
+def _validated_media_storage_value(
+    value: str | None,
+    probe: MediaProbeResult | None,
+) -> str | None:
+    if value is None or probe is None:
+        return None
+    assessment = assess_media_url(
+        value,
+        label=probe.label,
+        allow_validated_marker=False,
+    )
+    if assessment is None:
+        return None
+    if assessment.classification == "needs_validation":
+        return mark_validated_direct_media_url(probe.url)
+    return probe.url
 
 
 def _birthday_dm_presentation_lines(settings: GuildSettings) -> tuple[str, ...]:
@@ -682,6 +879,10 @@ class SetupView(AdminPanelView):
                 interaction.guild,
                 announcements_enabled=not self.settings.announcements_enabled,
             )
+        except ContentPolicyError as exc:
+            await _audit_blocked_attempt(interaction, surface="studio_template", error=exc)
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
         except ValidationError as exc:
             await interaction.response.send_message(str(exc), ephemeral=True)
             return
@@ -760,6 +961,26 @@ class SetupView(AdminPanelView):
                 owner_id=self.owner_id,
                 birthday_service=self.birthday_service,
             )
+        )
+
+    @discord.ui.button(label="Studio safety", style=discord.ButtonStyle.secondary, row=4)
+    async def studio_safety(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button[SetupView],
+    ) -> None:
+        assert interaction.guild is not None
+        latest = await self.settings_service.get_settings(interaction.guild.id)
+        await interaction.response.send_message(
+            embed=build_studio_safety_embed(latest),
+            view=StudioSafetyView(
+                settings_service=self.settings_service,
+                birthday_service=self.birthday_service,
+                settings=latest,
+                owner_id=self.owner_id,
+                guild=interaction.guild,
+            ),
+            ephemeral=True,
         )
 
     @discord.ui.button(label="Celebration Studio", style=discord.ButtonStyle.secondary, row=4)
@@ -1160,7 +1381,7 @@ class MessageTemplateView(AdminPanelView):
             ephemeral=True,
         )
 
-    @discord.ui.button(label="Reset media", style=discord.ButtonStyle.secondary, row=3)
+    @discord.ui.button(label="Media tools", style=discord.ButtonStyle.secondary, row=3)
     async def reset_media(
         self,
         interaction: discord.Interaction,
@@ -1172,28 +1393,17 @@ class MessageTemplateView(AdminPanelView):
                 ephemeral=True,
             )
             return
-        await self.settings_service.update_settings(
-            interaction.guild,
-            announcement_image_url=None,
-            announcement_thumbnail_url=None,
-        )
-        latest, server_anniversary, recurring_events = await self._latest_context(
-            interaction.guild
-        )
         await interaction.response.send_message(
-            embed=_build_return_embed(
-                "Celebration Studio updated",
-                "Shared image and thumbnail media were cleared.",
+            embed=build_media_tools_embed(
+                await self.settings_service.get_settings(interaction.guild.id),
             ),
-            view=StudioReturnView(
+            view=StudioMediaView(
                 settings_service=self.settings_service,
                 birthday_service=self.birthday_service,
-                settings=latest,
+                settings=await self.settings_service.get_settings(interaction.guild.id),
                 owner_id=self.owner_id,
                 guild=interaction.guild,
                 section=self.section,
-                server_anniversary=server_anniversary,
-                recurring_events=recurring_events,
             ),
             ephemeral=True,
         )
@@ -1406,6 +1616,94 @@ class SetupReturnView(AdminPanelView):
         self,
         interaction: discord.Interaction,
         _: discord.ui.Button[SetupReturnView],
+    ) -> None:
+        latest = await self.settings_service.get_settings(self.guild.id)
+        await interaction.response.edit_message(
+            embed=build_setup_embed(latest),
+            view=SetupView(
+                settings_service=self.settings_service,
+                settings=latest,
+                owner_id=self.owner_id,
+                guild=self.guild,
+                birthday_service=self.birthday_service,
+            ),
+        )
+
+
+class StudioSafetyChannelSelect(discord.ui.ChannelSelect["StudioSafetyView"]):
+    def __init__(self, safety_view: StudioSafetyView) -> None:
+        super().__init__(
+            channel_types=[discord.ChannelType.text, discord.ChannelType.news],
+            placeholder="Select optional Studio audit channel",
+            min_values=0,
+            max_values=1,
+            row=0,
+        )
+        self.safety_view = safety_view
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+        channel_id = self.values[0].id if self.values else None
+        try:
+            await self.safety_view.settings_service.update_settings(
+                interaction.guild,
+                studio_audit_channel_id=channel_id,
+            )
+        except ValidationError as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
+        latest = await self.safety_view.settings_service.get_settings(interaction.guild.id)
+        await interaction.response.edit_message(
+            embed=build_studio_safety_embed(
+                latest,
+                note=(
+                    "Studio audit logging enabled."
+                    if channel_id is not None
+                    else "Studio audit logging disabled."
+                ),
+            ),
+            view=StudioSafetyView(
+                settings_service=self.safety_view.settings_service,
+                birthday_service=self.safety_view.birthday_service,
+                settings=latest,
+                owner_id=self.safety_view.owner_id,
+                guild=interaction.guild,
+            ),
+        )
+
+
+class StudioSafetyView(AdminPanelView):
+    def __init__(
+        self,
+        *,
+        settings_service: SettingsService,
+        birthday_service: BirthdayService | None,
+        settings: GuildSettings,
+        owner_id: int,
+        guild: discord.Guild,
+    ) -> None:
+        super().__init__(timeout=600)
+        self.settings_service = settings_service
+        self.birthday_service = birthday_service
+        self.settings = settings
+        self.owner_id = owner_id
+        self.guild = guild
+        self.add_item(StudioSafetyChannelSelect(self))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(
+                "This Studio safety panel belongs to a different admin.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Back to setup", style=discord.ButtonStyle.secondary, row=1)
+    async def back_to_setup(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button[StudioSafetyView],
     ) -> None:
         latest = await self.settings_service.get_settings(self.guild.id)
         await interaction.response.edit_message(
@@ -1633,6 +1931,10 @@ class TemplateEditModal(AdminPanelModal):
                 )
                 section = "server_anniversary"
                 note = "Server anniversary copy saved."
+        except ContentPolicyError as exc:
+            await _audit_blocked_attempt(interaction, surface="studio_template", error=exc)
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
         except ValidationError as exc:
             await interaction.response.send_message(str(exc), ephemeral=True)
             return
@@ -1668,16 +1970,6 @@ class StudioPresentationModal(AdminPanelModal, title="Celebration visuals"):
         required=False,
         max_length=512,
     )
-    image_url: discord.ui.TextInput[StudioPresentationModal] = discord.ui.TextInput(
-        label="Image or GIF URL",
-        required=False,
-        max_length=500,
-    )
-    thumbnail_url: discord.ui.TextInput[StudioPresentationModal] = discord.ui.TextInput(
-        label="Thumbnail URL",
-        required=False,
-        max_length=500,
-    )
     accent_color: discord.ui.TextInput[StudioPresentationModal] = discord.ui.TextInput(
         label="Accent color",
         required=False,
@@ -1701,8 +1993,6 @@ class StudioPresentationModal(AdminPanelModal, title="Celebration visuals"):
         self.section = section
         self.title_override.default = settings.announcement_title_override or ""
         self.footer_text.default = settings.announcement_footer_text or ""
-        self.image_url.default = settings.announcement_image_url or ""
-        self.thumbnail_url.default = settings.announcement_thumbnail_url or ""
         self.accent_color.default = (
             f"#{settings.announcement_accent_color:06X}"
             if settings.announcement_accent_color is not None
@@ -1721,10 +2011,12 @@ class StudioPresentationModal(AdminPanelModal, title="Celebration visuals"):
                 interaction.guild,
                 announcement_title_override=self.title_override.value,
                 announcement_footer_text=self.footer_text.value,
-                announcement_image_url=self.image_url.value,
-                announcement_thumbnail_url=self.thumbnail_url.value,
                 announcement_accent_color=self.accent_color.value,
             )
+        except ContentPolicyError as exc:
+            await _audit_blocked_attempt(interaction, surface="studio_presentation", error=exc)
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
         except ValidationError as exc:
             await interaction.response.send_message(str(exc), ephemeral=True)
             return
@@ -1736,7 +2028,7 @@ class StudioPresentationModal(AdminPanelModal, title="Celebration visuals"):
         await interaction.response.send_message(
             embed=_build_return_embed(
                 "Celebration visuals saved",
-                "Shared title, footer, color, and media settings were updated.",
+                "Shared title, footer, and accent color were updated.",
             ),
             view=StudioReturnView(
                 settings_service=self.settings_service,
@@ -1749,6 +2041,261 @@ class StudioPresentationModal(AdminPanelModal, title="Celebration visuals"):
                 recurring_events=recurring_events,
             ),
             ephemeral=True,
+        )
+
+
+class MediaEditModal(AdminPanelModal, title="Update shared media"):
+    image_url: discord.ui.TextInput[MediaEditModal] = discord.ui.TextInput(
+        label="Image or GIF URL",
+        required=False,
+        max_length=500,
+    )
+    thumbnail_url: discord.ui.TextInput[MediaEditModal] = discord.ui.TextInput(
+        label="Thumbnail URL",
+        required=False,
+        max_length=500,
+    )
+
+    def __init__(
+        self,
+        *,
+        settings_service: SettingsService,
+        settings: GuildSettings,
+        owner_id: int,
+        birthday_service: BirthdayService | None,
+        guild: discord.Guild,
+        section: SectionName,
+    ) -> None:
+        super().__init__()
+        self.settings_service = settings_service
+        self.settings = settings
+        self.owner_id = owner_id
+        self.birthday_service = birthday_service
+        self.guild = guild
+        self.section = section
+        self.image_url.default = strip_validated_direct_media_marker(
+            settings.announcement_image_url
+        ) or ""
+        self.thumbnail_url.default = strip_validated_direct_media_marker(
+            settings.announcement_thumbnail_url
+        ) or ""
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "This can only be used in a server.",
+                ephemeral=True,
+            )
+            return
+        image_value = self.image_url.value.strip() or None
+        thumbnail_value = self.thumbnail_url.value.strip() or None
+        image_result, thumbnail_result = await asyncio.gather(
+            probe_media_url(image_value, label="Announcement image"),
+            probe_media_url(thumbnail_value, label="Announcement thumbnail"),
+        )
+        unsafe_results = tuple(
+            result
+            for result in (image_result, thumbnail_result)
+            if result is not None and result.classification == "invalid_or_unsafe"
+        )
+        if unsafe_results:
+            await _audit_blocked_media_attempt(
+                interaction,
+                surface="studio_media",
+                field_labels=tuple(result.label for result in unsafe_results),
+            )
+        if any(
+            result is not None and result.classification != "direct_media"
+            for result in (image_result, thumbnail_result)
+        ):
+            await interaction.response.send_message(
+                embed=build_media_tools_embed(
+                    replace(
+                        self.settings,
+                        announcement_image_url=image_value,
+                        announcement_thumbnail_url=thumbnail_value,
+                    ),
+                    note="No changes were saved.",
+                    image_probe=image_result,
+                    thumbnail_probe=thumbnail_result,
+                ),
+                view=StudioMediaView(
+                    settings_service=self.settings_service,
+                    birthday_service=self.birthday_service,
+                    settings=self.settings,
+                    owner_id=self.owner_id,
+                    guild=self.guild,
+                    section=self.section,
+                ),
+                ephemeral=True,
+            )
+            return
+        saved_image_value = _validated_media_storage_value(image_value, image_result)
+        saved_thumbnail_value = _validated_media_storage_value(
+            thumbnail_value,
+            thumbnail_result,
+        )
+        await self.settings_service.update_validated_media(
+            interaction.guild,
+            announcement_image_url=saved_image_value,
+            announcement_thumbnail_url=saved_thumbnail_value,
+        )
+        latest = await self.settings_service.get_settings(interaction.guild.id)
+        await interaction.response.send_message(
+            embed=build_media_tools_embed(
+                latest,
+                note="Shared media saved.",
+                image_probe=image_result,
+                thumbnail_probe=thumbnail_result,
+            ),
+            view=StudioMediaView(
+                settings_service=self.settings_service,
+                birthday_service=self.birthday_service,
+                settings=latest,
+                owner_id=self.owner_id,
+                guild=self.guild,
+                section=self.section,
+            ),
+            ephemeral=True,
+        )
+
+
+class StudioMediaView(AdminPanelView):
+    def __init__(
+        self,
+        *,
+        settings_service: SettingsService,
+        birthday_service: BirthdayService | None,
+        settings: GuildSettings,
+        owner_id: int,
+        guild: discord.Guild,
+        section: SectionName,
+    ) -> None:
+        super().__init__(timeout=600)
+        self.settings_service = settings_service
+        self.birthday_service = birthday_service
+        self.settings = settings
+        self.owner_id = owner_id
+        self.guild = guild
+        self.section = section
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(
+                "These media tools belong to a different admin.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Edit media", style=discord.ButtonStyle.primary, row=0)
+    async def edit_media(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button[StudioMediaView],
+    ) -> None:
+        latest = await self.settings_service.get_settings(self.guild.id)
+        await interaction.response.send_modal(
+            MediaEditModal(
+                settings_service=self.settings_service,
+                settings=latest,
+                owner_id=self.owner_id,
+                birthday_service=self.birthday_service,
+                guild=self.guild,
+                section=self.section,
+            )
+        )
+
+    @discord.ui.button(label="Validate current", style=discord.ButtonStyle.secondary, row=0)
+    async def validate_current(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button[StudioMediaView],
+    ) -> None:
+        latest = await self.settings_service.get_settings(self.guild.id)
+        image_result, thumbnail_result = await asyncio.gather(
+            probe_media_url(
+                strip_validated_direct_media_marker(latest.announcement_image_url),
+                label="Announcement image",
+            ),
+            probe_media_url(
+                strip_validated_direct_media_marker(latest.announcement_thumbnail_url),
+                label="Announcement thumbnail",
+            ),
+        )
+        await interaction.response.edit_message(
+            embed=build_media_tools_embed(
+                latest,
+                note="Current shared media was validated.",
+                image_probe=image_result,
+                thumbnail_probe=thumbnail_result,
+            ),
+            view=StudioMediaView(
+                settings_service=self.settings_service,
+                birthday_service=self.birthday_service,
+                settings=latest,
+                owner_id=self.owner_id,
+                guild=self.guild,
+                section=self.section,
+            ),
+        )
+
+    @discord.ui.button(label="Reset media", style=discord.ButtonStyle.danger, row=0)
+    async def reset_media(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button[StudioMediaView],
+    ) -> None:
+        await self.settings_service.update_validated_media(
+            self.guild,
+            announcement_image_url=None,
+            announcement_thumbnail_url=None,
+        )
+        latest = await self.settings_service.get_settings(self.guild.id)
+        await interaction.response.edit_message(
+            embed=build_media_tools_embed(
+                latest,
+                note="Shared image and thumbnail media were cleared.",
+            ),
+            view=StudioMediaView(
+                settings_service=self.settings_service,
+                birthday_service=self.birthday_service,
+                settings=latest,
+                owner_id=self.owner_id,
+                guild=self.guild,
+                section=self.section,
+            ),
+        )
+
+    @discord.ui.button(label="Back to studio", style=discord.ButtonStyle.secondary, row=1)
+    async def back_to_studio(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button[StudioMediaView],
+    ) -> None:
+        server_anniversary, recurring_events = await _load_studio_context(
+            self.guild,
+            self.birthday_service,
+        )
+        latest = await self.settings_service.get_settings(self.guild.id)
+        await interaction.response.edit_message(
+            embed=build_message_template_embed(
+                latest,
+                section=self.section,
+                guild=self.guild,
+                server_anniversary=server_anniversary,
+                recurring_events=recurring_events,
+            ),
+            view=MessageTemplateView(
+                settings_service=self.settings_service,
+                settings=latest,
+                owner_id=self.owner_id,
+                guild=self.guild,
+                birthday_service=self.birthday_service,
+                section=self.section,
+                server_anniversary=server_anniversary,
+                recurring_events=recurring_events,
+            ),
         )
 
 
@@ -2202,6 +2749,12 @@ async def _build_studio_preview_pair(
             kind="birthday_announcement",
         )
         try:
+            ensure_safe_announcement_inputs(
+                template=settings.announcement_template,
+                template_label="Birthday announcement template",
+                title_override=settings.announcement_title_override,
+                footer_text=settings.announcement_footer_text,
+            )
             preview_embed = build_announcement_message(
                 kind="birthday_announcement",
                 server_name=guild.name,
@@ -2212,7 +2765,7 @@ async def _build_studio_preview_pair(
                 template=settings.announcement_template,
                 preview_label="Preview only - birthday announcement",
             ).embed
-        except ValueError as exc:
+        except (ValidationError, ValueError) as exc:
             return (
                 _build_preview_status_embed(
                     settings,
@@ -2231,6 +2784,12 @@ async def _build_studio_preview_pair(
         route = "Private DM"
         readiness = await settings_service.describe_delivery(guild, kind="birthday_dm")
         try:
+            ensure_safe_announcement_inputs(
+                template=settings.birthday_dm_template,
+                template_label="Birthday DM template",
+                title_override=None,
+                footer_text=None,
+            )
             preview_embed = build_announcement_message(
                 kind="birthday_dm",
                 server_name=guild.name,
@@ -2241,7 +2800,7 @@ async def _build_studio_preview_pair(
                 template=settings.birthday_dm_template,
                 preview_label="Preview only - birthday DM",
             ).embed
-        except ValueError as exc:
+        except (ValidationError, ValueError) as exc:
             return (
                 _build_preview_status_embed(
                     settings,
@@ -2258,6 +2817,14 @@ async def _build_studio_preview_pair(
         readiness = await settings_service.describe_delivery(guild, kind="anniversary")
         route = _format_channel(_effective_anniversary_channel(settings))
         try:
+            ensure_safe_announcement_inputs(
+                template=settings.anniversary_template,
+                template_label="Anniversary template",
+                title_override=settings.announcement_title_override,
+                footer_text=settings.announcement_footer_text,
+                event_name=preview.event_name,
+                event_name_label="Anniversary event name",
+            )
             preview_embed = build_announcement_message(
                 kind="anniversary",
                 server_name=guild.name,
@@ -2271,7 +2838,7 @@ async def _build_studio_preview_pair(
                 event_month=preview.event_month,
                 event_day=preview.event_day,
             ).embed
-        except ValueError as exc:
+        except (ValidationError, ValueError) as exc:
             return (
                 _build_preview_status_embed(
                     settings,
@@ -2299,6 +2866,14 @@ async def _build_studio_preview_pair(
         )
         route = _format_channel(state.channel_id or settings.announcement_channel_id)
         try:
+            ensure_safe_announcement_inputs(
+                template=state.template,
+                template_label="Server anniversary template",
+                title_override=settings.announcement_title_override,
+                footer_text=settings.announcement_footer_text,
+                event_name=state.name,
+                event_name_label="Server anniversary name",
+            )
             preview_embed = build_announcement_message(
                 kind="server_anniversary",
                 server_name=guild.name,
@@ -2312,7 +2887,7 @@ async def _build_studio_preview_pair(
                 event_month=state.month,
                 event_day=state.day,
             ).embed
-        except ValueError as exc:
+        except (ValidationError, ValueError) as exc:
             return (
                 _build_preview_status_embed(
                     settings,
@@ -2335,6 +2910,13 @@ async def _build_studio_preview_pair(
         )
         route = _format_channel(celebration.channel_id or settings.announcement_channel_id)
         try:
+            ensure_safe_announcement_inputs(
+                template=celebration.template,
+                template_label="Recurring event template",
+                title_override=settings.announcement_title_override,
+                footer_text=settings.announcement_footer_text,
+                event_name=celebration.name,
+            )
             preview_embed = build_announcement_message(
                 kind="recurring_event",
                 server_name=guild.name,
@@ -2348,7 +2930,7 @@ async def _build_studio_preview_pair(
                 event_month=celebration.event_month,
                 event_day=celebration.event_day,
             ).embed
-        except ValueError as exc:
+        except (ValidationError, ValueError) as exc:
             return (
                 _build_preview_status_embed(
                     settings,
@@ -2494,8 +3076,8 @@ def _preview_visual_lines(
         f"Theme: {announcement_theme_label(settings.announcement_theme)}",
         f"Style: {settings.celebration_mode.title()}",
         f"Title override: {settings.announcement_title_override or 'Default'}",
-        f"Image: {settings.announcement_image_url or 'None'}",
-        f"Thumbnail: {settings.announcement_thumbnail_url or 'None'}",
+        _media_state_line(settings.announcement_image_url, label="Image"),
+        _media_state_line(settings.announcement_thumbnail_url, label="Thumbnail"),
     )
 
 

@@ -25,6 +25,7 @@ from bdayblaze.domain.models import (
     TrackedAnniversary,
 )
 from bdayblaze.repositories.postgres import PostgresRepository
+from bdayblaze.services.content_policy import ensure_safe_event_name, ensure_safe_template
 from bdayblaze.services.errors import NotFoundError, ValidationError
 
 _VALID_VISIBILITY_VALUES = {"private", "server_visible"}
@@ -395,6 +396,8 @@ class BirthdayService:
             normalized_template = validate_announcement_template(template)
         except ValueError as exc:
             raise ValidationError(str(exc)) from exc
+        ensure_safe_event_name(normalized_name)
+        ensure_safe_template(normalized_template, label="Recurring event template")
         settings = await self._repository.fetch_guild_settings(guild_id)
         timezone_name = settings.default_timezone if settings is not None else "UTC"
         next_occurrence = next_occurrence_at_utc(
@@ -471,6 +474,7 @@ class BirthdayService:
             normalized_template = validate_announcement_template(template)
         except ValueError as exc:
             raise ValidationError(str(exc)) from exc
+        ensure_safe_template(normalized_template, label="Server anniversary template")
 
         next_occurrence = next_occurrence_at_utc(
             birth_month=month,

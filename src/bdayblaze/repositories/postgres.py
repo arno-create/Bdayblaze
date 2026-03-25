@@ -70,11 +70,12 @@ class PostgresRepository:
                     ignore_bots,
                     minimum_membership_days,
                     mention_suppression_threshold,
+                    studio_audit_channel_id,
                     updated_at_utc
                 )
                 VALUES (
                     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-                    $15, $16, $17, $18, $19, $20, $21, $22, $23, NOW()
+                    $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, NOW()
                 )
                 ON CONFLICT (guild_id) DO UPDATE SET
                     announcement_channel_id = EXCLUDED.announcement_channel_id,
@@ -99,6 +100,7 @@ class PostgresRepository:
                     ignore_bots = EXCLUDED.ignore_bots,
                     minimum_membership_days = EXCLUDED.minimum_membership_days,
                     mention_suppression_threshold = EXCLUDED.mention_suppression_threshold,
+                    studio_audit_channel_id = EXCLUDED.studio_audit_channel_id,
                     updated_at_utc = NOW()
                 RETURNING *
                 """,
@@ -125,6 +127,7 @@ class PostgresRepository:
                 settings.ignore_bots,
                 settings.minimum_membership_days,
                 settings.mention_suppression_threshold,
+                settings.studio_audit_channel_id,
             )
         return self._map_guild_settings(row)
 
@@ -1748,6 +1751,7 @@ class PostgresRepository:
             ignore_bots=row["ignore_bots"],
             minimum_membership_days=row["minimum_membership_days"],
             mention_suppression_threshold=row["mention_suppression_threshold"],
+            studio_audit_channel_id=row["studio_audit_channel_id"],
             created_at_utc=row["created_at_utc"],
             updated_at_utc=row["updated_at_utc"],
         )

@@ -19,6 +19,7 @@ from bdayblaze.domain.models import (
     GuildSettings,
 )
 from bdayblaze.logging import get_logger, redact_identifier
+from bdayblaze.services.content_policy import ensure_safe_announcement_inputs
 from bdayblaze.services.diagnostics import (
     classify_discord_http_failure,
     evaluate_member_eligibility,
@@ -133,6 +134,12 @@ class DiscordSchedulerGateway:
             )
 
         try:
+            ensure_safe_announcement_inputs(
+                template=template,
+                template_label="Birthday announcement template",
+                title_override=title_override,
+                footer_text=footer_text,
+            )
             prepared = build_announcement_message(
                 kind="birthday_announcement",
                 server_name=guild.name,
@@ -235,6 +242,13 @@ class DiscordSchedulerGateway:
             )
 
         try:
+            ensure_safe_announcement_inputs(
+                template=template,
+                template_label="Anniversary template",
+                title_override=title_override,
+                footer_text=footer_text,
+                event_name=event_name,
+            )
             prepared = build_announcement_message(
                 kind="anniversary",
                 server_name=guild.name,
@@ -322,6 +336,12 @@ class DiscordSchedulerGateway:
         if not decision.allowed:
             return DirectSendResult(status=decision.code or "member_ineligible")
         try:
+            ensure_safe_announcement_inputs(
+                template=template,
+                template_label="Birthday DM template",
+                title_override=None,
+                footer_text=None,
+            )
             prepared = build_announcement_message(
                 kind="birthday_dm",
                 server_name=guild.name,
@@ -392,6 +412,17 @@ class DiscordSchedulerGateway:
         if not _channel_ready(channel):
             return DirectSendResult(status="announcement_forbidden")
         try:
+            ensure_safe_announcement_inputs(
+                template=template,
+                template_label=(
+                    "Server anniversary template"
+                    if celebration_kind == "server_anniversary"
+                    else "Recurring event template"
+                ),
+                title_override=title_override,
+                footer_text=footer_text,
+                event_name=event_name,
+            )
             prepared = build_announcement_message(
                 kind=(
                     "server_anniversary"
@@ -678,6 +709,7 @@ def _eligibility_settings(
         ignore_bots=ignore_bots,
         minimum_membership_days=minimum_membership_days,
         mention_suppression_threshold=defaults.mention_suppression_threshold,
+        studio_audit_channel_id=defaults.studio_audit_channel_id,
     )
 
 

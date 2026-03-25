@@ -8,8 +8,10 @@ import discord
 from bdayblaze.domain.announcement_template import (
     validate_accent_color,
     validate_announcement_template,
-    validate_media_url,
     validate_studio_text,
+)
+from bdayblaze.domain.media_validation import (
+    validate_direct_media_url,
 )
 from bdayblaze.domain.announcement_theme import validate_announcement_theme
 from bdayblaze.domain.birthday_logic import validate_timezone
@@ -20,6 +22,7 @@ from bdayblaze.domain.models import (
     CelebrationMode,
     GuildSettings,
 )
+from bdayblaze.services.content_policy import ensure_safe_template, ensure_safe_text
 from bdayblaze.repositories.postgres import PostgresRepository
 from bdayblaze.services.diagnostics import (
     build_channel_diagnostics,
@@ -75,6 +78,7 @@ class SettingsService:
         ignore_bots: bool | _UnsetType = UNSET,
         minimum_membership_days: int | _UnsetType = UNSET,
         mention_suppression_threshold: int | _UnsetType = UNSET,
+        studio_audit_channel_id: int | None | _UnsetType = UNSET,
     ) -> GuildSettings:
         current = await self.get_settings(guild.id)
         merged_default_timezone = (
@@ -98,15 +102,27 @@ class SettingsService:
                 if isinstance(announcement_template, _UnsetType)
                 else announcement_template
             )
+            ensure_safe_template(
+                normalized_announcement_template,
+                label="Birthday announcement template",
+            )
             normalized_dm_template = validate_announcement_template(
                 current.birthday_dm_template
                 if isinstance(birthday_dm_template, _UnsetType)
                 else birthday_dm_template
             )
+            ensure_safe_template(
+                normalized_dm_template,
+                label="Birthday DM template",
+            )
             normalized_anniversary_template = validate_announcement_template(
                 current.anniversary_template
                 if isinstance(anniversary_template, _UnsetType)
                 else anniversary_template
+            )
+            ensure_safe_template(
+                normalized_anniversary_template,
+                label="Anniversary template",
             )
             normalized_title = validate_studio_text(
                 current.announcement_title_override
@@ -115,6 +131,7 @@ class SettingsService:
                 label="Announcement title override",
                 max_length=256,
             )
+            ensure_safe_text(normalized_title, label="Announcement title override")
             normalized_footer = validate_studio_text(
                 current.announcement_footer_text
                 if isinstance(announcement_footer_text, _UnsetType)
@@ -122,17 +139,20 @@ class SettingsService:
                 label="Announcement footer text",
                 max_length=512,
             )
-            normalized_image_url = validate_media_url(
+            ensure_safe_text(normalized_footer, label="Announcement footer text")
+            normalized_image_url = validate_direct_media_url(
                 current.announcement_image_url
                 if isinstance(announcement_image_url, _UnsetType)
                 else announcement_image_url,
                 label="Announcement image",
+                allow_validated_marker=isinstance(announcement_image_url, _UnsetType),
             )
-            normalized_thumbnail_url = validate_media_url(
+            normalized_thumbnail_url = validate_direct_media_url(
                 current.announcement_thumbnail_url
                 if isinstance(announcement_thumbnail_url, _UnsetType)
                 else announcement_thumbnail_url,
                 label="Announcement thumbnail",
+                allow_validated_marker=isinstance(announcement_thumbnail_url, _UnsetType),
             )
             normalized_accent_color = (
                 current.announcement_accent_color
@@ -208,6 +228,11 @@ class SettingsService:
                 if isinstance(mention_suppression_threshold, _UnsetType)
                 else mention_suppression_threshold
             ),
+            studio_audit_channel_id=(
+                current.studio_audit_channel_id
+                if isinstance(studio_audit_channel_id, _UnsetType)
+                else studio_audit_channel_id
+            ),
         )
         self._validate_settings(guild, merged)
         saved = await self._repository.upsert_guild_settings(merged)
@@ -218,6 +243,37 @@ class SettingsService:
                 now_utc=now_utc or datetime.now(UTC),
             )
         return saved
+
+    async def update_validated_media(
+        self,
+        guild: discord.Guild,
+        *,
+        announcement_image_url: str | None | _UnsetType = UNSET,
+        announcement_thumbnail_url: str | None | _UnsetType = UNSET,
+    ) -> GuildSettings:
+        current = await self.get_settings(guild.id)
+        try:
+            normalized_image_url = validate_direct_media_url(
+                current.announcement_image_url
+                if isinstance(announcement_image_url, _UnsetType)
+                else announcement_image_url,
+                label="Announcement image",
+            )
+            normalized_thumbnail_url = validate_direct_media_url(
+                current.announcement_thumbnail_url
+                if isinstance(announcement_thumbnail_url, _UnsetType)
+                else announcement_thumbnail_url,
+                label="Announcement thumbnail",
+            )
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from exc
+        merged = replace(
+            current,
+            announcement_image_url=normalized_image_url,
+            announcement_thumbnail_url=normalized_thumbnail_url,
+        )
+        self._validate_settings(guild, merged)
+        return await self._repository.upsert_guild_settings(merged)
 
     async def describe_announcement_delivery(
         self,
@@ -315,6 +371,15 @@ class SettingsService:
             and guild.get_role(settings.eligibility_role_id) is None
         ):
             raise ValidationError("The selected eligibility role no longer exists.")
+
+        if settings.studio_audit_channel_id is not None:
+            audit_diagnostics = build_channel_diagnostics(
+                guild,
+                channel_id=settings.studio_audit_channel_id,
+                label="studio audit",
+            )
+            if audit_diagnostics:
+                raise ValidationError(audit_diagnostics[0].summary)
 
         if settings.anniversary_enabled:
             effective_anniversary_channel = (

@@ -177,6 +177,19 @@ def test_build_presentation_diagnostics_reports_invalid_media() -> None:
     assert [item.code for item in diagnostics_result] == ["announcement_image_invalid"]
 
 
+def test_build_presentation_diagnostics_reports_needs_validation_for_ambiguous_media() -> None:
+    settings = replace(
+        GuildSettings.default(1),
+        announcement_image_url="https://cdn.example.com/assets/banner?sig=abc123",
+    )
+
+    diagnostics_result = diagnostics.build_presentation_diagnostics(settings.presentation())
+
+    assert [item.code for item in diagnostics_result] == [
+        "announcement_image_invalid_needs_validation"
+    ]
+
+
 def test_classify_discord_http_failure_marks_invalid_payload_as_permanent() -> None:
     response = SimpleNamespace(status=400, reason="Bad Request")
     error = discord.HTTPException(

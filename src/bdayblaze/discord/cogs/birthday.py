@@ -24,13 +24,17 @@ from bdayblaze.domain.announcement_template import (
     anniversary_years,
     preview_context_for_kind,
 )
+from bdayblaze.domain.announcement_theme import announcement_theme_label
+from bdayblaze.domain.media_validation import assess_media_url
 from bdayblaze.domain.models import BirthdayPreview, GuildSettings, MemberBirthday
 from bdayblaze.domain.timezones import autocomplete_timezones
 from bdayblaze.services.birthday_service import BirthdayService
+from bdayblaze.services.content_policy import ContentPolicyError, ensure_safe_announcement_inputs
 from bdayblaze.services.diagnostics import build_presentation_diagnostics
 from bdayblaze.services.errors import NotFoundError, ValidationError
 from bdayblaze.services.health_service import HealthService
 from bdayblaze.services.settings_service import SettingsService
+from bdayblaze.discord.studio_audit import StudioAuditLogger
 
 _PUBLIC_RESULT_LIMIT = 12
 _ADMIN_RESULT_LIMIT = 20
@@ -60,11 +64,13 @@ class BirthdayGroup(
         birthday_service: BirthdayService,
         settings_service: SettingsService,
         health_service: HealthService,
+        studio_audit_logger: StudioAuditLogger,
     ) -> None:
         super().__init__()
         self._birthday_service = birthday_service
         self._settings_service = settings_service
         self._health_service = health_service
+        self._studio_audit_logger = studio_audit_logger
 
     @app_commands.command(
         name="set",
@@ -973,6 +979,15 @@ class BirthdayGroup(
                 template=template,
                 enabled=True,
             )
+        except ContentPolicyError as exc:
+            await _audit_blocked_attempt(
+                self._studio_audit_logger,
+                interaction,
+                surface="recurring_event_add",
+                error=exc,
+            )
+            await interaction.followup.send(str(exc), ephemeral=True)
+            return
         except ValidationError as exc:
             await interaction.followup.send(str(exc), ephemeral=True)
             return
@@ -1020,6 +1035,15 @@ class BirthdayGroup(
                 template=template if template is not None else current.template,
                 enabled=current.enabled if enabled is None else enabled,
             )
+        except ContentPolicyError as exc:
+            await _audit_blocked_attempt(
+                self._studio_audit_logger,
+                interaction,
+                surface="recurring_event_edit",
+                error=exc,
+            )
+            await interaction.followup.send(str(exc), ephemeral=True)
+            return
         except (ValidationError, NotFoundError) as exc:
             await interaction.followup.send(str(exc), ephemeral=True)
             return
@@ -1146,6 +1170,20 @@ class ConfirmBirthdayDeletionView(discord.ui.View):
         await interaction.response.edit_message(
             content="Deletion cancelled.", embed=None, view=None
         )
+
+
+async def _audit_blocked_attempt(
+    audit_logger: StudioAuditLogger,
+    interaction: discord.Interaction,
+    *,
+    surface: str,
+    error: ContentPolicyError,
+) -> None:
+    await audit_logger.log_blocked_attempt(
+        interaction,
+        surface=surface,
+        error=error,
+    )
 
 
 def _build_dry_run_status_embed(
@@ -1423,6 +1461,13 @@ async def _build_preview_embed(
         if event_id is None:
             raise ValidationError("Recurring-event previews need an event id.")
         celebration = await birthday_service.get_recurring_celebration(guild.id, event_id)
+        ensure_safe_announcement_inputs(
+            template=celebration.template,
+            template_label="Recurring event template",
+            title_override=settings.announcement_title_override,
+            footer_text=settings.announcement_footer_text,
+            event_name=celebration.name,
+        )
         return build_announcement_message(
             kind="recurring_event",
             server_name=guild.name,
@@ -1451,6 +1496,13 @@ async def _build_preview_embed(
             event_month = server_anniversary.event_month
             event_day = server_anniversary.event_day
             template = server_anniversary.template
+        ensure_safe_announcement_inputs(
+            template=template,
+            template_label="Server anniversary template",
+            title_override=settings.announcement_title_override,
+            footer_text=settings.announcement_footer_text,
+            event_name="Server anniversary",
+        )
         return build_announcement_message(
             kind="server_anniversary",
             server_name=guild.name,
@@ -1501,6 +1553,14 @@ async def _build_preview_embed(
                     ),
                 )
             ]
+        ensure_safe_announcement_inputs(
+            template=settings.anniversary_template,
+            template_label="Anniversary template",
+            title_override=settings.announcement_title_override,
+            footer_text=settings.announcement_footer_text,
+            event_name=preview.event_name,
+            event_name_label="Anniversary event name",
+        )
         return build_announcement_message(
             kind="anniversary",
             server_name=guild.name,
@@ -1515,6 +1575,24 @@ async def _build_preview_embed(
             event_day=preview.event_day,
         ).embed
 
+    ensure_safe_announcement_inputs(
+        template=(
+            settings.announcement_template
+            if kind == "birthday_announcement"
+            else settings.birthday_dm_template
+        ),
+        template_label=(
+            "Birthday announcement template"
+            if kind == "birthday_announcement"
+            else "Birthday DM template"
+        ),
+        title_override=(
+            settings.announcement_title_override if kind != "birthday_dm" else None
+        ),
+        footer_text=(
+            settings.announcement_footer_text if kind != "birthday_dm" else None
+        ),
+    )
     return build_announcement_message(
         kind=kind,
         server_name=guild.name,
@@ -1649,18 +1727,25 @@ def _preview_visual_lines(
     if kind == "birthday_dm":
         return (
             "Media status: Not used for live birthday DMs",
-            f"Theme: {settings.announcement_theme}",
-            f"Style: {settings.celebration_mode}",
+            f"Theme: {announcement_theme_label(settings.announcement_theme)}",
+            f"Style: {settings.celebration_mode.title()}",
             "Shared title, footer, image, thumbnail, and accent overrides stay on public "
             "announcement surfaces.",
         )
     return (
         f"Media status: {'Ready' if not media_diagnostics else 'Needs attention'}",
-        f"Theme: {settings.announcement_theme}",
-        f"Style: {settings.celebration_mode}",
-        f"Image: {settings.announcement_image_url or 'None'}",
-        f"Thumbnail: {settings.announcement_thumbnail_url or 'None'}",
+        f"Theme: {announcement_theme_label(settings.announcement_theme)}",
+        f"Style: {settings.celebration_mode.title()}",
+        _preview_media_state_line(settings.announcement_image_url, label="Image"),
+        _preview_media_state_line(settings.announcement_thumbnail_url, label="Thumbnail"),
     )
+
+
+def _preview_media_state_line(value: str | None, *, label: str) -> str:
+    assessment = assess_media_url(value, label=label)
+    if assessment is None:
+        return f"{label}: Not set"
+    return f"{label}: {assessment.status_label()}"
 
 
 async def _require_ready_delivery(

@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from collections.abc import Callable
 from typing import Literal
 
 import discord
 
-from bdayblaze.domain.announcement_template import validate_media_url
+from bdayblaze.domain.media_validation import assess_media_url
 from bdayblaze.domain.birthday_logic import membership_age_days
 from bdayblaze.domain.models import (
     AnnouncementDeliveryReadiness,
@@ -15,6 +16,12 @@ from bdayblaze.domain.models import (
     DeliveryDiagnostic,
     EventKind,
     GuildSettings,
+    RecurringCelebration,
+)
+from bdayblaze.services.content_policy import (
+    ContentPolicyError,
+    ensure_safe_template,
+    ensure_safe_text,
 )
 
 
@@ -305,19 +312,87 @@ def build_presentation_diagnostics(
         ("Announcement image", "announcement_image_invalid", presentation.image_url),
         ("Announcement thumbnail", "announcement_thumbnail_invalid", presentation.thumbnail_url),
     ):
-        try:
-            validate_media_url(value, label=label)
-        except ValueError as exc:
+        assessment = assess_media_url(value, label=label)
+        if assessment is None:
+            continue
+        if assessment.classification == "needs_validation":
+            diagnostics.append(
+                DeliveryDiagnostic(
+                    severity="warning",
+                    code=f"{code}_needs_validation",
+                    summary=assessment.summary,
+                    action=(
+                        "Open `/birthday studio`, use Media Tools, and validate the saved URL."
+                    ),
+                )
+            )
+            continue
+        if assessment.classification != "direct_media":
             diagnostics.append(
                 DeliveryDiagnostic(
                     severity="error",
                     code=code,
-                    summary=str(exc),
+                    summary=assessment.summary,
                     action=(
                         "Open `/birthday studio`, then clear or replace the saved media URL."
                     ),
                 )
             )
+    return tuple(diagnostics)
+
+
+def build_studio_content_diagnostics(settings: GuildSettings) -> tuple[DeliveryDiagnostic, ...]:
+    diagnostics: list[DeliveryDiagnostic] = []
+    for label, value, validator in (
+        ("Birthday announcement template", settings.announcement_template, ensure_safe_template),
+        ("Birthday DM template", settings.birthday_dm_template, ensure_safe_template),
+        ("Anniversary template", settings.anniversary_template, ensure_safe_template),
+    ):
+        diagnostics.extend(
+            _policy_diagnostics(label=label, value=value, validator=validator)
+        )
+    diagnostics.extend(
+        _policy_diagnostics(
+            label="Announcement title override",
+            value=settings.announcement_title_override,
+            validator=ensure_safe_text,
+        )
+    )
+    diagnostics.extend(
+        _policy_diagnostics(
+            label="Announcement footer text",
+            value=settings.announcement_footer_text,
+            validator=ensure_safe_text,
+        )
+    )
+    return tuple(diagnostics)
+
+
+def build_event_content_diagnostics(
+    celebration: RecurringCelebration,
+) -> tuple[DeliveryDiagnostic, ...]:
+    name_label = (
+        "Server anniversary name"
+        if celebration.celebration_kind == "server_anniversary"
+        else "Recurring event name"
+    )
+    template_label = (
+        "Server anniversary template"
+        if celebration.celebration_kind == "server_anniversary"
+        else "Recurring event template"
+    )
+    diagnostics = [
+        *_policy_diagnostics(
+            label=name_label,
+            value=celebration.name,
+            validator=ensure_safe_text,
+        ),
+        *_policy_diagnostics(
+            label=template_label,
+            value=celebration.template,
+            validator=ensure_safe_template,
+        ),
+    ]
     return tuple(diagnostics)
 
 
@@ -461,3 +536,26 @@ def _readiness_from_diagnostics(
         details=tuple(item.detail_line() for item in diagnostics),
         diagnostics=diagnostics,
     )
+
+
+def _policy_diagnostics(
+    *,
+    label: str,
+    value: str | None,
+    validator: Callable[..., None],
+) -> tuple[DeliveryDiagnostic, ...]:
+    if value is None:
+        return ()
+    try:
+        validator(value, label=label)
+    except ContentPolicyError as exc:
+        categories = ", ".join(sorted({violation.category_label for violation in exc.violations}))
+        return (
+            DeliveryDiagnostic(
+                severity="error",
+                code=f"{label.lower().replace(' ', '_')}_blocked",
+                summary=f"{label} contains blocked {categories}.",
+                action="Open the admin flow that saved it, remove the blocked wording, and retry.",
+            ),
+        )
+    return ()

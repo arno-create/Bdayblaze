@@ -8,13 +8,18 @@ from bdayblaze.discord.ui import info
 def test_build_help_embed_mentions_operator_flows() -> None:
     embed = info.build_help_embed()
 
-    assert embed.title == "📘 Bdayblaze Help"
+    assert "Bdayblaze Help" in (embed.title or "")
     assert any(field.name == "Getting started" for field in embed.fields)
     assert "/birthday test-message" in embed.fields[0].value
     assert "/birthday studio" in embed.fields[0].value
     admin_field = next(field for field in embed.fields if field.name == "Admin commands")
     assert "/birthday import" in admin_field.value
     assert "/birthday anniversary ..." in admin_field.value
+    safety_field = next(
+        field for field in embed.fields if field.name == "Studio media and safety"
+    )
+    assert "Media Tools" in safety_field.value
+    assert "Regular webpages" in safety_field.value
 
 
 def test_build_about_embed_uses_package_metadata(monkeypatch) -> None:
@@ -30,8 +35,12 @@ def test_build_about_embed_uses_package_metadata(monkeypatch) -> None:
     embed = info.build_about_embed()
 
     version_field = next(field for field in embed.fields if field.name == "Version")
+    health_field = next(
+        field for field in embed.fields if field.name == "Health and uptime"
+    )
     assert "1.2.3" in version_field.value
     assert "https://example.com/repo" in version_field.value
+    assert "/readyz" in health_field.value
 
 
 def test_build_about_embed_handles_missing_package_metadata(monkeypatch) -> None:

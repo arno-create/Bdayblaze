@@ -9,7 +9,9 @@ from bdayblaze.domain.models import HealthIssue, SchedulerMetrics
 from bdayblaze.repositories.postgres import PostgresRepository
 from bdayblaze.services.diagnostics import (
     build_channel_diagnostics,
+    build_event_content_diagnostics,
     build_presentation_diagnostics,
+    build_studio_content_diagnostics,
     build_role_diagnostics,
     describe_delivery_error_code,
 )
@@ -63,6 +65,15 @@ class HealthService:
                         code=diagnostic.code,
                         summary=diagnostic.summary,
                         action=diagnostic.action or "Review the saved celebration media settings.",
+                    )
+                )
+            for diagnostic in build_studio_content_diagnostics(settings):
+                issues.append(
+                    HealthIssue(
+                        severity=diagnostic.severity,
+                        code=diagnostic.code,
+                        summary=diagnostic.summary,
+                        action=diagnostic.action or "Review the saved Celebration Studio content.",
                     )
                 )
 
@@ -131,12 +142,41 @@ class HealthService:
                         action="Pick a new eligibility role or clear the requirement.",
                     )
                 )
+            for diagnostic in build_channel_diagnostics(
+                guild,
+                channel_id=settings.studio_audit_channel_id,
+                label="studio audit",
+            ):
+                if settings.studio_audit_channel_id is not None:
+                    issues.append(
+                        HealthIssue(
+                            severity=diagnostic.severity,
+                            code=f"studio_audit_{diagnostic.code}",
+                            summary=diagnostic.summary,
+                            action=(
+                                diagnostic.action
+                                or "Review the configured Studio audit channel."
+                            ),
+                        )
+                    )
 
             recurring_events = await self._repository.list_recurring_celebrations(
                 guild.id,
                 limit=20,
             )
             for celebration in recurring_events:
+                for diagnostic in build_event_content_diagnostics(celebration):
+                    issues.append(
+                        HealthIssue(
+                            severity=diagnostic.severity,
+                            code=f"recurring_event_{celebration.id}_{diagnostic.code}",
+                            summary=(
+                                f"Recurring event '{celebration.name}' is blocked: "
+                                f"{diagnostic.summary}"
+                            ),
+                            action=diagnostic.action or "Review the recurring event content.",
+                        )
+                    )
                 if not celebration.enabled:
                     continue
                 effective_channel_id = celebration.channel_id or settings.announcement_channel_id
@@ -160,6 +200,16 @@ class HealthService:
                     )
 
             server_anniversary = await self._repository.fetch_server_anniversary(guild.id)
+            if server_anniversary is not None:
+                for diagnostic in build_event_content_diagnostics(server_anniversary):
+                    issues.append(
+                        HealthIssue(
+                            severity=diagnostic.severity,
+                            code=f"server_anniversary_{diagnostic.code}",
+                            summary=f"Server anniversary is blocked: {diagnostic.summary}",
+                            action=diagnostic.action or "Review the server-anniversary content.",
+                        )
+                    )
             if server_anniversary is not None and server_anniversary.enabled:
                 effective_channel_id = (
                     server_anniversary.channel_id or settings.announcement_channel_id

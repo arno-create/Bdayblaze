@@ -26,6 +26,7 @@ from bdayblaze.discord.embed_budget import (
 )
 from bdayblaze.discord.ui import info
 from bdayblaze.discord.ui.setup import (
+    build_media_tools_embed,
     build_message_template_embed,
     build_server_anniversary_control_embed,
     build_setup_embed,
@@ -119,6 +120,7 @@ def test_studio_and_setup_embeds_stay_within_discord_limits() -> None:
 
     embeds = [
         build_setup_embed(settings, note="Saved."),
+        build_media_tools_embed(settings, note="Validated."),
         build_message_template_embed(settings, section="home", guild=guild),
         build_message_template_embed(
             settings,

@@ -2,6 +2,7 @@ services:
   - type: web
     name: bdayblaze
     runtime: python
+    healthCheckPath: /readyz
     buildCommand: pip install -e .
     startCommand: python -m bdayblaze.main run
     envVars:
