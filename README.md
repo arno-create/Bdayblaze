@@ -227,6 +227,7 @@ Important behavior:
 
 - Deploy as a `Web Service`.
 - Recommended Python runtime: `3.12.x`.
+- This service runs the bot plus health endpoints. It does not serve the public static website.
 - Build command:
 
   ```bash
@@ -252,6 +253,15 @@ Important behavior:
 
 - `PORT` is provided by Render. Do not set it manually.
 - `render.yaml` sets `healthCheckPath: /readyz`.
+- The root path `/` now shows a small runtime page to avoid confusing it with the public site.
+
+### Static website
+
+- `docs/` is the canonical static-site root for Bdayblaze.
+- Deploy `docs/` to GitHub Pages or any static host that can publish a directory as-is.
+- `.nojekyll` is included for GitHub Pages compatibility.
+- `docs/config.js` contains the optional invite/support link constants.
+- The Render bot service should not be used as the marketing-site host.
 
 ### Built-in health endpoints
 
@@ -315,7 +325,7 @@ The code can expose clearer startup state, but it cannot force Render to auto-de
 
 ## Website and legal
 
-- `website/` contains the repo-managed static landing page bundle with no build step.
+- `docs/` contains the canonical repo-managed static landing page bundle with no build step.
 - `LICENSE` ships Apache 2.0 for the project.
 - `NOTICE` keeps project attribution alongside the license.
 - AI-generated cake/card rendering is intentionally not part of this release candidate yet.

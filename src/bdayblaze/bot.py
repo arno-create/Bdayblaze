@@ -250,9 +250,11 @@ class BdayblazeBot(commands.Bot):
             await asyncio.sleep(self._REACTION_DEBOUNCE_SECONDS)
             channel_id = self._reaction_channel_cache.get(key)
             if channel_id is None:
-                channel_id = await self.container.experience_service.fetch_announcement_channel_for_message(
-                    guild_id,
-                    message_id,
+                channel_id = (
+                    await self.container.experience_service.fetch_announcement_channel_for_message(
+                        guild_id,
+                        message_id,
+                    )
                 )
                 if channel_id is None:
                     return
@@ -287,9 +289,11 @@ class BdayblazeBot(commands.Bot):
             try:
                 channel = await self.fetch_channel(channel_id)
             except (discord.Forbidden, discord.NotFound):
-                await self.container.experience_service.disable_birthday_announcement_reaction_tracking(
-                    guild_id,
-                    message_id,
+                await (
+                    self.container.experience_service.disable_birthday_announcement_reaction_tracking(
+                        guild_id,
+                        message_id,
+                    )
                 )
                 self._remember_reaction_message(key, tracked=False, channel_id=None)
                 return

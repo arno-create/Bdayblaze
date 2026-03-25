@@ -2148,7 +2148,8 @@ class PostgresRepository:
                         quest_reaction_count = 0,
                         quest_reaction_goal_met = FALSE,
                         quest_completed_at_utc = CASE
-                            WHEN bc.quest_completed_at_utc IS NOT NULL THEN bc.quest_completed_at_utc
+                            WHEN bc.quest_completed_at_utc IS NOT NULL
+                                THEN bc.quest_completed_at_utc
                             WHEN bc.quest_enabled = TRUE
                                  AND bc.quest_wish_goal_met = TRUE
                                  AND (
@@ -2204,7 +2205,8 @@ class PostgresRepository:
                         quest_reaction_count = 0,
                         quest_reaction_goal_met = FALSE,
                         quest_completed_at_utc = CASE
-                            WHEN bc.quest_completed_at_utc IS NOT NULL THEN bc.quest_completed_at_utc
+                            WHEN bc.quest_completed_at_utc IS NOT NULL
+                                THEN bc.quest_completed_at_utc
                             WHEN bc.quest_enabled = TRUE
                                  AND bc.quest_wish_goal_met = TRUE
                                  AND (

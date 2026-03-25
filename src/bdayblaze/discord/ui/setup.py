@@ -395,7 +395,8 @@ def build_media_tools_embed(
         name="Validation flow",
         value=(
             "Edit media validates both URLs before save. Use Validate current to re-check saved "
-            "URLs without changing them. Failed validation never removes saved media."
+            "URLs without changing them. If validation is blocked or unavailable, no new media is "
+            "saved and the current saved media remains live."
         ),
         inline=False,
     )
@@ -507,6 +508,7 @@ def build_message_template_embed(
             value=(
                 f"Status: {_format_enabled(experience_state.quests_enabled)}\n"
                 f"Wish target: {experience_state.quest_wish_target}\n"
+                f"Reaction target: {experience_state.quest_reaction_target}\n"
                 "Check-in: "
                 f"{_format_enabled(experience_state.quest_checkin_enabled)}"
             ),
@@ -772,7 +774,7 @@ def _media_validation_line(
     probe: MediaProbeResult | None = None,
 ) -> str:
     if value is None or not value.strip():
-        return f"ℹ️ {label}: Not provided"
+        return f"Info: {label}: Not provided"
     if probe is not None:
         display_url = strip_validated_direct_media_marker(probe.url)
         return (
@@ -781,11 +783,12 @@ def _media_validation_line(
         )
     assessment = assess_media_url(value, label=label)
     if assessment is None:
-        return f"ℹ️ {label}: Not provided"
+        return f"Info: {label}: Not provided"
     display_url = strip_validated_direct_media_marker(assessment.normalized_url)
     return (
         f"{_media_status_icon(assessment.classification)} {label}: {assessment.status_label()} | "
-        f"{truncate_text(display_url or '', 72)} | {_short_media_summary(assessment.summary, label)}"
+        f"{truncate_text(display_url or '', 72)} | "
+        f"{_short_media_summary(assessment.summary, label)}"
     )
 
 
@@ -797,7 +800,7 @@ def _media_status_icon(classification: str) -> str:
         "unsupported_media": "⛔",
         "needs_validation": "🔎",
         "validation_unavailable": "⚠️",
-    }.get(classification, "ℹ️")
+    }.get(classification, "i")
 
 
 def _short_media_summary(summary: str, label: str) -> str:

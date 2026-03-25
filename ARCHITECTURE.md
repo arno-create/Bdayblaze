@@ -259,3 +259,9 @@ HTTP endpoints:
 - `tracked_member_anniversaries` remains a clean seam for richer anniversary features later.
 - `recurring_celebrations` can back future server milestone experiences.
 - Future generated cards/cakes can reuse the existing direct-media validation flow after an external asset service returns a URL.
+
+## Public site boundary
+
+- The public landing page is a separate static bundle rooted at `docs/`.
+- The bot runtime exposes `/livez`, `/readyz`, and `/healthz`; it is not the public marketing-site host.
+- Keeping the public site static and repo-contained avoids adding a second backend surface for a lightweight release site.

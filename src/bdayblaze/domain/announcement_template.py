@@ -392,6 +392,8 @@ def _format_date(month: int | None, day: int | None) -> str:
     if month is None or day is None:
         return MULTIPLE_DATES_LABEL
     return f"{month_name[month]} {day}"
+
+
 def preview_context_for_kind(kind: AnnouncementKind) -> AnnouncementRenderContext:
     preview_now = datetime(2026, 3, 25, tzinfo=UTC)
     if kind == "birthday_dm":

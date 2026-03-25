@@ -90,7 +90,8 @@ async def test_refresh_birthday_reactions_for_message_updates_total_reaction_cou
 
 
 @pytest.mark.asyncio
-async def test_refresh_birthday_reactions_for_message_short_circuits_for_untracked_messages() -> None:
+async def test_refresh_birthday_reactions_for_message_short_circuits_for_untracked_messages(
+) -> None:
     experience_service = FakeExperienceService()
     experience_service.tracked = False
     bot = _bot(FakeChannel([4]), experience_service)

@@ -2391,21 +2391,17 @@ def _build_timeline_embed(
         ]
         if active.quest_enabled:
             current_lines.append(
-                (
-                    f"\U0001F389 Quest reactions: "
-                    f"{active.quest_reaction_count}/{active.quest_reaction_target}"
-                    if active.quest_reaction_target > 0
-                    else "\U0001F389 Quest reactions: public reaction goal unavailable"
-                )
+                f"\U0001F389 Quest reactions: "
+                f"{active.quest_reaction_count}/{active.quest_reaction_target}"
+                if active.quest_reaction_target > 0
+                else "\U0001F389 Quest reactions: public reaction goal unavailable"
             )
             current_lines.append(
-                (
-                    "\U0001F4CD Check-in: complete"
-                    if active.quest_checked_in_at_utc is not None
-                    else "\U0001F4CD Check-in: required"
-                    if active.quest_checkin_required
-                    else "\U0001F4CD Check-in: not required"
-                )
+                "\U0001F4CD Check-in: complete"
+                if active.quest_checked_in_at_utc is not None
+                else "\U0001F4CD Check-in: required"
+                if active.quest_checkin_required
+                else "\U0001F4CD Check-in: not required"
             )
             current_lines.append(
                 "\U0001F3C1 Quest badge: earned"

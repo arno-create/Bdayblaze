@@ -62,17 +62,22 @@ class HttpHealthServer:
                 if not line or line in {b"\r\n", b"\n"}:
                     break
 
-        if path in {"/", "/health", "/healthz", "/livez", "/readyz"}:
+        if path == "/":
+            status_code = "200 OK"
+            body = self._build_root_page().encode("utf-8")
+            content_type = "text/html; charset=utf-8"
+        elif path in {"/health", "/healthz", "/livez", "/readyz"}:
             status_code, payload = self._build_response(path)
+            body = dumps(payload).encode("utf-8")
+            content_type = "application/json"
         else:
             status_code = "404 Not Found"
-            payload = {"status": "not_found"}
-
-        body = dumps(payload).encode("utf-8")
+            body = dumps({"status": "not_found"}).encode("utf-8")
+            content_type = "application/json"
         writer.write(
             (
                 f"HTTP/1.1 {status_code}\r\n"
-                "Content-Type: application/json\r\n"
+                f"Content-Type: {content_type}\r\n"
                 f"Content-Length: {len(body)}\r\n"
                 "Connection: close\r\n"
                 "\r\n"
@@ -162,6 +167,94 @@ class HttpHealthServer:
             ),
             "unexpected_shutdown_at_utc": _iso(self.runtime_status.unexpected_shutdown_at_utc),
         }
+
+    def _build_root_page(self) -> str:
+        return """<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Bdayblaze Runtime</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #fbf5eb;
+        --ink: #24190e;
+        --muted: #6d5842;
+        --line: rgba(70, 46, 24, 0.16);
+        --accent: #c7662d;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          radial-gradient(circle at top left, rgba(244, 178, 78, 0.22), transparent 34%),
+          linear-gradient(180deg, #fff9f0 0%, var(--bg) 100%);
+        color: var(--ink);
+        font-family: "Segoe UI", system-ui, sans-serif;
+      }
+
+      main {
+        width: min(780px, calc(100% - 2rem));
+        margin: 0 auto;
+        padding: 4rem 0;
+      }
+
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        background: rgba(255, 250, 243, 0.9);
+        box-shadow: 0 24px 80px rgba(61, 34, 10, 0.08);
+        padding: 1.5rem;
+      }
+
+      h1 {
+        margin: 0 0 0.75rem;
+        font-size: clamp(2rem, 5vw, 3rem);
+        line-height: 1;
+      }
+
+      p, li {
+        color: var(--muted);
+        line-height: 1.6;
+      }
+
+      ul {
+        padding-left: 1.25rem;
+        margin: 1rem 0 0;
+      }
+
+      a {
+        color: var(--accent);
+        text-decoration: none;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="panel">
+        <h1>Bdayblaze bot runtime</h1>
+        <p>
+          This Render service runs the Discord bot and exposes health endpoints. It is not the
+          public static website.
+        </p>
+        <p>
+          Deploy the static landing page from the repository's <code>docs/</code> directory to
+          GitHub Pages or another static host.
+        </p>
+        <ul>
+          <li><a href="/livez">/livez</a> for basic process liveness.</li>
+          <li><a href="/readyz">/readyz</a> for readiness and scheduler health.</li>
+          <li><a href="/healthz">/healthz</a> for detailed runtime state.</li>
+        </ul>
+      </section>
+    </main>
+  </body>
+</html>
+"""
 
 
 def _iso(value: datetime | None) -> str | None:

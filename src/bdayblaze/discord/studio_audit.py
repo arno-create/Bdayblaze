@@ -71,7 +71,11 @@ class StudioAuditLogger:
         if bot_member is None:
             return
         permissions = channel.permissions_for(bot_member)
-        if not permissions.view_channel or not permissions.send_messages or not permissions.embed_links:
+        if (
+            not permissions.view_channel
+            or not permissions.send_messages
+            or not permissions.embed_links
+        ):
             return
 
         categories = ", ".join(category_labels)
@@ -88,7 +92,10 @@ class StudioAuditLogger:
         budget.add_field(name="Category", value=categories, inline=False)
         budget.set_footer("Raw blocked content was intentionally not logged.")
         try:
-            await channel.send(embed=budget.build(), allowed_mentions=discord.AllowedMentions.none())
+            await channel.send(
+                embed=budget.build(),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
         except discord.HTTPException:
             self._logger.warning(
                 "studio_audit_send_failed",

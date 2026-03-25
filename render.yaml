@@ -1,3 +1,4 @@
+# Bot runtime only. The public landing page lives in docs/ and should be deployed as a static site.
 services:
   - type: web
     name: bdayblaze

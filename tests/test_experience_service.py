@@ -247,7 +247,9 @@ class FakeExperienceRepository:
         self.current_celebration = replace(
             self.current_celebration,
             quest_reaction_count=reaction_count,
-            quest_reaction_goal_met=reaction_count >= self.current_celebration.quest_reaction_target,
+            quest_reaction_goal_met=(
+                reaction_count >= self.current_celebration.quest_reaction_target
+            ),
         )
         return [self.current_celebration]
 

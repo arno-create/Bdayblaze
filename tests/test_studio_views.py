@@ -104,6 +104,25 @@ def test_message_template_embed_supports_reaction_quest_copy() -> None:
     assert "shared birthday announcement post" in values
 
 
+def test_message_template_embed_home_summarizes_reaction_target() -> None:
+    embed = build_message_template_embed(
+        GuildSettings.default(1),
+        section="home",
+        guild=_guild(),  # type: ignore[arg-type]
+        experience_settings=replace(
+            GuildExperienceSettings.default(1),
+            quests_enabled=True,
+            quest_wish_target=4,
+            quest_reaction_target=7,
+        ),
+    )
+
+    quest_field = next(
+        field for field in embed.fields if field.name == "\U0001F3AF Birthday Quests"
+    )
+    assert "Reaction target: 7" in quest_field.value
+
+
 def test_server_anniversary_control_view_uses_native_controls() -> None:
     view = ServerAnniversaryControlView(
         settings_service=object(),  # type: ignore[arg-type]
@@ -199,9 +218,13 @@ def test_media_tools_embed_explains_probe_results() -> None:
     assert fields["Updated"] == "No changes were saved. Your current saved media is unchanged."
     assert "Blocked saves never clear the currently saved media." in fields["Save protection"]
     assert "https://cdn.example.com/current-banner.gif" in fields["Current saved media"]
-    assert "https://tenor.com/view/funny-cat-happy-birthday-123456" not in fields["Current saved media"]
+    assert (
+        "https://tenor.com/view/funny-cat-happy-birthday-123456"
+        not in fields["Current saved media"]
+    )
     assert "https://tenor.com/view/funny-cat-happy-birthday-123456" in fields["Latest validation"]
     assert "Webpage link rejected" in values
     assert "Direct media accepted" in values
+    assert "current saved media remains live" in fields["Validation flow"]
     assert "For Tenor, use the direct media file URL, not the page link." in values
     assert "Google image results: wrapper links are webpages, not direct media files." in values

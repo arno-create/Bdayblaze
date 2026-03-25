@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from typing import Final
 
@@ -95,7 +94,7 @@ async def probe_media_url(value: str | None, *, label: str) -> MediaProbeResult 
                 headers={**_PROBE_HEADERS, "Range": f"bytes=0-{_SIGNATURE_BYTES - 1}"},
                 read_body=True,
             )
-    except (aiohttp.ClientError, asyncio.TimeoutError):
+    except (aiohttp.ClientError, TimeoutError):
         return MediaProbeResult(
             label=label,
             url=assessment.normalized_url,

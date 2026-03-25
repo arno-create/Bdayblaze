@@ -27,6 +27,22 @@ def test_http_health_reports_starting_before_recovery_finishes() -> None:
     assert payload["status"] == "starting"
 
 
+def test_http_health_root_page_explains_runtime_surface() -> None:
+    server = HttpHealthServer(
+        metrics=SchedulerMetrics(),
+        runtime_status=_runtime_status(),
+        host="127.0.0.1",
+        port=8080,
+        scheduler_max_sleep_seconds=300,
+    )
+
+    page = server._build_root_page()
+
+    assert "Bdayblaze bot runtime" in page
+    assert "docs/" in page
+    assert "/readyz" in page
+
+
 def test_http_health_reports_ok_for_fresh_scheduler_heartbeat() -> None:
     metrics = SchedulerMetrics(
         recovery_completed=True,

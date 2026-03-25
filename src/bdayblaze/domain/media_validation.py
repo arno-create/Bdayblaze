@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from ipaddress import ip_address
+from typing import Any
 from urllib.parse import parse_qsl, urlparse
 
 MAX_MEDIA_URL_LENGTH = 500
@@ -432,11 +433,10 @@ def _host_issue(hostname: str) -> str | None:
     return "must use a hostname instead of a raw IP address"
 
 
-def _url_contains_unsafe_tokens(parsed: object) -> bool:
-    assert hasattr(parsed, "hostname")
-    host = getattr(parsed, "hostname") or ""
-    path = getattr(parsed, "path") or ""
-    query = getattr(parsed, "query") or ""
+def _url_contains_unsafe_tokens(parsed: Any) -> bool:
+    host = parsed.hostname or ""
+    path = parsed.path or ""
+    query = parsed.query or ""
     values = [host]
     values.extend(segment for segment in path.replace("/", " ").replace("-", " ").split())
     values.extend(name for name, _ in parse_qsl(query, keep_blank_values=True))
