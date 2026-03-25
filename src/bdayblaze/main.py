@@ -12,13 +12,14 @@ from bdayblaze.config import Settings
 from bdayblaze.container import ServiceContainer
 from bdayblaze.db.migrations import apply_migrations
 from bdayblaze.db.pool import create_pool
-from bdayblaze.discord.studio_audit import StudioAuditLogger
 from bdayblaze.discord.gateway import DiscordSchedulerGateway
+from bdayblaze.discord.studio_audit import StudioAuditLogger
 from bdayblaze.domain.models import RuntimeStatus, SchedulerMetrics
 from bdayblaze.http_server import HttpHealthServer
 from bdayblaze.logging import configure_logging, get_logger
 from bdayblaze.repositories.postgres import PostgresRepository
 from bdayblaze.services.birthday_service import BirthdayService
+from bdayblaze.services.experience_service import ExperienceService
 from bdayblaze.services.health_service import HealthService
 from bdayblaze.services.scheduler import (
     AnnouncementSendResult,
@@ -53,6 +54,7 @@ async def _build_container(settings: Settings, runtime_status: RuntimeStatus) ->
             logger.info("migrations_completed", applied=applied)
         repository = PostgresRepository(pool)
         birthday_service = BirthdayService(repository)
+        experience_service = ExperienceService(repository)
         settings_service = SettingsService(repository)
         studio_audit_logger = StudioAuditLogger(settings_service)
         metrics = SchedulerMetrics()
@@ -76,6 +78,7 @@ async def _build_container(settings: Settings, runtime_status: RuntimeStatus) ->
             pool=pool,
             repository=repository,
             birthday_service=birthday_service,
+            experience_service=experience_service,
             settings_service=settings_service,
             health_service=health_service,
             studio_audit_logger=studio_audit_logger,
@@ -190,6 +193,9 @@ class _DeferredGateway:
         raise RuntimeError("Gateway not attached yet.")
 
     async def send_recurring_announcement(self, **_: object) -> DirectSendResult:
+        raise RuntimeError("Gateway not attached yet.")
+
+    async def send_capsule_reveal(self, **_: object) -> DirectSendResult:
         raise RuntimeError("Gateway not attached yet.")
 
     async def add_birthday_role(self, **_: object) -> str:

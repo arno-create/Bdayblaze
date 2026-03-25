@@ -5,10 +5,11 @@ from dataclasses import dataclass
 import asyncpg
 
 from bdayblaze.config import Settings
+from bdayblaze.discord.studio_audit import StudioAuditLogger
 from bdayblaze.domain.models import RuntimeStatus, SchedulerMetrics
 from bdayblaze.repositories.postgres import PostgresRepository
-from bdayblaze.discord.studio_audit import StudioAuditLogger
 from bdayblaze.services.birthday_service import BirthdayService
+from bdayblaze.services.experience_service import ExperienceService
 from bdayblaze.services.health_service import HealthService
 from bdayblaze.services.scheduler import BirthdaySchedulerRunner, BirthdaySchedulerService
 from bdayblaze.services.settings_service import SettingsService
@@ -20,6 +21,7 @@ class ServiceContainer:
     pool: asyncpg.Pool
     repository: PostgresRepository
     birthday_service: BirthdayService
+    experience_service: ExperienceService
     settings_service: SettingsService
     health_service: HealthService
     studio_audit_logger: StudioAuditLogger

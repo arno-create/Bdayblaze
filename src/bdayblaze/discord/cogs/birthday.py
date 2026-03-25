@@ -13,6 +13,7 @@ from discord.ext import commands
 from bdayblaze.discord.announcements import build_announcement_message
 from bdayblaze.discord.embed_budget import BudgetedEmbed
 from bdayblaze.discord.member_resolution import resolve_guild_members
+from bdayblaze.discord.studio_audit import StudioAuditLogger
 from bdayblaze.discord.ui.setup import (
     MessageTemplateView,
     SetupView,
@@ -25,16 +26,27 @@ from bdayblaze.domain.announcement_template import (
     preview_context_for_kind,
 )
 from bdayblaze.domain.announcement_theme import announcement_theme_label
+from bdayblaze.domain.birthday_logic import is_birthday_active_now
 from bdayblaze.domain.media_validation import assess_media_url
-from bdayblaze.domain.models import BirthdayPreview, GuildSettings, MemberBirthday
+from bdayblaze.domain.models import (
+    BirthdayCelebration,
+    BirthdayPreview,
+    BirthdayQuestStatus,
+    BirthdayTimeline,
+    BirthdayWish,
+    GuildAnalytics,
+    GuildSettings,
+    MemberBirthday,
+    NitroConciergeEntry,
+)
 from bdayblaze.domain.timezones import autocomplete_timezones
 from bdayblaze.services.birthday_service import BirthdayService
 from bdayblaze.services.content_policy import ContentPolicyError, ensure_safe_announcement_inputs
 from bdayblaze.services.diagnostics import build_presentation_diagnostics
 from bdayblaze.services.errors import NotFoundError, ValidationError
+from bdayblaze.services.experience_service import ExperienceService
 from bdayblaze.services.health_service import HealthService
 from bdayblaze.services.settings_service import SettingsService
-from bdayblaze.discord.studio_audit import StudioAuditLogger
 
 _PUBLIC_RESULT_LIMIT = 12
 _ADMIN_RESULT_LIMIT = 20
@@ -58,16 +70,34 @@ class BirthdayGroup(
         name="event",
         description="Manage recurring annual celebrations.",
     )
+    wish = app_commands.Group(
+        name="wish",
+        description="Queue or manage Birthday Capsule wishes.",
+    )
+    capsule = app_commands.Group(
+        name="capsule",
+        description="Preview Birthday Capsule state privately.",
+    )
+    quest = app_commands.Group(
+        name="quest",
+        description="Check Birthday Quest progress and check in.",
+    )
+    surprise = app_commands.Group(
+        name="surprise",
+        description="Manage Birthday Surprise fulfillment.",
+    )
 
     def __init__(
         self,
         birthday_service: BirthdayService,
+        experience_service: ExperienceService,
         settings_service: SettingsService,
         health_service: HealthService,
         studio_audit_logger: StudioAuditLogger,
     ) -> None:
         super().__init__()
         self._birthday_service = birthday_service
+        self._experience_service = experience_service
         self._settings_service = settings_service
         self._health_service = health_service
         self._studio_audit_logger = studio_audit_logger
@@ -401,6 +431,278 @@ class BirthdayGroup(
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+    @wish.command(name="add", description="Queue a private Birthday Capsule wish for someone here.")
+    @app_commands.describe(
+        member="Member whose birthday capsule you want to add to",
+        message="Wish text that unlocks on their birthday",
+        link="Optional safe HTTPS link or GIF URL",
+    )
+    @app_commands.guild_only()
+    async def wish_add(
+        self,
+        interaction: discord.Interaction,
+        member: discord.Member,
+        message: app_commands.Range[str, 1, 350],
+        link: str | None = None,
+    ) -> None:
+        assert interaction.guild is not None
+        await interaction.response.defer(ephemeral=True)
+        wish = await self._experience_service.add_wish(
+            guild_id=interaction.guild.id,
+            author_user_id=interaction.user.id,
+            target_user_id=member.id,
+            wish_text=message,
+            link_url=link,
+        )
+        embed = discord.Embed(
+            title="Birthday wish queued",
+            description=(
+                f"Your wish for {member.mention} is saved privately until their birthday.\n"
+                "Adding another wish for the same member overwrites your earlier unrevealed one."
+            ),
+            color=discord.Color.blurple(),
+        )
+        embed.add_field(name="Wish", value=wish.wish_text, inline=False)
+        if wish.link_url is not None:
+            embed.add_field(name="Link", value=wish.link_url, inline=False)
+        await interaction.followup.send(
+            embed=embed,
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @wish.command(name="list", description="Privately list your queued Birthday Capsule wishes.")
+    @app_commands.guild_only()
+    async def wish_list(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+        await interaction.response.defer(ephemeral=True)
+        wishes = await self._experience_service.list_author_wishes(
+            interaction.guild.id,
+            interaction.user.id,
+        )
+        if not wishes:
+            await interaction.followup.send(
+                "You do not have any queued birthday wishes in this server.",
+                ephemeral=True,
+            )
+            return
+        resolved = await resolve_guild_members(
+            interaction.guild,
+            [wish.target_user_id for wish in wishes],
+        )
+        members_by_id = {user_id: member for user_id, member in resolved}
+        await interaction.followup.send(
+            embed=_build_wish_list_embed(wishes, members_by_id),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @wish.command(name="remove", description="Remove an unrevealed birthday wish.")
+    @app_commands.describe(
+        member="Member whose capsule wish should be removed",
+        author="Admin only: remove a specific author's queued wish",
+    )
+    @app_commands.guild_only()
+    async def wish_remove(
+        self,
+        interaction: discord.Interaction,
+        member: discord.Member,
+        author: discord.Member | None = None,
+    ) -> None:
+        assert interaction.guild is not None
+        await interaction.response.defer(ephemeral=True)
+        is_admin = _is_manage_guild(interaction)
+        if author is not None and not is_admin:
+            raise ValidationError("Only server admins can remove someone else's queued wish.")
+        await self._experience_service.remove_wish(
+            guild_id=interaction.guild.id,
+            actor_user_id=interaction.user.id,
+            target_user_id=member.id,
+            author_user_id=author.id if author is not None else None,
+            moderated=author is not None,
+        )
+        if author is None:
+            message = f"Removed your queued wish for {member.mention}."
+        else:
+            message = f"Removed {author.mention}'s queued wish for {member.mention}."
+        await interaction.followup.send(
+            message,
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @capsule.command(name="preview", description="Preview a Birthday Capsule privately.")
+    @app_commands.describe(
+        member="Defaults to you. Admins can preview another member's queued or unlocked capsule.",
+    )
+    @app_commands.guild_only()
+    async def capsule_preview(
+        self,
+        interaction: discord.Interaction,
+        member: discord.Member | None = None,
+    ) -> None:
+        assert interaction.guild is not None
+        await interaction.response.defer(ephemeral=True)
+        target = member or interaction.user
+        is_admin = _is_manage_guild(interaction)
+        if target.id != interaction.user.id and not is_admin:
+            raise ValidationError("You can only preview your own Birthday Capsule.")
+        celebration, wishes, queued_count = await self._experience_service.list_capsule_preview(
+            guild_id=interaction.guild.id,
+            target_user_id=target.id,
+            include_private_queued=is_admin,
+        )
+        resolved = await resolve_guild_members(
+            interaction.guild,
+            [wish.author_user_id for wish in wishes],
+        )
+        authors_by_id = {user_id: author for user_id, author in resolved}
+        await interaction.followup.send(
+            embed=_build_capsule_preview_embed(
+                target,
+                celebration=celebration,
+                wishes=wishes,
+                queued_count=queued_count,
+                authors_by_id=authors_by_id,
+                viewer_is_admin=is_admin,
+            ),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @quest.command(name="status", description="Check your Birthday Quest progress.")
+    @app_commands.guild_only()
+    async def quest_status(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+        await interaction.response.defer(ephemeral=True)
+        status = await self._experience_service.get_quest_status(
+            interaction.guild.id,
+            interaction.user.id,
+        )
+        await interaction.followup.send(
+            embed=_build_quest_status_embed(status),
+            ephemeral=True,
+        )
+
+    @quest.command(name="check-in", description="Check in for your active Birthday Quest.")
+    @app_commands.guild_only()
+    async def quest_check_in(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+        await interaction.response.defer(ephemeral=True)
+        celebration = await self._experience_service.check_in_quest(
+            interaction.guild.id,
+            interaction.user.id,
+        )
+        status = await self._experience_service.get_quest_status(
+            interaction.guild.id,
+            interaction.user.id,
+        )
+        await interaction.followup.send(
+            embed=_build_quest_status_embed(status, celebration_override=celebration),
+            ephemeral=True,
+        )
+
+    @app_commands.command(
+        name="timeline",
+        description="View a birthday profile, countdown, and celebration timeline.",
+    )
+    @app_commands.describe(
+        member="Defaults to you. Private profiles stay private unless you manage the server.",
+    )
+    @app_commands.guild_only()
+    async def timeline(
+        self,
+        interaction: discord.Interaction,
+        member: discord.Member | None = None,
+    ) -> None:
+        assert interaction.guild is not None
+        await interaction.response.defer(ephemeral=True)
+        target = member or interaction.user
+        timeline = await self._experience_service.build_timeline(
+            guild_id=interaction.guild.id,
+            target_user_id=target.id,
+            viewer_user_id=interaction.user.id,
+            admin_override=_is_manage_guild(interaction),
+        )
+        settings = await self._settings_service.get_settings(interaction.guild.id)
+        await interaction.followup.send(
+            embed=_build_timeline_embed(
+                target,
+                timeline,
+                active_now=_timeline_is_active_now(timeline, settings),
+            ),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @app_commands.command(
+        name="analytics",
+        description="View lightweight admin analytics for this server.",
+    )
+    @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.guild_only()
+    async def analytics(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+        await interaction.response.defer(ephemeral=True)
+        analytics = await self._experience_service.fetch_analytics(interaction.guild.id)
+        await interaction.followup.send(
+            embed=_build_analytics_embed(analytics),
+            ephemeral=True,
+        )
+
+    @surprise.command(
+        name="queue",
+        description="List pending manual Nitro concierge fulfillments.",
+    )
+    @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.guild_only()
+    async def surprise_queue(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+        await interaction.response.defer(ephemeral=True)
+        entries = await self._experience_service.list_pending_nitro(interaction.guild.id)
+        resolved = await resolve_guild_members(
+            interaction.guild,
+            [entry.user_id for entry in entries],
+        )
+        members_by_id = {user_id: member for user_id, member in resolved}
+        await interaction.followup.send(
+            embed=_build_nitro_queue_embed(entries, members_by_id),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @surprise.command(
+        name="fulfill",
+        description="Mark a manual Nitro concierge record as delivered or not delivered.",
+    )
+    @app_commands.describe(
+        celebration_id="Celebration ID shown in /birthday surprise queue",
+        status="Manual fulfillment result",
+    )
+    @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.guild_only()
+    async def surprise_fulfill(
+        self,
+        interaction: discord.Interaction,
+        celebration_id: int,
+        status: Literal["delivered", "not_delivered"],
+    ) -> None:
+        assert interaction.guild is not None
+        await interaction.response.defer(ephemeral=True)
+        celebration = await self._experience_service.fulfill_nitro(
+            interaction.guild.id,
+            celebration_id,
+            admin_user_id=interaction.user.id,
+            delivered=status == "delivered",
+        )
+        await interaction.followup.send(
+            (
+                f"Nitro concierge record `{celebration.id}` marked as "
+                f"`{celebration.nitro_fulfillment_status}`."
+            ),
+            ephemeral=True,
+        )
+
     @app_commands.command(name="setup", description="Open the server birthday setup panel.")
     @app_commands.checks.has_permissions(manage_guild=True)
     @app_commands.guild_only()
@@ -425,6 +727,10 @@ class BirthdayGroup(
     async def studio(self, interaction: discord.Interaction) -> None:
         assert interaction.guild is not None
         settings = await self._settings_service.get_settings(interaction.guild.id)
+        experience_settings = await self._experience_service.get_settings(interaction.guild.id)
+        surprise_rewards = tuple(
+            await self._experience_service.list_surprise_rewards(interaction.guild.id)
+        )
         server_anniversary = await self._birthday_service.get_server_anniversary(
             interaction.guild.id
         )
@@ -439,11 +745,14 @@ class BirthdayGroup(
                 settings,
                 section="home",
                 guild=interaction.guild,
+                experience_settings=experience_settings,
+                surprise_rewards=surprise_rewards,
                 server_anniversary=server_anniversary,
                 recurring_events=recurring_events,
             ),
             view=MessageTemplateView(
                 settings_service=self._settings_service,
+                experience_service=self._experience_service,
                 settings=settings,
                 owner_id=interaction.user.id,
                 guild=interaction.guild,
@@ -1813,6 +2122,302 @@ def _set_resolution_footer(
         notes.append("Some members could not be resolved and were skipped.")
     if notes:
         embed.set_footer(text=" ".join(notes))
+
+
+def _build_wish_list_embed(
+    wishes: list[BirthdayWish],
+    members_by_id: dict[int, discord.Member],
+) -> discord.Embed:
+    embed = BudgetedEmbed.create(
+        title="Queued birthday wishes",
+        description="These wishes stay private until the target member's birthday.",
+        color=discord.Color.blurple(),
+    )
+    lines: list[str] = []
+    for wish in wishes[:10]:
+        target = members_by_id.get(wish.target_user_id)
+        target_label = target.mention if target is not None else f"`{wish.target_user_id}`"
+        line = f"{target_label} - {wish.wish_text}"
+        if wish.link_url is not None:
+            line = f"{line}\nLink: {wish.link_url}"
+        lines.append(line)
+    embed.add_line_fields("Queued wishes", lines, inline=False)
+    if len(wishes) > 10:
+        embed.set_footer(f"Showing 10 of {len(wishes)} queued wishes.")
+    return embed.build()
+
+
+def _build_capsule_preview_embed(
+    target: discord.abc.User,
+    *,
+    celebration: object,
+    wishes: list[BirthdayWish],
+    queued_count: int,
+    authors_by_id: dict[int, discord.Member],
+    viewer_is_admin: bool,
+) -> discord.Embed:
+    title = f"{target.display_name}'s Birthday Capsule"
+    embed = BudgetedEmbed.create(title=title, color=discord.Color.blurple())
+    if celebration is not None and getattr(celebration, "revealed_wish_count", 0) > 0:
+        embed.set_description(
+            "This capsule is already unlocked for the current birthday celebration."
+        )
+        lines = []
+        for wish in wishes[:12]:
+            author = authors_by_id.get(wish.author_user_id)
+            author_name = author.display_name if author is not None else "A friend"
+            line = f"{author_name} - {wish.wish_text}"
+            if wish.link_url is not None:
+                line = f"{line}\nLink: {wish.link_url}"
+            lines.append(line)
+        embed.add_line_fields(
+            "Unlocked wishes",
+            lines or ["No unlocked wishes found."],
+            inline=False,
+        )
+        if len(wishes) > 12:
+            embed.set_footer(f"Showing 12 of {len(wishes)} unlocked wishes.")
+        return embed.build()
+    if viewer_is_admin:
+        embed.set_description("Admin preview of queued wishes before reveal.")
+        lines = []
+        for wish in wishes[:10]:
+            author = authors_by_id.get(wish.author_user_id)
+            author_name = author.display_name if author is not None else f"`{wish.author_user_id}`"
+            line = f"{author_name} - {wish.wish_text}"
+            if wish.link_url is not None:
+                line = f"{line}\nLink: {wish.link_url}"
+            lines.append(line)
+        embed.add_line_fields(
+            "Queued wishes",
+            lines or ["No queued wishes are waiting for this member."],
+            inline=False,
+        )
+        if queued_count > 10:
+            embed.set_footer(f"Showing 10 of {queued_count} queued wishes.")
+        return embed.build()
+    embed.set_description(
+        f"{queued_count} wish(es) are queued for this capsule.\n"
+        "Queued wish contents stay private until the birthday unlocks."
+    )
+    return embed.build()
+
+
+def _build_quest_status_embed(
+    status: BirthdayQuestStatus,
+    *,
+    celebration_override: BirthdayCelebration | None = None,
+) -> discord.Embed:
+    celebration = celebration_override if celebration_override is not None else status.celebration
+    settings = status.settings
+    embed = BudgetedEmbed.create(
+        title="Birthday Quest",
+        description="A compact birthday challenge that only tracks safe, low-noise milestones.",
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="Quest status",
+        value="Enabled" if settings.quests_enabled else "Disabled",
+        inline=True,
+    )
+    embed.add_field(
+        name="Wish target",
+        value=str(settings.quest_wish_target),
+        inline=True,
+    )
+    embed.add_field(
+        name="Check-in",
+        value="Required" if settings.quest_checkin_enabled else "Not required",
+        inline=True,
+    )
+    if celebration is None:
+        embed.add_field(
+            name="Current birthday",
+            value="No active birthday celebration is open for quest progress right now.",
+            inline=False,
+        )
+        return embed.build()
+    embed.add_line_fields(
+        "Current progress",
+        (
+            f"Wishes unlocked: {celebration.revealed_wish_count}/{celebration.quest_wish_target}",
+            f"Wish goal met: {'Yes' if celebration.quest_wish_goal_met else 'No'}",
+            (
+                "Check-in complete"
+                if celebration.quest_checked_in_at_utc is not None
+                else "Check in with `/birthday quest check-in`"
+                if celebration.quest_checkin_required
+                else "No check-in needed"
+            ),
+            f"Quest badge earned: {'Yes' if celebration.quest_completed_at_utc else 'No'}",
+        ),
+        inline=False,
+    )
+    return embed.build()
+
+
+def _build_timeline_embed(
+    target: discord.abc.User,
+    timeline: BirthdayTimeline,
+    *,
+    active_now: bool,
+) -> discord.Embed:
+    description = (
+        "Celebration is live today."
+        if active_now
+        else f"Next birthday: {discord.utils.format_dt(timeline.next_countdown_at_utc, 'R')}"
+    )
+    embed = BudgetedEmbed.create(
+        title=f"{target.display_name}'s Birthday Timeline",
+        description=description,
+        color=discord.Color.blurple(),
+    )
+    embed.add_line_fields(
+        "Profile",
+        (
+            f"Date: {timeline.birthday.birth_month:02d}/{timeline.birthday.birth_day:02d}",
+            (
+                "Visibility: Visible in server browsing"
+                if timeline.birthday.profile_visibility == "server_visible"
+                else "Visibility: Private to self and admins"
+            ),
+            f"Celebrations: {timeline.celebration_count}",
+            f"Streak: {timeline.celebration_streak}",
+        ),
+        inline=False,
+    )
+    extras = [
+        f"Wishes received: {timeline.wishes_received_count}",
+        f"Quest badges: {timeline.quest_badge_count}",
+        f"Surprises earned: {timeline.surprise_count}",
+        f"Featured birthdays: {timeline.featured_count}",
+        f"Same-day visible birthdays: {timeline.same_day_count}",
+        f"Visible birthdays this month: {timeline.month_total_count}",
+    ]
+    if timeline.zodiac_label is not None:
+        extras.append(f"Zodiac: {timeline.zodiac_label}")
+    embed.add_line_fields("Highlights", tuple(extras), inline=False)
+    if timeline.entries:
+        lines = []
+        for entry in timeline.entries:
+            line = discord.utils.format_dt(entry.occurrence_start_at_utc, "D")
+            notes = []
+            if entry.late_delivery:
+                notes.append("Recovered late")
+            if entry.revealed_wish_count:
+                notes.append(f"{entry.revealed_wish_count} wishes")
+            if entry.quest_completed:
+                notes.append("Quest badge")
+            if entry.featured_birthday:
+                notes.append("Featured")
+            if entry.surprise_reward_label is not None:
+                notes.append(entry.surprise_reward_label)
+            if entry.nitro_fulfillment_status is not None:
+                notes.append(f"Nitro: {entry.nitro_fulfillment_status}")
+            if notes:
+                line = f"{line} - {', '.join(notes)}"
+            lines.append(line)
+        embed.add_line_fields("Recent celebrations", lines, inline=False)
+    return embed.build()
+
+
+def _build_analytics_embed(analytics: GuildAnalytics) -> discord.Embed:
+    most_active_month = (
+        f"{month_name[analytics.most_active_month]} ({analytics.most_active_month_count})"
+        if analytics.most_active_month
+        else "None"
+    )
+    embed = BudgetedEmbed.create(
+        title="Bdayblaze analytics",
+        description="Compact server analytics from stored celebration data only.",
+        color=discord.Color.blurple(),
+    )
+    embed.add_line_fields(
+        "Birthdays",
+        (
+            f"Stored birthdays: {analytics.birthdays_total}",
+            f"Visible: {analytics.birthdays_visible}",
+            f"Private: {analytics.birthdays_private}",
+            f"Most active month: {most_active_month}",
+        ),
+        inline=False,
+    )
+    embed.add_line_fields(
+        "Experience",
+        (
+            f"Wishes queued: {analytics.wishes_queued}",
+            f"Wishes revealed: {analytics.wishes_revealed}",
+            f"Quest completions: {analytics.quest_completions}",
+            f"Surprises triggered: {analytics.surprises_total}",
+        ),
+        inline=False,
+    )
+    embed.add_line_fields(
+        "Manual fulfillment",
+        (
+            f"Nitro pending: {analytics.nitro_pending}",
+            f"Nitro delivered: {analytics.nitro_delivered}",
+            f"Nitro not delivered: {analytics.nitro_not_delivered}",
+        ),
+        inline=False,
+    )
+    embed.add_line_fields(
+        "Operations",
+        (
+            f"Tracked anniversaries: {analytics.anniversaries_tracked}",
+            f"Recurring events: {analytics.recurring_events_total}",
+            f"Recent late recoveries: {analytics.recent_late_recoveries}",
+            f"Recent scheduler issues: {analytics.recent_scheduler_issues}",
+        ),
+        inline=False,
+    )
+    return embed.build()
+
+
+def _build_nitro_queue_embed(
+    entries: list[NitroConciergeEntry],
+    members_by_id: dict[int, discord.Member],
+) -> discord.Embed:
+    embed = BudgetedEmbed.create(
+        title="Nitro concierge queue",
+        description="Manual-only fulfillment records. The bot never buys or sends Nitro.",
+        color=discord.Color.blurple(),
+    )
+    if not entries:
+        embed.add_field(
+            name="Queue",
+            value="No pending Nitro concierge fulfillments are waiting right now.",
+            inline=False,
+        )
+        return embed.build()
+    lines = []
+    for entry in entries[:10]:
+        member = members_by_id.get(entry.user_id)
+        member_label = member.mention if member is not None else f"`{entry.user_id}`"
+        line = (
+            f"`{entry.celebration_id}` - {member_label} - "
+            f"{discord.utils.format_dt(entry.occurrence_start_at_utc, 'D')} - {entry.reward_label}"
+        )
+        if entry.note_text is not None:
+            line = f"{line}\nNote: {entry.note_text}"
+        lines.append(line)
+    embed.add_line_fields("Pending records", lines, inline=False)
+    if len(entries) > 10:
+        embed.set_footer(f"Showing 10 of {len(entries)} pending Nitro records.")
+    return embed.build()
+
+
+def _timeline_is_active_now(timeline: BirthdayTimeline, settings: GuildSettings) -> bool:
+    return is_birthday_active_now(
+        birth_month=timeline.birthday.birth_month,
+        birth_day=timeline.birthday.birth_day,
+        timezone_name=timeline.birthday.effective_timezone(settings),
+        now_utc=datetime.now(UTC),
+    )
+
+
+def _is_manage_guild(interaction: discord.Interaction) -> bool:
+    return _user_is_admin(interaction)
 
 
 def _current_month(default_timezone: str) -> int:

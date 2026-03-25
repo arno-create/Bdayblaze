@@ -6,6 +6,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from bdayblaze.domain.timezones import timezone_examples_text
 
+LATE_CELEBRATION_NOTE = "We missed the exact moment, but not the celebration 🎂"
+
 
 def validate_timezone(timezone_name: str) -> ZoneInfo:
     try:
@@ -148,3 +150,25 @@ def membership_age_days(joined_at_utc: datetime | None, *, now_utc: datetime) ->
         return None
     delta = now_utc.astimezone(UTC) - joined_at_utc.astimezone(UTC)
     return max(0, delta.days)
+
+
+def zodiac_sign(month: int, day: int) -> str:
+    validate_birth_date(month, day)
+    boundaries = (
+        ((1, 20), "Capricorn", "Aquarius"),
+        ((2, 19), "Aquarius", "Pisces"),
+        ((3, 21), "Pisces", "Aries"),
+        ((4, 20), "Aries", "Taurus"),
+        ((5, 21), "Taurus", "Gemini"),
+        ((6, 21), "Gemini", "Cancer"),
+        ((7, 23), "Cancer", "Leo"),
+        ((8, 23), "Leo", "Virgo"),
+        ((9, 23), "Virgo", "Libra"),
+        ((10, 23), "Libra", "Scorpio"),
+        ((11, 22), "Scorpio", "Sagittarius"),
+        ((12, 22), "Sagittarius", "Capricorn"),
+    )
+    for (candidate_month, threshold_day), before_label, after_label in boundaries:
+        if candidate_month == month:
+            return before_label if day < threshold_day else after_label
+    raise ValueError("That month/day combination is not a valid birthday.")

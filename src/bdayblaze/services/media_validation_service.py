@@ -37,6 +37,7 @@ class MediaProbeResult:
             "direct_media": "Likely direct media",
             "webpage": "Webpage URL",
             "invalid_or_unsafe": "Invalid or unsafe",
+            "unsupported_media": "Unsupported media URL",
             "validation_unavailable": "Validation unavailable",
         }[self.classification]
 
@@ -62,6 +63,14 @@ async def probe_media_url(value: str | None, *, label: str) -> MediaProbeResult 
             label=label,
             url=assessment.normalized_url,
             classification="webpage",
+            summary=assessment.summary,
+            direct_render_expected=False,
+        )
+    if assessment.classification == "unsupported_media":
+        return MediaProbeResult(
+            label=label,
+            url=assessment.normalized_url,
+            classification="unsupported_media",
             summary=assessment.summary,
             direct_render_expected=False,
         )
@@ -173,7 +182,7 @@ async def _probe_once(
                 content_type=content_type,
                 detected_kind=detected_kind,
             )
-        classification = "webpage" if kind == "text" else "invalid_or_unsafe"
+        classification = "webpage" if kind == "text" else "unsupported_media"
         summary = (
             f"{assessment.label} URL responded as webpage content."
             if classification == "webpage"

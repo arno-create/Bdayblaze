@@ -16,7 +16,7 @@
   - Thin async SQL layer over `asyncpg`.
   - Explicit queries, indexes, and transactions.
 - `services`
-  - Birthday flows, settings validation, content policy, scheduler orchestration, diagnostics, and health.
+  - Birthday flows, experience features, settings validation, content policy, scheduler orchestration, diagnostics, and health.
 - `discord`
   - Slash commands, embeds, setup/studio views, gateway delivery side effects, and top-level info commands.
 - `db`
@@ -75,6 +75,46 @@ One row per annual server-defined event. Stores:
 
 `celebration_kind='server_anniversary'` is reserved for the single server-anniversary record in a guild.
 
+### `guild_experience_settings`
+
+One row per guild. Stores opt-in experience toggles and compact thresholds for:
+
+- Birthday Capsules
+- Birthday Quests
+- Birthday Surprises
+- quest wish targets
+- optional quest check-in
+
+### `birthday_wishes`
+
+One active unrevealed row per `(guild_id, author_user_id, target_user_id)`. Stores:
+
+- bounded wish text
+- optional safe HTTPS link
+- reveal/removal/moderation state
+- optional resolved celebration occurrence
+
+### `birthday_celebrations`
+
+One row per `(guild_id, user_id, occurrence_start_at_utc)`. Stores:
+
+- late-delivery marker
+- capsule reveal state/message id
+- revealed-wish counts
+- quest progression and completion
+- featured marker
+- Birthday Surprise selection
+- manual Nitro concierge fulfillment state
+
+### `guild_surprise_rewards`
+
+Per-guild weighted reward pool rows for the compact v1 reward types:
+
+- `featured`
+- `badge`
+- `custom_note`
+- `nitro_concierge`
+
 ### `celebration_events`
 
 Durable work queue and idempotency layer for Discord side effects.
@@ -85,6 +125,7 @@ Current event kinds:
 - `birthday_dm`
 - `anniversary_announcement`
 - `recurring_announcement`
+- `capsule_reveal`
 - `role_start`
 - `role_end`
 
@@ -109,7 +150,7 @@ Grouped announcement send state. Used for dedupe and bounded stale-send recovery
 Media handling is intentionally split into two layers:
 
 1. Local classification in `domain.media_validation`
-   - distinguishes `direct_media`, `webpage`, `invalid_or_unsafe`, and `needs_validation`
+   - distinguishes `direct_media`, `webpage`, `unsupported_media`, `invalid_or_unsafe`, and `needs_validation`
    - rejects unsafe hosts, private IPs, credentials, blocked suffixes, and unsafe URL keywords
    - does not pretend every HTTPS URL is a renderable image
 
@@ -189,6 +230,7 @@ HTTP endpoints:
 
 - Celebration events are persisted before Discord side effects run.
 - Event states are explicit: `pending`, `processing`, `completed`.
+- Birthday Capsules, Quests, Surprises, and Timeline rows piggyback on the existing scheduler/event pipeline instead of introducing another worker.
 - Permanent invalid payload/media failures complete as skipped instead of looping forever.
 - Active role cleanup uses stored role snapshot data so config changes do not orphan roles.
 - DM failures are recorded as skip outcomes without noisy retries.
@@ -206,6 +248,8 @@ HTTP endpoints:
 
 - `AnnouncementStudioPresentation` can expand without turning into an arbitrary embed builder.
 - `celebration_events.payload` can carry future metadata for new event styles.
+- `birthday_celebrations` is the compact seam for future badges, retention surfaces, and low-cost analytics.
+- `birthday_wishes` can later feed optional on-demand generated cards/cakes without storing binaries.
 - `tracked_member_anniversaries` remains a clean seam for richer anniversary features later.
 - `recurring_celebrations` can back future server milestone experiences.
 - Future generated cards/cakes can reuse the existing direct-media validation flow after an external asset service returns a URL.

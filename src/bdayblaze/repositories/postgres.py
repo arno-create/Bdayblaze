@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timedelta
 
@@ -19,13 +20,20 @@ from bdayblaze.domain.birthday_logic import (
 from bdayblaze.domain.models import (
     AnnouncementBatch,
     AnnouncementBatchClaim,
+    BirthdayCelebration,
     BirthdayPreview,
+    BirthdayWish,
     CelebrationEvent,
+    GuildAnalytics,
+    GuildExperienceSettings,
     GuildSettings,
+    GuildSurpriseReward,
     MemberBirthday,
+    NitroConciergeEntry,
     RecentDeliveryIssue,
     RecurringCelebration,
     SchedulerBacklog,
+    TimelineEntry,
     TrackedAnniversary,
 )
 
@@ -130,6 +138,99 @@ class PostgresRepository:
                 settings.studio_audit_channel_id,
             )
         return self._map_guild_settings(row)
+
+    async def fetch_guild_experience_settings(
+        self,
+        guild_id: int,
+    ) -> GuildExperienceSettings | None:
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(
+                "SELECT * FROM guild_experience_settings WHERE guild_id = $1",
+                guild_id,
+            )
+        return self._map_guild_experience_settings(row) if row is not None else None
+
+    async def upsert_guild_experience_settings(
+        self,
+        settings: GuildExperienceSettings,
+    ) -> GuildExperienceSettings:
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(
+                """
+                INSERT INTO guild_experience_settings (
+                    guild_id,
+                    capsules_enabled,
+                    quests_enabled,
+                    quest_wish_target,
+                    quest_checkin_enabled,
+                    surprises_enabled,
+                    updated_at_utc
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, NOW())
+                ON CONFLICT (guild_id) DO UPDATE SET
+                    capsules_enabled = EXCLUDED.capsules_enabled,
+                    quests_enabled = EXCLUDED.quests_enabled,
+                    quest_wish_target = EXCLUDED.quest_wish_target,
+                    quest_checkin_enabled = EXCLUDED.quest_checkin_enabled,
+                    surprises_enabled = EXCLUDED.surprises_enabled,
+                    updated_at_utc = NOW()
+                RETURNING *
+                """,
+                settings.guild_id,
+                settings.capsules_enabled,
+                settings.quests_enabled,
+                settings.quest_wish_target,
+                settings.quest_checkin_enabled,
+                settings.surprises_enabled,
+            )
+        return self._map_guild_experience_settings(row)
+
+    async def list_guild_surprise_rewards(self, guild_id: int) -> list[GuildSurpriseReward]:
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(
+                """
+                SELECT *
+                FROM guild_surprise_rewards
+                WHERE guild_id = $1
+                ORDER BY reward_type ASC
+                """,
+                guild_id,
+            )
+        return [self._map_guild_surprise_reward(row) for row in rows]
+
+    async def upsert_guild_surprise_reward(
+        self,
+        reward: GuildSurpriseReward,
+    ) -> GuildSurpriseReward:
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(
+                """
+                INSERT INTO guild_surprise_rewards (
+                    guild_id,
+                    reward_type,
+                    label,
+                    weight,
+                    enabled,
+                    note_text,
+                    updated_at_utc
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, NOW())
+                ON CONFLICT (guild_id, reward_type) DO UPDATE SET
+                    label = EXCLUDED.label,
+                    weight = EXCLUDED.weight,
+                    enabled = EXCLUDED.enabled,
+                    note_text = EXCLUDED.note_text,
+                    updated_at_utc = NOW()
+                RETURNING *
+                """,
+                reward.guild_id,
+                reward.reward_type,
+                reward.label,
+                reward.weight,
+                reward.enabled,
+                reward.note_text,
+            )
+        return self._map_guild_surprise_reward(row)
 
     async def fetch_member_birthday(self, guild_id: int, user_id: int) -> MemberBirthday | None:
         async with self._pool.acquire() as connection:
@@ -245,7 +346,462 @@ class PostgresRepository:
                     guild_id,
                     user_id,
                 )
+                await connection.execute(
+                    """
+                    DELETE FROM birthday_celebrations
+                    WHERE guild_id = $1 AND user_id = $2
+                    """,
+                    guild_id,
+                    user_id,
+                )
+                await connection.execute(
+                    """
+                    UPDATE birthday_wishes
+                    SET state = 'removed',
+                        removed_at_utc = NOW(),
+                        updated_at_utc = NOW()
+                    WHERE guild_id = $1
+                      AND target_user_id = $2
+                      AND state = 'queued'
+                    """,
+                    guild_id,
+                    user_id,
+                )
         return self._map_member_birthday(row) if row is not None else None
+
+    async def fetch_active_birthday_wish(
+        self,
+        guild_id: int,
+        author_user_id: int,
+        target_user_id: int,
+    ) -> BirthdayWish | None:
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(
+                """
+                SELECT *
+                FROM birthday_wishes
+                WHERE guild_id = $1
+                  AND author_user_id = $2
+                  AND target_user_id = $3
+                  AND state = 'queued'
+                """,
+                guild_id,
+                author_user_id,
+                target_user_id,
+            )
+        return self._map_birthday_wish(row) if row is not None else None
+
+    async def upsert_birthday_wish(
+        self,
+        *,
+        guild_id: int,
+        author_user_id: int,
+        target_user_id: int,
+        wish_text: str,
+        link_url: str | None,
+    ) -> BirthdayWish:
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(
+                """
+                INSERT INTO birthday_wishes (
+                    guild_id,
+                    author_user_id,
+                    target_user_id,
+                    wish_text,
+                    link_url,
+                    state,
+                    updated_at_utc
+                )
+                VALUES ($1, $2, $3, $4, $5, 'queued', NOW())
+                ON CONFLICT (guild_id, author_user_id, target_user_id)
+                    WHERE state = 'queued'
+                DO UPDATE SET
+                    wish_text = EXCLUDED.wish_text,
+                    link_url = EXCLUDED.link_url,
+                    removed_at_utc = NULL,
+                    revealed_at_utc = NULL,
+                    moderated_by_user_id = NULL,
+                    updated_at_utc = NOW()
+                RETURNING *
+                """,
+                guild_id,
+                author_user_id,
+                target_user_id,
+                wish_text,
+                link_url,
+            )
+        return self._map_birthday_wish(row)
+
+    async def list_queued_wishes_by_author(
+        self,
+        guild_id: int,
+        author_user_id: int,
+    ) -> list[BirthdayWish]:
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(
+                """
+                SELECT *
+                FROM birthday_wishes
+                WHERE guild_id = $1
+                  AND author_user_id = $2
+                  AND state = 'queued'
+                ORDER BY created_at_utc ASC
+                """,
+                guild_id,
+                author_user_id,
+            )
+        return [self._map_birthday_wish(row) for row in rows]
+
+    async def remove_birthday_wish(
+        self,
+        *,
+        guild_id: int,
+        author_user_id: int,
+        target_user_id: int,
+        moderator_user_id: int | None = None,
+        moderated: bool = False,
+    ) -> BirthdayWish | None:
+        state = "moderated" if moderated else "removed"
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(
+                f"""
+                UPDATE birthday_wishes
+                SET state = '{state}',
+                    removed_at_utc = NOW(),
+                    moderated_by_user_id = $4,
+                    updated_at_utc = NOW()
+                WHERE guild_id = $1
+                  AND author_user_id = $2
+                  AND target_user_id = $3
+                  AND state = 'queued'
+                RETURNING *
+                """,
+                guild_id,
+                author_user_id,
+                target_user_id,
+                moderator_user_id,
+            )
+        return self._map_birthday_wish(row) if row is not None else None
+
+    async def list_birthday_wishes_for_target(
+        self,
+        guild_id: int,
+        target_user_id: int,
+        *,
+        state: str,
+        occurrence_start_at_utc: datetime | None = None,
+    ) -> list[BirthdayWish]:
+        occurrence_clause = (
+            "AND celebration_occurrence_at_utc = $4" if occurrence_start_at_utc is not None else ""
+        )
+        params: list[object] = [guild_id, target_user_id, state]
+        if occurrence_start_at_utc is not None:
+            params.append(occurrence_start_at_utc)
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(
+                f"""
+                SELECT *
+                FROM birthday_wishes
+                WHERE guild_id = $1
+                  AND target_user_id = $2
+                  AND state = $3
+                  {occurrence_clause}
+                ORDER BY created_at_utc ASC
+                """,
+                *params,
+            )
+        return [self._map_birthday_wish(row) for row in rows]
+
+    async def fetch_latest_birthday_celebration(
+        self,
+        guild_id: int,
+        user_id: int,
+    ) -> BirthdayCelebration | None:
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(
+                """
+                SELECT *
+                FROM birthday_celebrations
+                WHERE guild_id = $1
+                  AND user_id = $2
+                ORDER BY occurrence_start_at_utc DESC
+                LIMIT 1
+                """,
+                guild_id,
+                user_id,
+            )
+        return self._map_birthday_celebration(row) if row is not None else None
+
+    async def fetch_birthday_celebration(
+        self,
+        guild_id: int,
+        user_id: int,
+        occurrence_start_at_utc: datetime,
+    ) -> BirthdayCelebration | None:
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(
+                """
+                SELECT *
+                FROM birthday_celebrations
+                WHERE guild_id = $1
+                  AND user_id = $2
+                  AND occurrence_start_at_utc = $3
+                """,
+                guild_id,
+                user_id,
+                occurrence_start_at_utc,
+            )
+        return self._map_birthday_celebration(row) if row is not None else None
+
+    async def list_recent_birthday_celebrations(
+        self,
+        guild_id: int,
+        user_id: int,
+        *,
+        limit: int,
+    ) -> list[TimelineEntry]:
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(
+                """
+                SELECT *
+                FROM birthday_celebrations
+                WHERE guild_id = $1
+                  AND user_id = $2
+                ORDER BY occurrence_start_at_utc DESC
+                LIMIT $3
+                """,
+                guild_id,
+                user_id,
+                limit,
+            )
+        return [self._map_timeline_entry(row) for row in rows]
+
+    async def fetch_birthday_timeline_stats(
+        self,
+        guild_id: int,
+        user_id: int,
+    ) -> tuple[int, int, int, int]:
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(
+                """
+                SELECT
+                    COUNT(*) AS celebration_count,
+                    COALESCE(SUM(revealed_wish_count), 0) AS wishes_received_count,
+                    COUNT(*) FILTER (WHERE quest_completed_at_utc IS NOT NULL) AS quest_badge_count,
+                    COUNT(*) FILTER (WHERE surprise_reward_type IS NOT NULL) AS surprise_count
+                FROM birthday_celebrations
+                WHERE guild_id = $1
+                  AND user_id = $2
+                """,
+                guild_id,
+                user_id,
+            )
+        assert row is not None
+        return (
+            row["celebration_count"],
+            row["wishes_received_count"],
+            row["quest_badge_count"],
+            row["surprise_count"],
+        )
+
+    async def count_featured_birthdays(self, guild_id: int, user_id: int) -> int:
+        async with self._pool.acquire() as connection:
+            count = await connection.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM birthday_celebrations
+                WHERE guild_id = $1
+                  AND user_id = $2
+                  AND featured_birthday = TRUE
+                """,
+                guild_id,
+                user_id,
+            )
+        assert isinstance(count, int)
+        return count
+
+    async def mark_birthday_quest_check_in(
+        self,
+        guild_id: int,
+        user_id: int,
+        occurrence_start_at_utc: datetime,
+        *,
+        checked_in_at_utc: datetime,
+    ) -> BirthdayCelebration | None:
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(
+                """
+                UPDATE birthday_celebrations
+                SET quest_checked_in_at_utc = COALESCE(quest_checked_in_at_utc, $4),
+                    quest_completed_at_utc = CASE
+                        WHEN quest_enabled = TRUE
+                             AND quest_wish_goal_met = TRUE
+                             AND quest_checkin_required = TRUE
+                             AND quest_checked_in_at_utc IS NULL THEN $4
+                        ELSE quest_completed_at_utc
+                    END,
+                    featured_birthday = CASE
+                        WHEN quest_enabled = TRUE
+                             AND quest_wish_goal_met = TRUE
+                             AND quest_checkin_required = TRUE
+                             AND quest_checked_in_at_utc IS NULL THEN TRUE
+                        ELSE featured_birthday
+                    END,
+                    updated_at_utc = NOW()
+                WHERE guild_id = $1
+                  AND user_id = $2
+                  AND occurrence_start_at_utc = $3
+                RETURNING *
+                """,
+                guild_id,
+                user_id,
+                occurrence_start_at_utc,
+                checked_in_at_utc,
+            )
+        return self._map_birthday_celebration(row) if row is not None else None
+
+    async def mark_capsule_delivery_result(
+        self,
+        guild_id: int,
+        user_id: int,
+        occurrence_start_at_utc: datetime,
+        *,
+        capsule_state: str,
+        message_id: int | None = None,
+    ) -> None:
+        async with self._pool.acquire() as connection:
+            await connection.execute(
+                """
+                UPDATE birthday_celebrations
+                SET capsule_state = $4,
+                    capsule_message_id = COALESCE($5, capsule_message_id),
+                    updated_at_utc = NOW()
+                WHERE guild_id = $1
+                  AND user_id = $2
+                  AND occurrence_start_at_utc = $3
+                """,
+                guild_id,
+                user_id,
+                occurrence_start_at_utc,
+                capsule_state,
+                message_id,
+            )
+
+    async def list_pending_nitro_concierge(
+        self,
+        guild_id: int,
+        *,
+        limit: int,
+    ) -> list[NitroConciergeEntry]:
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(
+                """
+                SELECT
+                    id,
+                    user_id,
+                    occurrence_start_at_utc,
+                    surprise_reward_label,
+                    surprise_note_text,
+                    nitro_fulfillment_status
+                FROM birthday_celebrations
+                WHERE guild_id = $1
+                  AND surprise_reward_type = 'nitro_concierge'
+                  AND nitro_fulfillment_status = 'pending'
+                ORDER BY occurrence_start_at_utc DESC
+                LIMIT $2
+                """,
+                guild_id,
+                limit,
+            )
+        return [
+            NitroConciergeEntry(
+                celebration_id=row["id"],
+                user_id=row["user_id"],
+                occurrence_start_at_utc=row["occurrence_start_at_utc"],
+                reward_label=row["surprise_reward_label"] or "Nitro concierge",
+                note_text=row["surprise_note_text"],
+                fulfillment_status=row["nitro_fulfillment_status"],
+            )
+            for row in rows
+        ]
+
+    async def fulfill_nitro_concierge(
+        self,
+        guild_id: int,
+        celebration_id: int,
+        *,
+        admin_user_id: int,
+        fulfillment_status: str,
+    ) -> BirthdayCelebration | None:
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(
+                """
+                UPDATE birthday_celebrations
+                SET nitro_fulfillment_status = $4,
+                    nitro_fulfilled_by_user_id = $5,
+                    nitro_fulfilled_at_utc = NOW(),
+                    updated_at_utc = NOW()
+                WHERE guild_id = $1
+                  AND id = $2
+                  AND surprise_reward_type = 'nitro_concierge'
+                  AND nitro_fulfillment_status IS NOT NULL
+                RETURNING *
+                """,
+                guild_id,
+                celebration_id,
+                fulfillment_status,
+                admin_user_id,
+            )
+        return self._map_birthday_celebration(row) if row is not None else None
+
+    async def count_birthdays_for_month_visibility(
+        self,
+        guild_id: int,
+        month: int,
+        *,
+        visible_only: bool,
+    ) -> int:
+        visibility_clause = "AND profile_visibility = 'server_visible'" if visible_only else ""
+        async with self._pool.acquire() as connection:
+            count = await connection.fetchval(
+                f"""
+                SELECT COUNT(*)
+                FROM member_birthdays
+                WHERE guild_id = $1
+                  AND birth_month = $2
+                  {visibility_clause}
+                """,
+                guild_id,
+                month,
+            )
+        assert isinstance(count, int)
+        return count
+
+    async def count_birthdays_for_day_visibility(
+        self,
+        guild_id: int,
+        month: int,
+        day: int,
+        *,
+        visible_only: bool,
+    ) -> int:
+        visibility_clause = "AND profile_visibility = 'server_visible'" if visible_only else ""
+        async with self._pool.acquire() as connection:
+            count = await connection.fetchval(
+                f"""
+                SELECT COUNT(*)
+                FROM member_birthdays
+                WHERE guild_id = $1
+                  AND birth_month = $2
+                  AND birth_day = $3
+                  {visibility_clause}
+                """,
+                guild_id,
+                month,
+                day,
+            )
+        assert isinstance(count, int)
+        return count
 
     async def list_upcoming_birthdays(
         self,
@@ -725,10 +1281,17 @@ class PostgresRepository:
                         COALESCE(
                             gs.mention_suppression_threshold,
                             8
-                        ) AS mention_suppression_threshold
+                        ) AS mention_suppression_threshold,
+                        COALESCE(ges.capsules_enabled, FALSE) AS capsules_enabled,
+                        COALESCE(ges.quests_enabled, FALSE) AS quests_enabled,
+                        COALESCE(ges.quest_wish_target, 3) AS quest_wish_target,
+                        COALESCE(ges.quest_checkin_enabled, TRUE) AS quest_checkin_enabled,
+                        COALESCE(ges.surprises_enabled, FALSE) AS surprises_enabled
                     FROM member_birthdays AS mb
                     LEFT JOIN guild_settings AS gs
                         ON gs.guild_id = mb.guild_id
+                    LEFT JOIN guild_experience_settings AS ges
+                        ON ges.guild_id = mb.guild_id
                     WHERE mb.next_occurrence_at_utc <= $1
                     ORDER BY mb.next_occurrence_at_utc ASC
                     FOR UPDATE OF mb SKIP LOCKED
@@ -739,6 +1302,22 @@ class PostgresRepository:
                 )
                 if not rows:
                     return 0
+
+                reward_rows = await connection.fetch(
+                    """
+                    SELECT *
+                    FROM guild_surprise_rewards
+                    WHERE guild_id = ANY($1::bigint[])
+                      AND enabled = TRUE
+                      AND weight > 0
+                    ORDER BY guild_id ASC, reward_type ASC
+                    """,
+                    sorted({row["guild_id"] for row in rows}),
+                )
+                rewards_by_guild: dict[int, list[GuildSurpriseReward]] = {}
+                for reward_row in reward_rows:
+                    reward = self._map_guild_surprise_reward(reward_row)
+                    rewards_by_guild.setdefault(reward.guild_id, []).append(reward)
 
                 batch_tokens: dict[tuple[int, datetime, int], str] = {}
                 for row in rows:
@@ -774,6 +1353,7 @@ class PostgresRepository:
                         if role_id is not None
                         else None
                     )
+                    late_delivery = now_utc - current_occurrence > timedelta(minutes=1)
                     await connection.execute(
                         """
                         UPDATE member_birthdays
@@ -788,6 +1368,72 @@ class PostgresRepository:
                         role_id,
                         row["guild_id"],
                         row["user_id"],
+                    )
+
+                    revealed_wish_count = 0
+                    capsule_state = "disabled"
+                    if row["capsules_enabled"]:
+                        revealed_wish_count = await self._reveal_queued_birthday_wishes(
+                            connection,
+                            guild_id=row["guild_id"],
+                            target_user_id=row["user_id"],
+                            occurrence_start_at_utc=current_occurrence,
+                        )
+                        if revealed_wish_count == 0:
+                            capsule_state = "no_wishes"
+                        elif (
+                            row["announcements_enabled"]
+                            and row["announcement_channel_id"] is not None
+                        ):
+                            capsule_state = "pending_public"
+                        else:
+                            capsule_state = "revealed_private"
+
+                    quest_enabled = bool(row["quests_enabled"])
+                    quest_wish_target = int(row["quest_wish_target"]) if quest_enabled else 0
+                    quest_checkin_required = (
+                        bool(row["quest_checkin_enabled"]) if quest_enabled else False
+                    )
+                    quest_wish_goal_met = (
+                        quest_enabled
+                        and quest_wish_target > 0
+                        and revealed_wish_count >= quest_wish_target
+                    )
+                    quest_completed_at_utc = (
+                        now_utc
+                        if quest_wish_goal_met and not quest_checkin_required
+                        else None
+                    )
+                    surprise_reward = (
+                        self._select_surprise_reward(
+                            rewards_by_guild.get(int(row["guild_id"]), ()),
+                            guild_id=int(row["guild_id"]),
+                            user_id=int(row["user_id"]),
+                            occurrence_start_at_utc=current_occurrence,
+                        )
+                        if row["surprises_enabled"]
+                        else None
+                    )
+                    featured_birthday = bool(
+                        quest_wish_goal_met and not quest_checkin_required
+                    ) or (
+                        surprise_reward is not None and surprise_reward.reward_type == "featured"
+                    )
+                    await self._upsert_birthday_celebration(
+                        connection,
+                        guild_id=row["guild_id"],
+                        user_id=row["user_id"],
+                        occurrence_start_at_utc=current_occurrence,
+                        late_delivery=late_delivery,
+                        capsule_state=capsule_state,
+                        revealed_wish_count=revealed_wish_count,
+                        quest_enabled=quest_enabled,
+                        quest_wish_target=quest_wish_target,
+                        quest_wish_goal_met=quest_wish_goal_met,
+                        quest_checkin_required=quest_checkin_required,
+                        quest_completed_at_utc=quest_completed_at_utc,
+                        featured_birthday=featured_birthday,
+                        surprise_reward=surprise_reward,
                     )
 
                     if row["announcements_enabled"] and row["announcement_channel_id"] is not None:
@@ -868,6 +1514,33 @@ class PostgresRepository:
                                 "eligibility_role_id": row["eligibility_role_id"],
                                 "ignore_bots": row["ignore_bots"],
                                 "minimum_membership_days": row["minimum_membership_days"],
+                            },
+                        )
+
+                    if (
+                        row["capsules_enabled"]
+                        and revealed_wish_count > 0
+                        and row["announcements_enabled"]
+                        and row["announcement_channel_id"] is not None
+                    ):
+                        inserted += await self._insert_event(
+                            connection,
+                            event_key=(
+                                f"capsule:{row['guild_id']}:{row['user_id']}:"
+                                f"{int(current_occurrence.timestamp())}"
+                            ),
+                            guild_id=row["guild_id"],
+                            user_id=row["user_id"],
+                            event_kind="capsule_reveal",
+                            scheduled_for_utc=current_occurrence + timedelta(seconds=30),
+                            payload={
+                                "channel_id": row["announcement_channel_id"],
+                                "celebration_mode": row["celebration_mode"],
+                                "announcement_theme": row["announcement_theme"],
+                                "birth_month": row["birth_month"],
+                                "birth_day": row["birth_day"],
+                                "timezone": effective_timezone,
+                                "occurrence_start_at_utc": current_occurrence.isoformat(),
                             },
                         )
                 return inserted
@@ -1304,6 +1977,7 @@ class PostgresRepository:
                     'birthday_dm',
                     'anniversary_announcement',
                     'recurring_announcement',
+                    'capsule_reveal',
                     'role_start'
                 )
                   AND state <> 'completed'
@@ -1535,6 +2209,7 @@ class PostgresRepository:
                 WHERE guild_id = $1
                   AND completed_at_utc >= $2
                   AND last_error_code IS NOT NULL
+                  AND last_error_code <> 'late_delivery'
                 ORDER BY completed_at_utc DESC
                 LIMIT $3
                 """,
@@ -1552,6 +2227,127 @@ class PostgresRepository:
             )
             for row in rows
         ]
+
+    async def fetch_guild_analytics(
+        self,
+        guild_id: int,
+        *,
+        since_utc: datetime,
+    ) -> GuildAnalytics:
+        async with self._pool.acquire() as connection:
+            birthday_counts = await connection.fetchrow(
+                """
+                SELECT
+                    COUNT(*) AS birthdays_total,
+                    COUNT(*) FILTER (WHERE profile_visibility = 'private') AS birthdays_private,
+                    COUNT(*) FILTER (
+                        WHERE profile_visibility = 'server_visible'
+                    ) AS birthdays_visible
+                FROM member_birthdays
+                WHERE guild_id = $1
+                """,
+                guild_id,
+            )
+            wish_counts = await connection.fetchrow(
+                """
+                SELECT
+                    COUNT(*) FILTER (WHERE state = 'queued') AS wishes_queued,
+                    COUNT(*) FILTER (WHERE state = 'revealed') AS wishes_revealed
+                FROM birthday_wishes
+                WHERE guild_id = $1
+                """,
+                guild_id,
+            )
+            celebration_counts = await connection.fetchrow(
+                """
+                SELECT
+                    COUNT(*) AS celebrations_total,
+                    COUNT(*) FILTER (WHERE quest_completed_at_utc IS NOT NULL) AS quest_completions,
+                    COUNT(*) FILTER (WHERE surprise_reward_type IS NOT NULL) AS surprises_total,
+                    COUNT(*) FILTER (
+                        WHERE nitro_fulfillment_status = 'pending'
+                    ) AS nitro_pending,
+                    COUNT(*) FILTER (
+                        WHERE nitro_fulfillment_status = 'delivered'
+                    ) AS nitro_delivered,
+                    COUNT(*) FILTER (
+                        WHERE nitro_fulfillment_status = 'not_delivered'
+                    ) AS nitro_not_delivered,
+                    COUNT(*) FILTER (
+                        WHERE late_delivery = TRUE AND occurrence_start_at_utc >= $2
+                    ) AS recent_late_recoveries
+                FROM birthday_celebrations
+                WHERE guild_id = $1
+                """,
+                guild_id,
+                since_utc,
+            )
+            tracked_anniversaries = await connection.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM tracked_member_anniversaries
+                WHERE guild_id = $1
+                """,
+                guild_id,
+            )
+            recurring_events = await connection.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM recurring_celebrations
+                WHERE guild_id = $1
+                  AND celebration_kind = 'custom'
+                """,
+                guild_id,
+            )
+            most_active_month = await connection.fetchrow(
+                """
+                SELECT birth_month, COUNT(*) AS member_count
+                FROM member_birthdays
+                WHERE guild_id = $1
+                GROUP BY birth_month
+                ORDER BY member_count DESC, birth_month ASC
+                LIMIT 1
+                """,
+                guild_id,
+            )
+            scheduler_issues = await connection.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM celebration_events
+                WHERE guild_id = $1
+                  AND completed_at_utc >= $2
+                  AND last_error_code IS NOT NULL
+                  AND last_error_code <> 'late_delivery'
+                """,
+                guild_id,
+                since_utc,
+            )
+        assert birthday_counts is not None
+        assert wish_counts is not None
+        assert celebration_counts is not None
+        return GuildAnalytics(
+            birthdays_total=birthday_counts["birthdays_total"],
+            birthdays_private=birthday_counts["birthdays_private"],
+            birthdays_visible=birthday_counts["birthdays_visible"],
+            wishes_queued=wish_counts["wishes_queued"],
+            wishes_revealed=wish_counts["wishes_revealed"],
+            celebrations_total=celebration_counts["celebrations_total"],
+            quest_completions=celebration_counts["quest_completions"],
+            surprises_total=celebration_counts["surprises_total"],
+            nitro_pending=celebration_counts["nitro_pending"],
+            nitro_delivered=celebration_counts["nitro_delivered"],
+            nitro_not_delivered=celebration_counts["nitro_not_delivered"],
+            anniversaries_tracked=int(tracked_anniversaries or 0),
+            recurring_events_total=int(recurring_events or 0),
+            most_active_month=(
+                most_active_month["birth_month"] if most_active_month is not None else None
+            ),
+            most_active_month_count=(
+                most_active_month["member_count"] if most_active_month is not None else 0
+            ),
+            recent_late_recoveries=celebration_counts["recent_late_recoveries"],
+            recent_scheduler_issues=int(scheduler_issues or 0),
+        )
 
     async def clear_active_birthday_role(
         self,
@@ -1725,6 +2521,160 @@ class PostgresRepository:
         )
         return 1 if _parse_affected_rows(result) == 1 else 0
 
+    async def _reveal_queued_birthday_wishes(
+        self,
+        connection: asyncpg.Connection,
+        *,
+        guild_id: int,
+        target_user_id: int,
+        occurrence_start_at_utc: datetime,
+    ) -> int:
+        rows = await connection.fetch(
+            """
+            UPDATE birthday_wishes
+            SET state = 'revealed',
+                celebration_occurrence_at_utc = $3,
+                revealed_at_utc = NOW(),
+                updated_at_utc = NOW()
+            WHERE guild_id = $1
+              AND target_user_id = $2
+              AND state = 'queued'
+            RETURNING id
+            """,
+            guild_id,
+            target_user_id,
+            occurrence_start_at_utc,
+        )
+        return len(rows)
+
+    async def _upsert_birthday_celebration(
+        self,
+        connection: asyncpg.Connection,
+        *,
+        guild_id: int,
+        user_id: int,
+        occurrence_start_at_utc: datetime,
+        late_delivery: bool,
+        capsule_state: str,
+        revealed_wish_count: int,
+        quest_enabled: bool,
+        quest_wish_target: int,
+        quest_wish_goal_met: bool,
+        quest_checkin_required: bool,
+        quest_completed_at_utc: datetime | None,
+        featured_birthday: bool,
+        surprise_reward: GuildSurpriseReward | None,
+    ) -> None:
+        reward_type = surprise_reward.reward_type if surprise_reward is not None else None
+        reward_label = surprise_reward.label if surprise_reward is not None else None
+        reward_note = surprise_reward.note_text if surprise_reward is not None else None
+        nitro_status = "pending" if reward_type == "nitro_concierge" else None
+        await connection.execute(
+            """
+            INSERT INTO birthday_celebrations (
+                guild_id,
+                user_id,
+                occurrence_start_at_utc,
+                late_delivery,
+                capsule_state,
+                revealed_wish_count,
+                quest_enabled,
+                quest_wish_target,
+                quest_wish_goal_met,
+                quest_checkin_required,
+                quest_completed_at_utc,
+                featured_birthday,
+                surprise_reward_type,
+                surprise_reward_label,
+                surprise_note_text,
+                surprise_selected_at_utc,
+                nitro_fulfillment_status,
+                updated_at_utc
+            )
+            VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+                CASE WHEN $13 IS NULL THEN NULL ELSE NOW() END,
+                $16,
+                NOW()
+            )
+            ON CONFLICT (guild_id, user_id, occurrence_start_at_utc) DO UPDATE SET
+                late_delivery = birthday_celebrations.late_delivery OR EXCLUDED.late_delivery,
+                capsule_state = EXCLUDED.capsule_state,
+                revealed_wish_count = EXCLUDED.revealed_wish_count,
+                quest_enabled = EXCLUDED.quest_enabled,
+                quest_wish_target = EXCLUDED.quest_wish_target,
+                quest_wish_goal_met = EXCLUDED.quest_wish_goal_met,
+                quest_checkin_required = EXCLUDED.quest_checkin_required,
+                quest_completed_at_utc = COALESCE(
+                    birthday_celebrations.quest_completed_at_utc,
+                    EXCLUDED.quest_completed_at_utc
+                ),
+                featured_birthday = birthday_celebrations.featured_birthday
+                    OR EXCLUDED.featured_birthday,
+                surprise_reward_type = COALESCE(
+                    birthday_celebrations.surprise_reward_type,
+                    EXCLUDED.surprise_reward_type
+                ),
+                surprise_reward_label = COALESCE(
+                    birthday_celebrations.surprise_reward_label,
+                    EXCLUDED.surprise_reward_label
+                ),
+                surprise_note_text = COALESCE(
+                    birthday_celebrations.surprise_note_text,
+                    EXCLUDED.surprise_note_text
+                ),
+                surprise_selected_at_utc = COALESCE(
+                    birthday_celebrations.surprise_selected_at_utc,
+                    EXCLUDED.surprise_selected_at_utc
+                ),
+                nitro_fulfillment_status = COALESCE(
+                    birthday_celebrations.nitro_fulfillment_status,
+                    EXCLUDED.nitro_fulfillment_status
+                ),
+                updated_at_utc = NOW()
+            """,
+            guild_id,
+            user_id,
+            occurrence_start_at_utc,
+            late_delivery,
+            capsule_state,
+            revealed_wish_count,
+            quest_enabled,
+            quest_wish_target,
+            quest_wish_goal_met,
+            quest_checkin_required,
+            quest_completed_at_utc,
+            featured_birthday,
+            reward_type,
+            reward_label,
+            reward_note,
+            nitro_status,
+        )
+
+    @staticmethod
+    def _select_surprise_reward(
+        rewards: list[GuildSurpriseReward] | tuple[GuildSurpriseReward, ...],
+        *,
+        guild_id: int,
+        user_id: int,
+        occurrence_start_at_utc: datetime,
+    ) -> GuildSurpriseReward | None:
+        eligible = [reward for reward in rewards if reward.enabled and reward.weight > 0]
+        if not eligible:
+            return None
+        total_weight = sum(reward.weight for reward in eligible)
+        if total_weight <= 0:
+            return None
+        seed = f"{guild_id}:{user_id}:{int(occurrence_start_at_utc.timestamp())}".encode()
+        digest = hashlib.sha256(seed).digest()
+        ticket = int.from_bytes(digest[:8], "big") % total_weight
+        cumulative = 0
+        for reward in eligible:
+            cumulative += reward.weight
+            if ticket < cumulative:
+                return reward
+        return eligible[-1]
+
     @staticmethod
     def _map_guild_settings(row: asyncpg.Record) -> GuildSettings:
         return GuildSettings(
@@ -1752,6 +2702,33 @@ class PostgresRepository:
             minimum_membership_days=row["minimum_membership_days"],
             mention_suppression_threshold=row["mention_suppression_threshold"],
             studio_audit_channel_id=row["studio_audit_channel_id"],
+            created_at_utc=row["created_at_utc"],
+            updated_at_utc=row["updated_at_utc"],
+        )
+
+    @staticmethod
+    def _map_guild_experience_settings(row: asyncpg.Record) -> GuildExperienceSettings:
+        return GuildExperienceSettings(
+            guild_id=row["guild_id"],
+            capsules_enabled=row["capsules_enabled"],
+            quests_enabled=row["quests_enabled"],
+            quest_wish_target=row["quest_wish_target"],
+            quest_checkin_enabled=row["quest_checkin_enabled"],
+            surprises_enabled=row["surprises_enabled"],
+            created_at_utc=row["created_at_utc"],
+            updated_at_utc=row["updated_at_utc"],
+        )
+
+    @staticmethod
+    def _map_guild_surprise_reward(row: asyncpg.Record) -> GuildSurpriseReward:
+        return GuildSurpriseReward(
+            id=row["id"],
+            guild_id=row["guild_id"],
+            reward_type=row["reward_type"],
+            label=row["label"],
+            weight=row["weight"],
+            enabled=row["enabled"],
+            note_text=row["note_text"],
             created_at_utc=row["created_at_utc"],
             updated_at_utc=row["updated_at_utc"],
         )
@@ -1812,6 +2789,67 @@ class PostgresRepository:
             next_occurrence_at_utc=row["next_occurrence_at_utc"],
             created_at_utc=row["created_at_utc"],
             updated_at_utc=row["updated_at_utc"],
+        )
+
+    @staticmethod
+    def _map_birthday_wish(row: asyncpg.Record) -> BirthdayWish:
+        return BirthdayWish(
+            id=row["id"],
+            guild_id=row["guild_id"],
+            author_user_id=row["author_user_id"],
+            target_user_id=row["target_user_id"],
+            wish_text=row["wish_text"],
+            link_url=row["link_url"],
+            state=row["state"],
+            celebration_occurrence_at_utc=row["celebration_occurrence_at_utc"],
+            revealed_at_utc=row["revealed_at_utc"],
+            removed_at_utc=row["removed_at_utc"],
+            moderated_by_user_id=row["moderated_by_user_id"],
+            created_at_utc=row["created_at_utc"],
+            updated_at_utc=row["updated_at_utc"],
+        )
+
+    @staticmethod
+    def _map_birthday_celebration(row: asyncpg.Record) -> BirthdayCelebration:
+        return BirthdayCelebration(
+            id=row["id"],
+            guild_id=row["guild_id"],
+            user_id=row["user_id"],
+            occurrence_start_at_utc=row["occurrence_start_at_utc"],
+            late_delivery=row["late_delivery"],
+            capsule_state=row["capsule_state"],
+            capsule_message_id=row["capsule_message_id"],
+            revealed_wish_count=row["revealed_wish_count"],
+            quest_enabled=row["quest_enabled"],
+            quest_wish_target=row["quest_wish_target"],
+            quest_wish_goal_met=row["quest_wish_goal_met"],
+            quest_checkin_required=row["quest_checkin_required"],
+            quest_checked_in_at_utc=row["quest_checked_in_at_utc"],
+            quest_completed_at_utc=row["quest_completed_at_utc"],
+            featured_birthday=row["featured_birthday"],
+            surprise_reward_type=row["surprise_reward_type"],
+            surprise_reward_label=row["surprise_reward_label"],
+            surprise_note_text=row["surprise_note_text"],
+            surprise_selected_at_utc=row["surprise_selected_at_utc"],
+            nitro_fulfillment_status=row["nitro_fulfillment_status"],
+            nitro_fulfilled_by_user_id=row["nitro_fulfilled_by_user_id"],
+            nitro_fulfilled_at_utc=row["nitro_fulfilled_at_utc"],
+            created_at_utc=row["created_at_utc"],
+            updated_at_utc=row["updated_at_utc"],
+        )
+
+    @staticmethod
+    def _map_timeline_entry(row: asyncpg.Record) -> TimelineEntry:
+        return TimelineEntry(
+            celebration_id=row["id"],
+            occurrence_start_at_utc=row["occurrence_start_at_utc"],
+            late_delivery=row["late_delivery"],
+            revealed_wish_count=row["revealed_wish_count"],
+            quest_completed=row["quest_completed_at_utc"] is not None,
+            featured_birthday=row["featured_birthday"],
+            surprise_reward_type=row["surprise_reward_type"],
+            surprise_reward_label=row["surprise_reward_label"],
+            nitro_fulfillment_status=row["nitro_fulfillment_status"],
         )
 
     @staticmethod

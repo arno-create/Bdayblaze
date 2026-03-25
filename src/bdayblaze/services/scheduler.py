@@ -8,6 +8,7 @@ from typing import Protocol
 from bdayblaze.domain.models import (
     AnniversaryRecipientSnapshot,
     AnnouncementRecipientSnapshot,
+    BirthdayWish,
     CelebrationEvent,
     RuntimeStatus,
     SchedulerMetrics,
@@ -145,6 +146,21 @@ class SchedulerGateway(Protocol):
         scheduled_for_utc: datetime,
     ) -> DirectSendResult: ...
 
+    async def send_capsule_reveal(
+        self,
+        *,
+        guild_id: int,
+        channel_id: int,
+        user_id: int,
+        celebration_mode: str,
+        announcement_theme: str,
+        birth_month: int,
+        birth_day: int,
+        timezone: str,
+        wishes: list[BirthdayWish],
+        scheduled_for_utc: datetime,
+    ) -> DirectSendResult: ...
+
     async def add_birthday_role(
         self,
         *,
@@ -274,6 +290,9 @@ class BirthdaySchedulerService:
                 continue
             if event.event_kind == "recurring_announcement":
                 await self._handle_recurring_announcement(now_utc, event)
+                continue
+            if event.event_kind == "capsule_reveal":
+                await self._handle_capsule_reveal(now_utc, event)
                 continue
             await self._handle_role_event(now_utc, event)
 
@@ -563,6 +582,83 @@ class BirthdaySchedulerService:
             if skipped == 0:
                 break
         return skipped_total
+
+    async def _handle_capsule_reveal(
+        self,
+        now_utc: datetime,
+        event: CelebrationEvent,
+    ) -> None:
+        if event.user_id is None:
+            await self._repository.complete_event_as_skipped(event.id, "missing_user_id")
+            return
+        occurrence_start_at_utc = datetime.fromisoformat(
+            str(event.payload["occurrence_start_at_utc"])
+        )
+        wishes = await self._repository.list_birthday_wishes_for_target(
+            event.guild_id,
+            event.user_id,
+            state="revealed",
+            occurrence_start_at_utc=occurrence_start_at_utc,
+        )
+        if not wishes:
+            await self._repository.mark_capsule_delivery_result(
+                event.guild_id,
+                event.user_id,
+                occurrence_start_at_utc,
+                capsule_state="no_wishes",
+            )
+            await self._repository.mark_events_completed([event.id])
+            return
+        try:
+            result = await self._gateway.send_capsule_reveal(
+                guild_id=event.guild_id,
+                channel_id=int(event.payload["channel_id"]),
+                user_id=event.user_id,
+                celebration_mode=str(event.payload.get("celebration_mode", "quiet")),
+                announcement_theme=str(event.payload.get("announcement_theme", "classic")),
+                birth_month=int(event.payload["birth_month"]),
+                birth_day=int(event.payload["birth_day"]),
+                timezone=str(event.payload["timezone"]),
+                wishes=wishes,
+                scheduled_for_utc=event.scheduled_for_utc,
+            )
+        except GatewayPermanentError as exc:
+            await self._repository.mark_capsule_delivery_result(
+                event.guild_id,
+                event.user_id,
+                occurrence_start_at_utc,
+                capsule_state="revealed_private",
+            )
+            await self._repository.complete_event_as_skipped(event.id, exc.code)
+            return
+        except GatewayRetryableError as exc:
+            await self._repository.reschedule_events(
+                [event.id],
+                now_utc + self._retry_delay,
+                exc.code,
+            )
+            return
+        if result.status == "sent":
+            await self._repository.mark_capsule_delivery_result(
+                event.guild_id,
+                event.user_id,
+                occurrence_start_at_utc,
+                capsule_state="posted_public",
+                message_id=result.message_id,
+            )
+            await self._repository.mark_events_completed(
+                [event.id],
+                result.message_id,
+                note_code=result.note_code,
+            )
+            return
+        await self._repository.mark_capsule_delivery_result(
+            event.guild_id,
+            event.user_id,
+            occurrence_start_at_utc,
+            capsule_state="revealed_private",
+        )
+        await self._repository.complete_event_as_skipped(event.id, result.status)
 
 
 class BirthdaySchedulerRunner:

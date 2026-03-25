@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, metadata, version
 from typing import cast
@@ -10,7 +10,7 @@ from bdayblaze.discord.embed_budget import BudgetedEmbed
 
 def build_help_embed() -> discord.Embed:
     budget = BudgetedEmbed.create(
-        title="❓ Bdayblaze Help",
+        title="\u2753 Bdayblaze Help",
         description=(
             "Birthday tracking for Discord servers with privacy-first defaults and "
             "lightweight admin controls."
@@ -21,8 +21,8 @@ def build_help_embed() -> discord.Embed:
         name="Getting started",
         value=(
             "1. Save your date with `/birthday set`.\n"
-            "2. Server admins can open `/birthday setup`.\n"
-            "3. Open Celebration Studio with `/birthday studio`.\n"
+            "2. Server admins should open `/birthday studio`.\n"
+            "3. Use `/birthday setup` for routing, timezone, and safety rules.\n"
             "4. Use `/birthday test-message` before going live."
         ),
         inline=False,
@@ -38,16 +38,22 @@ def build_help_embed() -> discord.Embed:
             "`/birthday upcoming` Browse upcoming visible birthdays.\n"
             "`/birthday month` Browse birthdays for a month.\n"
             "`/birthday twins` Find members who share your month and day.\n"
-            "`/birthday list` Browse visible birthdays privately."
+            "`/birthday timeline` View your birthday profile and celebration timeline.\n"
+            "`/birthday wish add|list|remove` manage Birthday Capsule wishes.\n"
+            "`/birthday capsule preview` previews your capsule privately.\n"
+            "`/birthday quest status|check-in` tracks Birthday Quest progress.\n"
+            "`/birthday list` remains available for private browsing."
         ),
         inline=False,
     )
     budget.add_field(
         name="Admin commands",
         value=(
-            "`/birthday setup` Configure channel, timezone, and role behavior.\n"
-            "`/birthday studio` Open Celebration Studio.\n"
+            "`/birthday studio` is the main admin control surface.\n"
+            "`/birthday setup` handles channel, timezone, and role safety.\n"
             "`/birthday test-message` Send a private operator dry run.\n"
+            "`/birthday analytics` shows compact server analytics.\n"
+            "`/birthday surprise queue|fulfill` manages manual Nitro concierge records.\n"
             "`/birthday member ...` View, set, or remove another member's record.\n"
             "`/birthday export` and `/birthday import` manage CSV backup and restore.\n"
             "`/birthday anniversary ...` manages tracked join anniversaries.\n"
@@ -61,7 +67,7 @@ def build_help_embed() -> discord.Embed:
         value=(
             "Use `/birthday studio` -> Media Tools for shared image and thumbnail URLs.\n"
             "Direct media URLs can preview as embeds. Regular webpages are shown as webpage URLs "
-            "and should not be used as images.\n"
+            "and unsupported files are called out separately instead of being silently dropped.\n"
             "Studio also blocks obvious profanity, NSFW wording, slurs, harassment-style text, "
             "and unsafe URL patterns."
         ),
@@ -71,7 +77,8 @@ def build_help_embed() -> discord.Embed:
         name="Privacy",
         value=(
             "Birthdays stay scoped to the current server. Month/day is required, year is optional, "
-            "and deletion is always available with `/birthday remove`."
+            "and deletion is always available with `/birthday remove`. Birthday wishes stay "
+            "private until reveal, and Nitro concierge is manual admin fulfillment only."
         ),
         inline=False,
     )
@@ -84,7 +91,7 @@ def build_about_embed() -> discord.Embed:
     package_version = _package_version()
 
     budget = BudgetedEmbed.create(
-        title="ℹ️ About Bdayblaze",
+        title="\u2139\ufe0f About Bdayblaze",
         description=(
             "Bdayblaze helps Discord servers celebrate birthdays with server-scoped storage, "
             "private setup tools, and restart-safe scheduling."
@@ -150,3 +157,4 @@ def _repository_url() -> str | None:
         if label.strip().lower() == "repository" and url.strip():
             return url.strip()
     return None
+

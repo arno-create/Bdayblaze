@@ -7,6 +7,7 @@ import pytest
 from bdayblaze.domain.models import (
     AnnouncementBatch,
     AnnouncementBatchClaim,
+    BirthdayWish,
     CelebrationEvent,
     SchedulerMetrics,
 )
@@ -33,6 +34,8 @@ class FakeSchedulerRepository:
         self.single_skipped_calls: list[tuple[int, str]] = []
         self.rescheduled_calls: list[tuple[list[int], str]] = []
         self.batch_sent_calls: list[tuple[str, int | None]] = []
+        self.capsule_updates: list[tuple[int, int, datetime, str, int | None]] = []
+        self.revealed_wishes: list[BirthdayWish] = []
 
     async def requeue_stale_processing_events(self, stale_before_utc: datetime) -> int:
         return 0
@@ -118,6 +121,29 @@ class FakeSchedulerRepository:
     ) -> None:
         self.batch_sent_calls.append((batch_token, message_id))
 
+    async def list_birthday_wishes_for_target(
+        self,
+        guild_id: int,
+        target_user_id: int,
+        *,
+        state: str,
+        occurrence_start_at_utc: datetime | None = None,
+    ) -> list[BirthdayWish]:
+        return list(self.revealed_wishes)
+
+    async def mark_capsule_delivery_result(
+        self,
+        guild_id: int,
+        user_id: int,
+        occurrence_start_at_utc: datetime,
+        *,
+        capsule_state: str,
+        message_id: int | None = None,
+    ) -> None:
+        self.capsule_updates.append(
+            (guild_id, user_id, occurrence_start_at_utc, capsule_state, message_id)
+        )
+
 
 class FakeGateway:
     def __init__(
@@ -131,6 +157,7 @@ class FakeGateway:
         announcement_error: Exception | None = None,
         dm_error: Exception | None = None,
         recurring_error: Exception | None = None,
+        capsule_result: DirectSendResult | None = None,
     ) -> None:
         self.existing_message_id = existing_message_id
         self.role_status = role_status
@@ -140,9 +167,11 @@ class FakeGateway:
         self.announcement_error = announcement_error
         self.dm_error = dm_error
         self.recurring_error = recurring_error
+        self.capsule_result = capsule_result or DirectSendResult(status="sent", message_id=551)
         self.sent_batches: list[str] = []
         self.sent_anniversary_batches: list[str] = []
         self.history_checks: list[str] = []
+        self.sent_capsules: list[int] = []
 
     async def find_announcement_message(
         self,
@@ -178,6 +207,10 @@ class FakeGateway:
         if self.recurring_error is not None:
             raise self.recurring_error
         return self.recurring_result
+
+    async def send_capsule_reveal(self, **kwargs: object) -> DirectSendResult:
+        self.sent_capsules.append(int(kwargs["user_id"]))
+        return self.capsule_result
 
     async def add_birthday_role(self, **kwargs: object) -> str:
         return self.role_status
@@ -517,6 +550,61 @@ async def test_scheduler_marks_recurring_announcement_skipped_for_permanent_payl
     assert claimed == 1
     assert repository.single_skipped_calls == [(14, "invalid_announcement_payload")]
     assert repository.rescheduled_calls == []
+
+
+@pytest.mark.asyncio
+async def test_scheduler_posts_capsule_reveal_and_marks_public_delivery() -> None:
+    occurrence = datetime(2026, 3, 24, tzinfo=UTC)
+    event = _single_event(
+        15,
+        "capsule_reveal",
+        {
+            "channel_id": 123,
+            "celebration_mode": "quiet",
+            "announcement_theme": "classic",
+            "birth_month": 3,
+            "birth_day": 24,
+            "timezone": "UTC",
+            "occurrence_start_at_utc": occurrence.isoformat(),
+        },
+    )
+    repository = FakeSchedulerRepository(
+        pending_batches={"unused": [event]},
+        batch_claim=AnnouncementBatchClaim(status="claimed", batch=None),
+    )
+    repository.revealed_wishes = [
+        BirthdayWish(
+            id=1,
+            guild_id=1,
+            author_user_id=7,
+            target_user_id=42,
+            wish_text="Happy birthday",
+            link_url=None,
+            state="revealed",
+            celebration_occurrence_at_utc=occurrence,
+            revealed_at_utc=occurrence,
+            removed_at_utc=None,
+            moderated_by_user_id=None,
+            created_at_utc=occurrence,
+            updated_at_utc=occurrence,
+        )
+    ]
+    gateway = FakeGateway()
+    service = BirthdaySchedulerService(
+        repository,  # type: ignore[arg-type]
+        gateway,  # type: ignore[arg-type]
+        SchedulerMetrics(),
+        batch_size=25,
+        recovery_grace_hours=36,
+        scheduler_max_sleep_seconds=300,
+    )
+
+    claimed = await service.run_iteration(occurrence)
+
+    assert claimed == 1
+    assert gateway.sent_capsules == [42]
+    assert repository.completed_calls == [([15], 551, None)]
+    assert repository.capsule_updates == [(1, 42, occurrence, "posted_public", 551)]
 
 
 @pytest.mark.asyncio

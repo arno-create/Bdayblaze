@@ -79,6 +79,7 @@ class MediaUrlAssessment:
             "direct_media": "Likely direct media",
             "webpage": "Webpage URL",
             "invalid_or_unsafe": "Invalid or unsafe",
+            "unsupported_media": "Unsupported media URL",
             "needs_validation": "Needs validation",
         }[self.classification]
 
@@ -190,9 +191,9 @@ def assess_media_url(
         return MediaUrlAssessment(
             label=label,
             normalized_url=normalized,
-            classification="webpage",
+            classification="unsupported_media",
             summary=(
-                f"{label} URL points to a non-image file or webpage. "
+                f"{label} URL points to an unsupported file type. "
                 "Use a direct image, GIF, or WebP asset URL instead."
             ),
             direct_render_expected=False,

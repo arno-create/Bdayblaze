@@ -5,7 +5,11 @@ from typing import cast
 
 import discord
 
-from bdayblaze.discord.announcements import batch_footer, build_announcement_message
+from bdayblaze.discord.announcements import (
+    batch_footer,
+    build_announcement_message,
+    build_capsule_reveal_message,
+)
 from bdayblaze.discord.member_resolution import MemberResolutionError, resolve_guild_members
 from bdayblaze.domain.announcement_template import (
     AnnouncementRenderRecipient,
@@ -16,6 +20,7 @@ from bdayblaze.domain.models import (
     AnnouncementRecipientSnapshot,
     AnnouncementStudioPresentation,
     AnnouncementTheme,
+    BirthdayWish,
     GuildSettings,
 )
 from bdayblaze.logging import get_logger, redact_identifier
@@ -453,6 +458,87 @@ class DiscordSchedulerGateway:
             message = await channel.send(
                 embed=prepared.embed,
                 allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.Forbidden:
+            return DirectSendResult(status="announcement_forbidden")
+        except discord.HTTPException as exc:
+            failure = classify_discord_http_failure(exc, surface="announcement")
+            if failure.permanent:
+                raise GatewayPermanentError(failure.code) from exc
+            raise GatewayRetryableError(failure.code) from exc
+        return DirectSendResult(
+            status="sent",
+            message_id=message.id,
+            note_code="late_delivery" if _late_delivery(scheduled_for_utc) else None,
+        )
+
+    async def send_capsule_reveal(
+        self,
+        *,
+        guild_id: int,
+        channel_id: int,
+        user_id: int,
+        celebration_mode: str,
+        announcement_theme: str,
+        birth_month: int,
+        birth_day: int,
+        timezone: str,
+        wishes: list[BirthdayWish],
+        scheduled_for_utc: datetime,
+    ) -> DirectSendResult:
+        guild = self._bot.get_guild(guild_id)
+        if guild is None:
+            return DirectSendResult(status="guild_missing")
+        channel = guild.get_channel(channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            return DirectSendResult(status="announcement_channel_missing")
+        if not _channel_ready(channel):
+            return DirectSendResult(status="announcement_forbidden")
+        resolved = await self._resolve_members(
+            guild,
+            [user_id, *[wish.author_user_id for wish in wishes]],
+        )
+        resolved_by_user_id = {resolved_user_id: member for resolved_user_id, member in resolved}
+        birthday_member = resolved_by_user_id.get(user_id)
+        if birthday_member is None:
+            return DirectSendResult(status="member_missing")
+        prepared = build_capsule_reveal_message(
+            birthday_member=AnnouncementRenderRecipient(
+                mention=birthday_member.mention,
+                display_name=birthday_member.display_name,
+                username=birthday_member.name,
+                birth_month=birth_month,
+                birth_day=birth_day,
+                timezone=timezone,
+            ),
+            wishes=[
+                (
+                    (
+                        AnnouncementRenderRecipient(
+                            mention=author.mention,
+                            display_name=author.display_name,
+                            username=author.name,
+                            birth_month=birth_month,
+                            birth_day=birth_day,
+                            timezone=timezone,
+                        )
+                        if author is not None
+                        else None
+                    ),
+                    wish,
+                )
+                for wish in wishes
+                for author in [resolved_by_user_id.get(wish.author_user_id)]
+            ],
+            celebration_mode=celebration_mode,  # type: ignore[arg-type]
+            announcement_theme=announcement_theme,  # type: ignore[arg-type]
+            late_delivery=_late_delivery(scheduled_for_utc),
+        )
+        try:
+            message = await channel.send(
+                content=prepared.content,
+                embeds=list(prepared.embeds),
+                allowed_mentions=discord.AllowedMentions(users=True),
             )
         except discord.Forbidden:
             return DirectSendResult(status="announcement_forbidden")

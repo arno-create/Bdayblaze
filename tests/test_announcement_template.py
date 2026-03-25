@@ -190,7 +190,7 @@ def test_validate_media_url_rejects_missing_file_path() -> None:
 
 
 def test_validate_media_url_rejects_non_image_suffixes() -> None:
-    with pytest.raises(ValueError, match="non-image file"):
+    with pytest.raises(ValueError, match="unsupported file type"):
         validate_media_url("https://cdn.example.com/invite.pdf", label="Announcement image")
 
 

@@ -5,14 +5,12 @@ from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from typing import Final, Literal
 
+from bdayblaze.domain.birthday_logic import LATE_CELEBRATION_NOTE
+from bdayblaze.domain.media_validation import validate_direct_media_url
 from bdayblaze.domain.models import (
     AnnouncementKind,
     AnnouncementStudioPresentation,
     CelebrationMode,
-)
-from bdayblaze.domain.media_validation import (
-    MAX_MEDIA_URL_LENGTH as MAX_URL_LENGTH,
-    validate_direct_media_url,
 )
 
 MAX_TEMPLATE_LENGTH: Final = 1200
@@ -291,7 +289,7 @@ def _build_placeholder_values(*, context: AnnouncementRenderContext) -> dict[str
         else birthday_date
     )
     delivery_note = (
-        "We missed the exact moment, but not the celebration." if context.late_delivery else ""
+        LATE_CELEBRATION_NOTE if context.late_delivery else ""
     )
     event_kind_label = {
         "birthday_announcement": "birthday",

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import discord
 
-from bdayblaze.discord.embed_budget import BudgetedEmbed
+from bdayblaze.discord.embed_budget import BudgetedEmbed, truncate_text
 from bdayblaze.domain.announcement_template import (
     DEFAULT_ANNOUNCEMENT_TEMPLATE,
     AnnouncementRenderContext,
@@ -18,10 +18,12 @@ from bdayblaze.domain.announcement_theme import (
     announcement_theme_footer_label,
     announcement_theme_title,
 )
+from bdayblaze.domain.birthday_logic import LATE_CELEBRATION_NOTE
 from bdayblaze.domain.models import (
     AnnouncementKind,
     AnnouncementStudioPresentation,
     AnnouncementTheme,
+    BirthdayWish,
     CelebrationMode,
 )
 
@@ -30,6 +32,12 @@ from bdayblaze.domain.models import (
 class PreparedAnnouncement:
     content: str
     embed: discord.Embed
+
+
+@dataclass(slots=True, frozen=True)
+class PreparedCapsuleReveal:
+    content: str
+    embeds: tuple[discord.Embed, ...]
 
 
 def build_announcement_message(
@@ -69,7 +77,7 @@ def build_announcement_message(
             else default_template_for_kind(kind),
             context=context,
         )
-    recovery_note = "We missed the exact moment, but not the celebration."
+    recovery_note = LATE_CELEBRATION_NOTE
     if late_delivery and recovery_note not in description:
         description = f"{recovery_note}\n\n{description}".strip()
 
@@ -113,6 +121,75 @@ def build_announcement_message(
     return PreparedAnnouncement(
         content="" if mention_suppressed else mentions,
         embed=budget.build(),
+    )
+
+
+def build_capsule_reveal_message(
+    *,
+    birthday_member: AnnouncementRenderRecipient,
+    wishes: list[tuple[AnnouncementRenderRecipient | None, BirthdayWish]],
+    celebration_mode: CelebrationMode,
+    announcement_theme: AnnouncementTheme,
+    late_delivery: bool = False,
+) -> PreparedCapsuleReveal:
+    visible_wishes = wishes[:12]
+    overflow_count = max(0, len(wishes) - len(visible_wishes))
+    embeds: list[discord.Embed] = []
+    for index in range(0, len(visible_wishes), 6):
+        chunk = visible_wishes[index : index + 6]
+        intro = (
+            f"{birthday_member.display_name}'s Birthday Capsule is open."
+            "\nPrivate wishes queued ahead of the day are unlocking now."
+        )
+        if late_delivery:
+            intro = f"{LATE_CELEBRATION_NOTE}\n\n{intro}"
+        budget = BudgetedEmbed.create(
+            title=(
+                f"{birthday_member.display_name}'s Birthday Capsule"
+                if index == 0
+                else "Birthday Capsule"
+            ),
+            description=intro if index == 0 else "More unlocked wishes:",
+            color=discord.Color(
+                announcement_theme_color_value(
+                    announcement_theme,
+                    celebration_mode=celebration_mode,
+                    accent_override=None,
+                )
+            ),
+        )
+        for author, wish in chunk:
+            author_name = author.display_name if author is not None else "A friend"
+            lines = [truncate_text(wish.wish_text, 700)]
+            if wish.link_url is not None:
+                lines.append(f"Link: {wish.link_url}")
+            budget.add_field(name=f"From {author_name}", value="\n".join(lines), inline=False)
+        if overflow_count and index + 6 >= len(visible_wishes):
+            budget.add_field(
+                name="More unlocked wishes",
+                value=f"+{overflow_count} more unlocked in `/birthday timeline`.",
+                inline=False,
+            )
+        budget.set_footer(
+            f"Bdayblaze Birthday Capsule | {announcement_theme_footer_label(announcement_theme)}"
+        )
+        embeds.append(budget.build())
+    if not embeds:
+        budget = BudgetedEmbed.create(
+            title=f"{birthday_member.display_name}'s Birthday Capsule",
+            description="No wishes were ready to unlock.",
+            color=discord.Color(
+                announcement_theme_color_value(
+                    announcement_theme,
+                    celebration_mode=celebration_mode,
+                    accent_override=None,
+                )
+            ),
+        )
+        embeds.append(budget.build())
+    return PreparedCapsuleReveal(
+        content=birthday_member.mention,
+        embeds=tuple(embeds[:2]),
     )
 
 

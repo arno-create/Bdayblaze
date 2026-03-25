@@ -8,6 +8,16 @@ CelebrationMode = Literal["quiet", "party"]
 AnnouncementTheme = Literal["classic", "festive", "minimal", "cute", "elegant", "gaming"]
 ProfileVisibility = Literal["private", "server_visible"]
 CelebrationKind = Literal["custom", "server_anniversary"]
+WishState = Literal["queued", "revealed", "removed", "moderated"]
+CapsuleState = Literal[
+    "disabled",
+    "no_wishes",
+    "revealed_private",
+    "pending_public",
+    "posted_public",
+]
+SurpriseRewardType = Literal["featured", "badge", "custom_note", "nitro_concierge"]
+NitroFulfillmentStatus = Literal["pending", "delivered", "not_delivered"]
 AnnouncementKind = Literal[
     "birthday_announcement",
     "birthday_dm",
@@ -20,6 +30,7 @@ EventKind = Literal[
     "birthday_dm",
     "anniversary_announcement",
     "recurring_announcement",
+    "capsule_reveal",
     "role_start",
     "role_end",
 ]
@@ -124,6 +135,29 @@ class GuildSettings:
 
 
 @dataclass(slots=True, frozen=True)
+class GuildExperienceSettings:
+    guild_id: int
+    capsules_enabled: bool
+    quests_enabled: bool
+    quest_wish_target: int
+    quest_checkin_enabled: bool
+    surprises_enabled: bool
+    created_at_utc: datetime | None = None
+    updated_at_utc: datetime | None = None
+
+    @classmethod
+    def default(cls, guild_id: int) -> GuildExperienceSettings:
+        return cls(
+            guild_id=guild_id,
+            capsules_enabled=False,
+            quests_enabled=False,
+            quest_wish_target=3,
+            quest_checkin_enabled=True,
+            surprises_enabled=False,
+        )
+
+
+@dataclass(slots=True, frozen=True)
 class MemberBirthday:
     guild_id: int
     user_id: int
@@ -155,6 +189,64 @@ class TrackedAnniversary:
     source: str
     created_at_utc: datetime | None = None
     updated_at_utc: datetime | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class BirthdayWish:
+    id: int
+    guild_id: int
+    author_user_id: int
+    target_user_id: int
+    wish_text: str
+    link_url: str | None
+    state: WishState
+    celebration_occurrence_at_utc: datetime | None
+    revealed_at_utc: datetime | None
+    removed_at_utc: datetime | None
+    moderated_by_user_id: int | None
+    created_at_utc: datetime
+    updated_at_utc: datetime
+
+
+@dataclass(slots=True, frozen=True)
+class GuildSurpriseReward:
+    id: int | None
+    guild_id: int
+    reward_type: SurpriseRewardType
+    label: str
+    weight: int
+    enabled: bool
+    note_text: str | None
+    created_at_utc: datetime | None = None
+    updated_at_utc: datetime | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class BirthdayCelebration:
+    id: int
+    guild_id: int
+    user_id: int
+    occurrence_start_at_utc: datetime
+    late_delivery: bool
+    capsule_state: CapsuleState
+    capsule_message_id: int | None
+    revealed_wish_count: int
+    quest_enabled: bool
+    quest_wish_target: int
+    quest_wish_goal_met: bool
+    quest_checkin_required: bool
+    quest_checked_in_at_utc: datetime | None
+    quest_completed_at_utc: datetime | None
+    featured_birthday: bool
+    surprise_reward_type: SurpriseRewardType | None
+    surprise_reward_label: str | None
+    surprise_note_text: str | None
+    surprise_selected_at_utc: datetime | None
+    nitro_fulfillment_status: NitroFulfillmentStatus | None
+    nitro_fulfilled_by_user_id: int | None
+    nitro_fulfilled_at_utc: datetime | None
+    created_at_utc: datetime
+    updated_at_utc: datetime
 
 
 @dataclass(slots=True, frozen=True)
@@ -337,3 +429,70 @@ class RuntimeStatus:
     scheduler_recovery_failed_at_utc: datetime | None = None
     unexpected_shutdown_at_utc: datetime | None = None
     startup_phase: str = "starting"
+
+
+@dataclass(slots=True, frozen=True)
+class TimelineEntry:
+    celebration_id: int
+    occurrence_start_at_utc: datetime
+    late_delivery: bool
+    revealed_wish_count: int
+    quest_completed: bool
+    featured_birthday: bool
+    surprise_reward_type: SurpriseRewardType | None
+    surprise_reward_label: str | None
+    nitro_fulfillment_status: NitroFulfillmentStatus | None
+
+
+@dataclass(slots=True, frozen=True)
+class BirthdayTimeline:
+    birthday: MemberBirthday
+    celebration_count: int
+    celebration_streak: int
+    wishes_received_count: int
+    quest_badge_count: int
+    surprise_count: int
+    featured_count: int
+    next_countdown_at_utc: datetime
+    same_day_count: int
+    month_total_count: int
+    zodiac_label: str | None
+    entries: tuple[TimelineEntry, ...]
+
+
+@dataclass(slots=True, frozen=True)
+class BirthdayQuestStatus:
+    celebration: BirthdayCelebration | None
+    settings: GuildExperienceSettings
+    can_check_in: bool
+
+
+@dataclass(slots=True, frozen=True)
+class NitroConciergeEntry:
+    celebration_id: int
+    user_id: int
+    occurrence_start_at_utc: datetime
+    reward_label: str
+    note_text: str | None
+    fulfillment_status: NitroFulfillmentStatus
+
+
+@dataclass(slots=True, frozen=True)
+class GuildAnalytics:
+    birthdays_total: int
+    birthdays_private: int
+    birthdays_visible: int
+    wishes_queued: int
+    wishes_revealed: int
+    celebrations_total: int
+    quest_completions: int
+    surprises_total: int
+    nitro_pending: int
+    nitro_delivered: int
+    nitro_not_delivered: int
+    anniversaries_tracked: int
+    recurring_events_total: int
+    most_active_month: int | None
+    most_active_month_count: int
+    recent_late_recoveries: int
+    recent_scheduler_issues: int

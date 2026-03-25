@@ -5,7 +5,8 @@ Bdayblaze is a production-minded Discord birthday bot focused on privacy-first s
 ## Highlights
 
 - Guild-scoped birthday storage with optional birth year, per-user timezone override, and server-scoped visibility.
-- Slash-first UX with private `/birthday setup`, `/birthday studio`, and `/birthday test-message` flows.
+- Slash-first UX with private `/birthday studio`, `/birthday setup`, and `/birthday test-message` flows.
+- Birthday Capsules, Birthday Quests, Birthday Surprises, and Timeline profiles without extra workers.
 - Restart-safe scheduler with durable event records, bounded stale-send recovery, and no Message Content intent.
 - Celebration Studio with strict placeholder validation, guided media tools, compact previews, and explicit reset paths.
 - Deterministic abuse protection for saved Studio/admin text plus practical unsafe-URL blocking.
@@ -84,14 +85,24 @@ src/bdayblaze/
 - `/birthday upcoming`
 - `/birthday month`
 - `/birthday twins`
+- `/birthday timeline`
+- `/birthday wish add`
+- `/birthday wish list`
+- `/birthday wish remove`
+- `/birthday capsule preview`
+- `/birthday quest status`
+- `/birthday quest check-in`
 - `/birthday list`
 - `/birthday privacy`
 
 ### Admin commands
 
-- `/birthday setup`
 - `/birthday studio`
+- `/birthday setup`
 - `/birthday test-message`
+- `/birthday analytics`
+- `/birthday surprise queue`
+- `/birthday surprise fulfill`
 - `/birthday export`
 - `/birthday import`
 - `/birthday member view`
@@ -115,6 +126,9 @@ Studio covers:
 - birthday DMs
 - member anniversaries
 - server anniversary
+- Birthday Capsules
+- Birthday Quests
+- Birthday Surprises
 - yearly recurring events overview
 
 ### Media Tools
@@ -125,6 +139,7 @@ Accepted states:
 
 - `Likely direct media`: Discord should usually render it as an embed image.
 - `Webpage URL`: the URL resolves to a page, not a direct image/GIF/WebP asset.
+- `Unsupported media URL`: the URL points to a file type Discord will not render as embed media.
 - `Needs validation`: the URL looks safe but must be probed before saving.
 - `Invalid or unsafe`: the URL is blocked locally.
 
@@ -168,6 +183,9 @@ Important behavior:
 
 - Birthday records are stored per guild membership, never globally across servers.
 - Birth year is optional and hidden by default.
+- Birthday Capsule wishes are stored per guild, revealed on the birthday, and not logged raw.
+- Timeline history stores compact celebration metadata, not large text snapshots.
+- Nitro concierge is manual admin fulfillment only; the bot never buys or sends Nitro.
 - Visibility is server-scoped:
   - `private`: visible to the member and admins only
   - `server_visible`: visible in normal browse commands for that server
@@ -258,6 +276,12 @@ The code can expose clearer startup state, but it cannot force Render to auto-de
   - tracked member anniversaries
   - recurring annual celebrations
 - Migration `005_server_anniversary_kind.sql` adds first-class server-anniversary metadata on recurring celebrations.
+- Migration `007_signature_feature_wave.sql` adds:
+  - `guild_experience_settings`
+  - `birthday_wishes`
+  - `birthday_celebrations`
+  - `guild_surprise_rewards`
+  - `capsule_reveal` scheduler events
 - Migration `006_studio_audit_channel_and_runtime_notes.sql` adds nullable `studio_audit_channel_id` to `guild_settings`.
 
 ## Testing and checks

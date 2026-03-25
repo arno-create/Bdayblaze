@@ -197,7 +197,7 @@ async def test_settings_service_rejects_obvious_non_image_media_url() -> None:
     repository = FakeSettingsRepository(GuildSettings.default(1))
     service = SettingsService(repository)  # type: ignore[arg-type]
 
-    with pytest.raises(ValidationError, match="non-image file"):
+    with pytest.raises(ValidationError, match="unsupported file type"):
         await service.update_settings(
             FakeGuild(1),  # type: ignore[arg-type]
             announcement_thumbnail_url="https://example.com/file.zip",

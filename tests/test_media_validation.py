@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import asyncio
-
 import aiohttp
 import pytest
 
-from bdayblaze.domain.media_validation import assess_media_url
 from bdayblaze.domain.media_validation import (
+    assess_media_url,
     mark_validated_direct_media_url,
     strip_validated_direct_media_marker,
 )
@@ -63,6 +61,16 @@ def test_assess_media_url_rejects_webpage_suffix() -> None:
 
     assert assessment is not None
     assert assessment.classification == "webpage"
+
+
+def test_assess_media_url_flags_unsupported_media_suffix() -> None:
+    assessment = assess_media_url(
+        "https://cdn.example.com/archive/video.mp4",
+        label="Announcement image",
+    )
+
+    assert assessment is not None
+    assert assessment.classification == "unsupported_media"
 
 
 def test_assess_media_url_rejects_private_host_and_unsafe_tokens() -> None:
@@ -238,7 +246,7 @@ async def test_probe_media_url_returns_validation_unavailable_on_timeout(
             return False
 
         def request(self, *args, **kwargs) -> object:
-            raise asyncio.TimeoutError
+            raise TimeoutError
 
     monkeypatch.setattr(aiohttp, "ClientSession", lambda *args, **kwargs: _TimeoutSession())
 

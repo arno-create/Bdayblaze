@@ -9,10 +9,11 @@ from bdayblaze.discord.ui.setup import (
     ServerAnniversaryChannelSelect,
     ServerAnniversaryControlView,
     ServerAnniversaryDateSourceSelect,
+    SetupView,
     build_media_tools_embed,
     build_message_template_embed,
 )
-from bdayblaze.domain.models import GuildSettings, RecurringCelebration
+from bdayblaze.domain.models import GuildExperienceSettings, GuildSettings, RecurringCelebration
 from bdayblaze.services.media_validation_service import MediaProbeResult
 
 
@@ -57,6 +58,32 @@ def test_message_template_view_configures_server_anniversary_buttons() -> None:
     assert view.preview_current.label == "Preview server anniversary"
     assert view.reset_current.label == "Reset to guild date"
     assert view.reset_media.label == "Media tools"
+
+
+def test_setup_view_removes_refresh_and_ignore_bots_buttons() -> None:
+    view = SetupView(
+        settings_service=object(),  # type: ignore[arg-type]
+        settings=GuildSettings.default(1),
+        owner_id=42,
+        guild=_guild(),  # type: ignore[arg-type]
+        birthday_service=object(),  # type: ignore[arg-type]
+    )
+
+    labels = [getattr(child, "label", "") for child in view.children]
+    assert "Refresh" not in labels
+    assert "Toggle ignore bots" not in labels
+
+
+def test_message_template_embed_supports_capsules_section() -> None:
+    embed = build_message_template_embed(
+        GuildSettings.default(1),
+        section="capsules",
+        guild=_guild(),  # type: ignore[arg-type]
+        experience_settings=GuildExperienceSettings.default(1),
+    )
+
+    values = "\n".join(field.value for field in embed.fields)
+    assert "One queued wish per author-to-target pair" in values
 
 
 def test_server_anniversary_control_view_uses_native_controls() -> None:

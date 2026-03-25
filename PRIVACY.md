@@ -10,6 +10,8 @@
   - optional timezone override
   - server-scoped visibility choice
 - Join anniversaries are tracked only when the bot has a reliable join timestamp through birthday/admin flows or explicit anniversary sync.
+- Birthday Capsule wishes are stored per guild only and reveal on that guild's birthday celebration day.
+- Timeline rows store compact celebration metadata such as counts, quest completion, and reward state.
 - No message content is collected.
 - No activity or inactivity tracking is performed in this pass.
 
@@ -24,6 +26,7 @@
 
 - Do not log raw birth dates or birth years.
 - Do not log raw custom message bodies or templates.
+- Do not log raw Birthday Capsule wish text or raw wish links.
 - Do not log raw blocked Studio/admin payloads.
 - Prefer internal IDs, status codes, and aggregate diagnostics over sensitive content.
 
@@ -38,6 +41,7 @@
 
 - Media URLs must use HTTPS and a public host.
 - The bot distinguishes direct-media URLs from normal webpages.
+- Unsupported media links are surfaced explicitly instead of being silently discarded.
 - Signed URLs, query-string URLs, and extensionless object-storage URLs may be accepted only when Media Tools validation succeeds.
 - Admin-triggered media validation uses a short, bounded outbound probe.
 - The bot does not continuously fetch saved media in the background.
@@ -72,8 +76,11 @@ This is a deterministic rules layer, not full moderation. It is meant to catch o
 
 - `/birthday view` exposes only the caller's own stored record unless an admin uses member-management commands.
 - `/birthday remove` deletes the caller's record for the current server.
+- `/birthday timeline` remains guild-scoped and visibility-aware.
+- `/birthday wish add|list|remove` only affects the current server and never shares wishes cross-server.
 - `/birthday today`, `/birthday next`, `/birthday upcoming`, `/birthday month`, `/birthday twins`, and `/birthday list` remain guild-scoped and visibility-aware.
 - `/birthday member ...`, `/birthday import`, `/birthday export`, `/birthday setup`, `/birthday studio`, `/birthday health`, and `/birthday test-message` are admin-oriented and private to the admin using them.
+- `/birthday analytics` and `/birthday surprise queue|fulfill` are admin-only and private to the admin using them.
 - `/birthday test-message` is preview-only and never posts a live celebration.
 
 ## Import and export
@@ -107,6 +114,7 @@ This is a deterministic rules layer, not full moderation. It is meant to catch o
 
 - over-collection of personal data
 - birthday visibility leaking outside intended guild scope
+- unrevealed birthday wishes leaking before the celebration day
 - duplicate or missed celebrations after restarts
 - stale channels or roles causing noisy failures
 - sensitive content leaking through logs, diagnostics, or exports
@@ -116,6 +124,7 @@ This is a deterministic rules layer, not full moderation. It is meant to catch o
 - least-privilege intents and permissions
 - guild-scoped storage with privacy-first defaults
 - optional birth year and server-scoped visibility
+- private-by-default Birthday Capsules with per-guild moderation paths
 - durable event queue and persisted batch state for recovery
 - bounded stale-send recovery
 - centralized permission diagnostics and health reporting
@@ -134,4 +143,6 @@ This is a deterministic rules layer, not full moderation. It is meant to catch o
 - Leap-day birthdays celebrate on February 28 in non-leap years.
 - If a member changes timezone during an active celebration, role-removal timing is preserved and the new timezone applies to future occurrences.
 - If a member leaves the server, announcements and DMs are skipped safely and role cleanup is attempted when possible.
+- If a stored birthday record is deleted, that member's celebration history is removed and queued wishes targeting them are removed.
+- Nitro concierge winners are records only. Delivery confirmation remains manual and auditable by admins.
 - If a crash happens after a send but before send state is persisted, the bot performs only a small bounded recovery scan. If the original message is gone or outside that window, one duplicate announcement can still occur.
