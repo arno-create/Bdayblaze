@@ -11,6 +11,7 @@
   - server-scoped visibility choice
 - Join anniversaries are tracked only when the bot has a reliable join timestamp through birthday/admin flows or explicit anniversary sync.
 - Birthday Capsule wishes are stored per guild only and reveal on that guild's birthday celebration day.
+- Birthday Quest reactions store only compact per-celebration reaction totals tied to the shared birthday announcement message.
 - Timeline rows store compact celebration metadata such as counts, quest completion, and reward state.
 - No message content is collected.
 - No activity or inactivity tracking is performed in this pass.
@@ -78,6 +79,7 @@ This is a deterministic rules layer, not full moderation. It is meant to catch o
 - `/birthday remove` deletes the caller's record for the current server.
 - `/birthday timeline` remains guild-scoped and visibility-aware.
 - `/birthday wish add|list|remove` only affects the current server and never shares wishes cross-server.
+- `/birthday quest status|check-in` remains guild-scoped and uses only celebration totals plus optional check-in state.
 - `/birthday today`, `/birthday next`, `/birthday upcoming`, `/birthday month`, `/birthday twins`, and `/birthday list` remain guild-scoped and visibility-aware.
 - `/birthday member ...`, `/birthday import`, `/birthday export`, `/birthday setup`, `/birthday studio`, `/birthday health`, and `/birthday test-message` are admin-oriented and private to the admin using them.
 - `/birthday analytics` and `/birthday surprise queue|fulfill` are admin-only and private to the admin using them.
@@ -115,6 +117,7 @@ This is a deterministic rules layer, not full moderation. It is meant to catch o
 - over-collection of personal data
 - birthday visibility leaking outside intended guild scope
 - unrevealed birthday wishes leaking before the celebration day
+- reaction quest state leaking more than compact celebration totals
 - duplicate or missed celebrations after restarts
 - stale channels or roles causing noisy failures
 - sensitive content leaking through logs, diagnostics, or exports
@@ -125,6 +128,7 @@ This is a deterministic rules layer, not full moderation. It is meant to catch o
 - guild-scoped storage with privacy-first defaults
 - optional birth year and server-scoped visibility
 - private-by-default Birthday Capsules with per-guild moderation paths
+- shared-post reaction quests with debounced refresh and no per-reactor storage
 - durable event queue and persisted batch state for recovery
 - bounded stale-send recovery
 - centralized permission diagnostics and health reporting
@@ -145,4 +149,5 @@ This is a deterministic rules layer, not full moderation. It is meant to catch o
 - If a member leaves the server, announcements and DMs are skipped safely and role cleanup is attempted when possible.
 - If a stored birthday record is deleted, that member's celebration history is removed and queued wishes targeting them are removed.
 - Nitro concierge winners are records only. Delivery confirmation remains manual and auditable by admins.
+- AI-generated cards/cakes are intentionally not part of this release candidate.
 - If a crash happens after a send but before send state is persisted, the bot performs only a small bounded recovery scan. If the original message is gone or outside that window, one duplicate announcement can still occur.

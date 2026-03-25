@@ -11,7 +11,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bdayblaze.discord.announcements import build_announcement_message
-from bdayblaze.discord.embed_budget import BudgetedEmbed
+from bdayblaze.discord.embed_budget import BudgetedEmbed, truncate_text
 from bdayblaze.discord.member_resolution import resolve_guild_members
 from bdayblaze.discord.studio_audit import StudioAuditLogger
 from bdayblaze.discord.ui.setup import (
@@ -26,7 +26,7 @@ from bdayblaze.domain.announcement_template import (
     preview_context_for_kind,
 )
 from bdayblaze.domain.announcement_theme import announcement_theme_label
-from bdayblaze.domain.birthday_logic import is_birthday_active_now
+from bdayblaze.domain.birthday_logic import LATE_CELEBRATION_NOTE, is_birthday_active_now
 from bdayblaze.domain.media_validation import assess_media_url
 from bdayblaze.domain.models import (
     BirthdayCelebration,
@@ -464,7 +464,11 @@ class BirthdayGroup(
         )
         embed.add_field(name="Wish", value=wish.wish_text, inline=False)
         if wish.link_url is not None:
-            embed.add_field(name="Link", value=wish.link_url, inline=False)
+            embed.add_field(
+                name="Link",
+                value=_format_wish_link_value(wish.link_url),
+                inline=False,
+            )
         await interaction.followup.send(
             embed=embed,
             ephemeral=True,
@@ -579,6 +583,14 @@ class BirthdayGroup(
             interaction.guild.id,
             interaction.user.id,
         )
+        if await _refresh_live_quest_progress(
+            interaction,
+            status.celebration,
+        ):
+            status = await self._experience_service.get_quest_status(
+                interaction.guild.id,
+                interaction.user.id,
+            )
         await interaction.followup.send(
             embed=_build_quest_status_embed(status),
             ephemeral=True,
@@ -597,6 +609,16 @@ class BirthdayGroup(
             interaction.guild.id,
             interaction.user.id,
         )
+        if await _refresh_live_quest_progress(
+            interaction,
+            status.celebration,
+        ):
+            status = await self._experience_service.get_quest_status(
+                interaction.guild.id,
+                interaction.user.id,
+            )
+            if status.celebration is not None:
+                celebration = status.celebration
         await interaction.followup.send(
             embed=_build_quest_status_embed(status, celebration_override=celebration),
             ephemeral=True,
@@ -624,6 +646,16 @@ class BirthdayGroup(
             viewer_user_id=interaction.user.id,
             admin_override=_is_manage_guild(interaction),
         )
+        if await _refresh_live_quest_progress(
+            interaction,
+            timeline.active_celebration,
+        ):
+            timeline = await self._experience_service.build_timeline(
+                guild_id=interaction.guild.id,
+                target_user_id=target.id,
+                viewer_user_id=interaction.user.id,
+                admin_override=_is_manage_guild(interaction),
+            )
         settings = await self._settings_service.get_settings(interaction.guild.id)
         await interaction.followup.send(
             embed=_build_timeline_embed(
@@ -2124,6 +2156,35 @@ def _set_resolution_footer(
         embed.set_footer(text=" ".join(notes))
 
 
+def _format_wish_link_line(link_url: str) -> str:
+    return f"Link: {_format_wish_link_value(link_url)}"
+
+
+def _format_wish_link_value(link_url: str) -> str:
+    assessment = assess_media_url(link_url, label="Wish link")
+    display_url = truncate_text(link_url, 120)
+    if assessment is None:
+        return display_url
+    labels = {
+        "direct_media": "Likely direct media",
+        "webpage": "Safe webpage link",
+        "unsupported_media": "Safe link, unsupported inline media",
+        "needs_validation": "Safe link, media type unconfirmed",
+        "invalid_or_unsafe": "Stored link needs review",
+    }
+    return (
+        f"{labels.get(assessment.classification, 'Link')}: {display_url}\n"
+        f"Note: {_short_wish_link_summary(assessment.summary)}"
+    )
+
+
+def _short_wish_link_summary(summary: str) -> str:
+    prefix = "Wish link URL "
+    if summary.startswith(prefix):
+        return summary[len(prefix) :]
+    return summary
+
+
 def _build_wish_list_embed(
     wishes: list[BirthdayWish],
     members_by_id: dict[int, discord.Member],
@@ -2139,7 +2200,7 @@ def _build_wish_list_embed(
         target_label = target.mention if target is not None else f"`{wish.target_user_id}`"
         line = f"{target_label} - {wish.wish_text}"
         if wish.link_url is not None:
-            line = f"{line}\nLink: {wish.link_url}"
+            line = f"{line}\n{_format_wish_link_line(wish.link_url)}"
         lines.append(line)
     embed.add_line_fields("Queued wishes", lines, inline=False)
     if len(wishes) > 10:
@@ -2168,7 +2229,7 @@ def _build_capsule_preview_embed(
             author_name = author.display_name if author is not None else "A friend"
             line = f"{author_name} - {wish.wish_text}"
             if wish.link_url is not None:
-                line = f"{line}\nLink: {wish.link_url}"
+                line = f"{line}\n{_format_wish_link_line(wish.link_url)}"
             lines.append(line)
         embed.add_line_fields(
             "Unlocked wishes",
@@ -2186,7 +2247,7 @@ def _build_capsule_preview_embed(
             author_name = author.display_name if author is not None else f"`{wish.author_user_id}`"
             line = f"{author_name} - {wish.wish_text}"
             if wish.link_url is not None:
-                line = f"{line}\nLink: {wish.link_url}"
+                line = f"{line}\n{_format_wish_link_line(wish.link_url)}"
             lines.append(line)
         embed.add_line_fields(
             "Queued wishes",
@@ -2226,6 +2287,11 @@ def _build_quest_status_embed(
         inline=True,
     )
     embed.add_field(
+        name="Reaction target",
+        value=str(settings.quest_reaction_target),
+        inline=True,
+    )
+    embed.add_field(
         name="Check-in",
         value="Required" if settings.quest_checkin_enabled else "Not required",
         inline=True,
@@ -2240,19 +2306,39 @@ def _build_quest_status_embed(
     embed.add_line_fields(
         "Current progress",
         (
-            f"Wishes unlocked: {celebration.revealed_wish_count}/{celebration.quest_wish_target}",
-            f"Wish goal met: {'Yes' if celebration.quest_wish_goal_met else 'No'}",
             (
-                "Check-in complete"
-                if celebration.quest_checked_in_at_utc is not None
-                else "Check in with `/birthday quest check-in`"
-                if celebration.quest_checkin_required
-                else "No check-in needed"
+                f"\N{WRAPPED PRESENT} Wishes unlocked: "
+                f"{celebration.revealed_wish_count}/{celebration.quest_wish_target}"
             ),
-            f"Quest badge earned: {'Yes' if celebration.quest_completed_at_utc else 'No'}",
+            (
+                f"\N{PARTY POPPER} Reactions on birthday post: "
+                f"{celebration.quest_reaction_count}/{celebration.quest_reaction_target}"
+                if celebration.quest_reaction_target > 0
+                else (
+                    "\N{PARTY POPPER} Reactions on birthday post: "
+                    "not required for this celebration"
+                )
+            ),
+            (
+                "\N{ROUND PUSHPIN} Check-in complete"
+                if celebration.quest_checked_in_at_utc is not None
+                else "\N{ROUND PUSHPIN} Check in with `/birthday quest check-in`"
+                if celebration.quest_checkin_required
+                else "\N{ROUND PUSHPIN} No check-in needed"
+            ),
+            (
+                f"\N{CHEQUERED FLAG} Quest badge earned: "
+                f"{'Yes' if celebration.quest_completed_at_utc else 'No'}"
+            ),
         ),
         inline=False,
     )
+    if celebration.late_delivery:
+        embed.add_field(
+            name="Recovery note",
+            value=LATE_CELEBRATION_NOTE,
+            inline=False,
+        )
     return embed.build()
 
 
@@ -2286,6 +2372,60 @@ def _build_timeline_embed(
         ),
         inline=False,
     )
+    active = timeline.active_celebration
+    if active is not None:
+        current_lines = [
+            "\N{BIRTHDAY CAKE} Status: celebrating right now"
+            if active_now
+            else (
+                f"\N{BIRTHDAY CAKE} Countdown: "
+                f"{discord.utils.format_dt(timeline.next_countdown_at_utc, 'R')}"
+            ),
+            f"\N{PACKAGE} Capsule: {_capsule_state_label(active)}",
+            (
+                f"\N{WRAPPED PRESENT} Quest wishes: "
+                f"{active.revealed_wish_count}/{active.quest_wish_target}"
+                if active.quest_enabled
+                else "\N{WRAPPED PRESENT} Quest wishes: quest disabled for this celebration"
+            ),
+        ]
+        if active.quest_enabled:
+            current_lines.append(
+                (
+                    f"\N{PARTY POPPER} Quest reactions: "
+                    f"{active.quest_reaction_count}/{active.quest_reaction_target}"
+                    if active.quest_reaction_target > 0
+                    else "\N{PARTY POPPER} Quest reactions: public reaction goal unavailable"
+                )
+            )
+            current_lines.append(
+                (
+                    "\N{ROUND PUSHPIN} Check-in: complete"
+                    if active.quest_checked_in_at_utc is not None
+                    else "\N{ROUND PUSHPIN} Check-in: required"
+                    if active.quest_checkin_required
+                    else "\N{ROUND PUSHPIN} Check-in: not required"
+                )
+            )
+            current_lines.append(
+                "\N{CHEQUERED FLAG} Quest badge: earned"
+                if active.quest_completed_at_utc is not None
+                else "\N{CHEQUERED FLAG} Quest badge: in progress"
+            )
+        if active.surprise_reward_label is not None:
+            current_lines.append(f"\N{GIFT} Birthday Surprise: {active.surprise_reward_label}")
+        if active.nitro_fulfillment_status == "pending":
+            current_lines.append(
+                "\N{SHIELD} Nitro concierge: awaiting manual admin fulfillment"
+            )
+        elif active.nitro_fulfillment_status is not None:
+            current_lines.append(
+                "\N{SHIELD} Nitro concierge: "
+                f"{active.nitro_fulfillment_status.replace('_', ' ')}"
+            )
+        if active.late_delivery:
+            current_lines.append(f"\N{ALARM CLOCK} {LATE_CELEBRATION_NOTE}")
+        embed.add_line_fields("Current celebration", tuple(current_lines), inline=False)
     extras = [
         f"Wishes received: {timeline.wishes_received_count}",
         f"Quest badges: {timeline.quest_badge_count}",
@@ -2303,7 +2443,7 @@ def _build_timeline_embed(
             line = discord.utils.format_dt(entry.occurrence_start_at_utc, "D")
             notes = []
             if entry.late_delivery:
-                notes.append("Recovered late")
+                notes.append("Late recovery")
             if entry.revealed_wish_count:
                 notes.append(f"{entry.revealed_wish_count} wishes")
             if entry.quest_completed:
@@ -2405,6 +2545,38 @@ def _build_nitro_queue_embed(
     if len(entries) > 10:
         embed.set_footer(f"Showing 10 of {len(entries)} pending Nitro records.")
     return embed.build()
+
+
+def _capsule_state_label(celebration: BirthdayCelebration) -> str:
+    return {
+        "disabled": "Capsules disabled",
+        "no_wishes": "No wishes queued yet",
+        "revealed_private": "Unlocked privately in timeline/admin preview",
+        "pending_public": "Ready for public reveal",
+        "posted_public": "Posted publicly",
+    }.get(celebration.capsule_state, celebration.capsule_state.replace("_", " "))
+
+
+async def _refresh_live_quest_progress(
+    interaction: discord.Interaction,
+    celebration: BirthdayCelebration | None,
+) -> bool:
+    if (
+        interaction.guild is None
+        or celebration is None
+        or celebration.announcement_message_id is None
+        or celebration.quest_reaction_target <= 0
+    ):
+        return False
+    refresher = getattr(interaction.client, "refresh_birthday_reactions_for_message", None)
+    if not callable(refresher):
+        return False
+    return bool(
+        await refresher(
+            guild_id=interaction.guild.id,
+            message_id=celebration.announcement_message_id,
+        )
+    )
 
 
 def _timeline_is_active_now(timeline: BirthdayTimeline, settings: GuildSettings) -> bool:

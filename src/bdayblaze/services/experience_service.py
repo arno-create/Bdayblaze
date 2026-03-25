@@ -76,6 +76,7 @@ class ExperienceService:
         capsules_enabled: bool | _UnsetType = UNSET,
         quests_enabled: bool | _UnsetType = UNSET,
         quest_wish_target: int | _UnsetType = UNSET,
+        quest_reaction_target: int | _UnsetType = UNSET,
         quest_checkin_enabled: bool | _UnsetType = UNSET,
         surprises_enabled: bool | _UnsetType = UNSET,
     ) -> GuildExperienceSettings:
@@ -87,6 +88,13 @@ class ExperienceService:
         )
         if next_target < 1 or next_target > 25:
             raise ValidationError("Quest wish target must be between 1 and 25.")
+        next_reaction_target = (
+            current.quest_reaction_target
+            if isinstance(quest_reaction_target, _UnsetType)
+            else int(quest_reaction_target)
+        )
+        if next_reaction_target < 1 or next_reaction_target > 25:
+            raise ValidationError("Quest reaction target must be between 1 and 25.")
         merged = replace(
             current,
             capsules_enabled=(
@@ -98,6 +106,7 @@ class ExperienceService:
                 current.quests_enabled if isinstance(quests_enabled, _UnsetType) else quests_enabled
             ),
             quest_wish_target=next_target,
+            quest_reaction_target=next_reaction_target,
             quest_checkin_enabled=(
                 current.quest_checkin_enabled
                 if isinstance(quest_checkin_enabled, _UnsetType)
@@ -276,6 +285,48 @@ class ExperienceService:
             can_check_in=can_check_in,
         )
 
+    async def has_tracked_birthday_announcement_message(
+        self,
+        guild_id: int,
+        message_id: int,
+    ) -> bool:
+        return await self._repository.has_tracked_birthday_announcement_message(
+            guild_id,
+            message_id,
+        )
+
+    async def fetch_announcement_channel_for_message(
+        self,
+        guild_id: int,
+        message_id: int,
+    ) -> int | None:
+        return await self._repository.fetch_announcement_channel_for_message(
+            guild_id,
+            message_id,
+        )
+
+    async def refresh_birthday_announcement_reactions(
+        self,
+        guild_id: int,
+        message_id: int,
+        reaction_count: int,
+    ) -> list[BirthdayCelebration]:
+        return await self._repository.refresh_birthday_announcement_reactions(
+            guild_id,
+            message_id,
+            reaction_count,
+        )
+
+    async def disable_birthday_announcement_reaction_tracking(
+        self,
+        guild_id: int,
+        message_id: int,
+    ) -> list[BirthdayCelebration]:
+        return await self._repository.disable_birthday_announcement_reaction_tracking(
+            guild_id,
+            message_id,
+        )
+
     async def check_in_quest(
         self,
         guild_id: int,
@@ -321,6 +372,11 @@ class ExperienceService:
         ):
             raise ValidationError("That member keeps their birthday private in this server.")
         effective_now = now_utc or datetime.now(UTC)
+        active_celebration = await self._current_celebration(
+            guild_id,
+            target_user_id,
+            now_utc=effective_now,
+        )
         celebration_count, wishes_received_count, quest_badge_count, surprise_count = (
             await self._repository.fetch_birthday_timeline_stats(guild_id, target_user_id)
         )
@@ -359,6 +415,7 @@ class ExperienceService:
         show_zodiac = admin_override or target_user_id == viewer_user_id
         return BirthdayTimeline(
             birthday=birthday,
+            active_celebration=active_celebration,
             celebration_count=celebration_count,
             celebration_streak=_celebration_streak(
                 streak_scan,

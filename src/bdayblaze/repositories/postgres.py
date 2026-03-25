@@ -162,15 +162,17 @@ class PostgresRepository:
                     capsules_enabled,
                     quests_enabled,
                     quest_wish_target,
+                    quest_reaction_target,
                     quest_checkin_enabled,
                     surprises_enabled,
                     updated_at_utc
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, NOW())
+                VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
                 ON CONFLICT (guild_id) DO UPDATE SET
                     capsules_enabled = EXCLUDED.capsules_enabled,
                     quests_enabled = EXCLUDED.quests_enabled,
                     quest_wish_target = EXCLUDED.quest_wish_target,
+                    quest_reaction_target = EXCLUDED.quest_reaction_target,
                     quest_checkin_enabled = EXCLUDED.quest_checkin_enabled,
                     surprises_enabled = EXCLUDED.surprises_enabled,
                     updated_at_utc = NOW()
@@ -180,6 +182,7 @@ class PostgresRepository:
                 settings.capsules_enabled,
                 settings.quests_enabled,
                 settings.quest_wish_target,
+                settings.quest_reaction_target,
                 settings.quest_checkin_enabled,
                 settings.surprises_enabled,
             )
@@ -553,6 +556,46 @@ class PostgresRepository:
             )
         return self._map_birthday_celebration(row) if row is not None else None
 
+    async def has_tracked_birthday_announcement_message(
+        self,
+        guild_id: int,
+        message_id: int,
+    ) -> bool:
+        async with self._pool.acquire() as connection:
+            exists = await connection.fetchval(
+                """
+                SELECT EXISTS(
+                    SELECT 1
+                    FROM birthday_celebrations
+                    WHERE guild_id = $1
+                      AND announcement_message_id = $2
+                )
+                """,
+                guild_id,
+                message_id,
+            )
+        return bool(exists)
+
+    async def fetch_announcement_channel_for_message(
+        self,
+        guild_id: int,
+        message_id: int,
+    ) -> int | None:
+        async with self._pool.acquire() as connection:
+            channel_id = await connection.fetchval(
+                """
+                SELECT channel_id
+                FROM announcement_batches
+                WHERE guild_id = $1
+                  AND message_id = $2
+                ORDER BY updated_at_utc DESC
+                LIMIT 1
+                """,
+                guild_id,
+                message_id,
+            )
+        return int(channel_id) if isinstance(channel_id, int) else None
+
     async def list_recent_birthday_celebrations(
         self,
         guild_id: int,
@@ -634,15 +677,25 @@ class PostgresRepository:
                 UPDATE birthday_celebrations
                 SET quest_checked_in_at_utc = COALESCE(quest_checked_in_at_utc, $4),
                     quest_completed_at_utc = CASE
+                        WHEN quest_completed_at_utc IS NOT NULL THEN quest_completed_at_utc
                         WHEN quest_enabled = TRUE
                              AND quest_wish_goal_met = TRUE
+                             AND (
+                                 quest_reaction_target <= 0
+                                 OR quest_reaction_goal_met = TRUE
+                             )
                              AND quest_checkin_required = TRUE
                              AND quest_checked_in_at_utc IS NULL THEN $4
                         ELSE quest_completed_at_utc
                     END,
                     featured_birthday = CASE
+                        WHEN featured_birthday = TRUE THEN TRUE
                         WHEN quest_enabled = TRUE
                              AND quest_wish_goal_met = TRUE
+                             AND (
+                                 quest_reaction_target <= 0
+                                 OR quest_reaction_goal_met = TRUE
+                             )
                              AND quest_checkin_required = TRUE
                              AND quest_checked_in_at_utc IS NULL THEN TRUE
                         ELSE featured_birthday
@@ -659,6 +712,106 @@ class PostgresRepository:
                 checked_in_at_utc,
             )
         return self._map_birthday_celebration(row) if row is not None else None
+
+    async def refresh_birthday_announcement_reactions(
+        self,
+        guild_id: int,
+        message_id: int,
+        reaction_count: int,
+    ) -> list[BirthdayCelebration]:
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(
+                """
+                UPDATE birthday_celebrations
+                SET quest_reaction_count = CASE
+                        WHEN quest_reaction_target > 0 THEN $3
+                        ELSE quest_reaction_count
+                    END,
+                    quest_reaction_goal_met = CASE
+                        WHEN quest_reaction_target > 0 THEN $3 >= quest_reaction_target
+                        ELSE FALSE
+                    END,
+                    quest_completed_at_utc = CASE
+                        WHEN quest_completed_at_utc IS NOT NULL THEN quest_completed_at_utc
+                        WHEN quest_enabled = TRUE
+                             AND quest_wish_goal_met = TRUE
+                             AND (
+                                 quest_reaction_target <= 0
+                                 OR $3 >= quest_reaction_target
+                             )
+                             AND (
+                                 quest_checkin_required = FALSE
+                                 OR quest_checked_in_at_utc IS NOT NULL
+                             ) THEN NOW()
+                        ELSE NULL
+                    END,
+                    featured_birthday = CASE
+                        WHEN featured_birthday = TRUE THEN TRUE
+                        WHEN quest_enabled = TRUE
+                             AND quest_wish_goal_met = TRUE
+                             AND (
+                                 quest_reaction_target <= 0
+                                 OR $3 >= quest_reaction_target
+                             )
+                             AND (
+                                 quest_checkin_required = FALSE
+                                 OR quest_checked_in_at_utc IS NOT NULL
+                             ) THEN TRUE
+                        ELSE FALSE
+                    END,
+                    updated_at_utc = NOW()
+                WHERE guild_id = $1
+                  AND announcement_message_id = $2
+                RETURNING *
+                """,
+                guild_id,
+                message_id,
+                reaction_count,
+            )
+        return [self._map_birthday_celebration(row) for row in rows]
+
+    async def disable_birthday_announcement_reaction_tracking(
+        self,
+        guild_id: int,
+        message_id: int,
+    ) -> list[BirthdayCelebration]:
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(
+                """
+                UPDATE birthday_celebrations
+                SET quest_reaction_target = 0,
+                    quest_reaction_count = 0,
+                    quest_reaction_goal_met = FALSE,
+                    quest_completed_at_utc = CASE
+                        WHEN quest_completed_at_utc IS NOT NULL THEN quest_completed_at_utc
+                        WHEN quest_enabled = TRUE
+                             AND quest_wish_goal_met = TRUE
+                             AND (
+                                 quest_checkin_required = FALSE
+                                 OR quest_checked_in_at_utc IS NOT NULL
+                             ) THEN NOW()
+                        ELSE NULL
+                    END,
+                    featured_birthday = CASE
+                        WHEN featured_birthday = TRUE THEN TRUE
+                        WHEN quest_enabled = TRUE
+                             AND quest_wish_goal_met = TRUE
+                             AND (
+                                 quest_checkin_required = FALSE
+                                 OR quest_checked_in_at_utc IS NOT NULL
+                             ) THEN TRUE
+                        ELSE FALSE
+                    END,
+                    updated_at_utc = NOW()
+                WHERE guild_id = $1
+                  AND announcement_message_id = $2
+                  AND quest_reaction_target > 0
+                RETURNING *
+                """,
+                guild_id,
+                message_id,
+            )
+        return [self._map_birthday_celebration(row) for row in rows]
 
     async def mark_capsule_delivery_result(
         self,
@@ -1285,6 +1438,7 @@ class PostgresRepository:
                         COALESCE(ges.capsules_enabled, FALSE) AS capsules_enabled,
                         COALESCE(ges.quests_enabled, FALSE) AS quests_enabled,
                         COALESCE(ges.quest_wish_target, 3) AS quest_wish_target,
+                        COALESCE(ges.quest_reaction_target, 5) AS quest_reaction_target,
                         COALESCE(ges.quest_checkin_enabled, TRUE) AS quest_checkin_enabled,
                         COALESCE(ges.surprises_enabled, FALSE) AS surprises_enabled
                     FROM member_birthdays AS mb
@@ -1390,7 +1544,15 @@ class PostgresRepository:
                             capsule_state = "revealed_private"
 
                     quest_enabled = bool(row["quests_enabled"])
+                    has_public_announcement_route = bool(
+                        row["announcements_enabled"] and row["announcement_channel_id"] is not None
+                    )
                     quest_wish_target = int(row["quest_wish_target"]) if quest_enabled else 0
+                    quest_reaction_target = (
+                        int(row["quest_reaction_target"])
+                        if quest_enabled and has_public_announcement_route
+                        else 0
+                    )
                     quest_checkin_required = (
                         bool(row["quest_checkin_enabled"]) if quest_enabled else False
                     )
@@ -1399,9 +1561,20 @@ class PostgresRepository:
                         and quest_wish_target > 0
                         and revealed_wish_count >= quest_wish_target
                     )
+                    quest_reaction_count = 0
+                    quest_reaction_goal_met = (
+                        quest_enabled
+                        and quest_reaction_target > 0
+                        and quest_reaction_count >= quest_reaction_target
+                    )
                     quest_completed_at_utc = (
                         now_utc
-                        if quest_wish_goal_met and not quest_checkin_required
+                        if (
+                            quest_enabled
+                            and quest_wish_goal_met
+                            and (quest_reaction_target <= 0 or quest_reaction_goal_met)
+                            and not quest_checkin_required
+                        )
                         else None
                     )
                     surprise_reward = (
@@ -1415,7 +1588,10 @@ class PostgresRepository:
                         else None
                     )
                     featured_birthday = bool(
-                        quest_wish_goal_met and not quest_checkin_required
+                        quest_enabled
+                        and quest_wish_goal_met
+                        and (quest_reaction_target <= 0 or quest_reaction_goal_met)
+                        and not quest_checkin_required
                     ) or (
                         surprise_reward is not None and surprise_reward.reward_type == "featured"
                     )
@@ -1425,11 +1601,15 @@ class PostgresRepository:
                         user_id=row["user_id"],
                         occurrence_start_at_utc=current_occurrence,
                         late_delivery=late_delivery,
+                        announcement_message_id=None,
                         capsule_state=capsule_state,
                         revealed_wish_count=revealed_wish_count,
                         quest_enabled=quest_enabled,
                         quest_wish_target=quest_wish_target,
                         quest_wish_goal_met=quest_wish_goal_met,
+                        quest_reaction_target=quest_reaction_target,
+                        quest_reaction_count=quest_reaction_count,
+                        quest_reaction_goal_met=quest_reaction_goal_met,
                         quest_checkin_required=quest_checkin_required,
                         quest_completed_at_utc=quest_completed_at_utc,
                         featured_birthday=featured_birthday,
@@ -1888,21 +2068,38 @@ class PostgresRepository:
         if not event_ids:
             return
         async with self._pool.acquire() as connection:
-            await connection.execute(
-                """
-                UPDATE celebration_events
-                SET state = 'completed',
-                    message_id = COALESCE($2, message_id),
-                    last_error_code = COALESCE($3, last_error_code),
-                    completed_at_utc = NOW(),
-                    processing_started_at_utc = NULL,
-                    updated_at_utc = NOW()
-                WHERE id = ANY($1::bigint[])
-                """,
-                event_ids,
-                message_id,
-                note_code,
-            )
+            async with connection.transaction():
+                await connection.execute(
+                    """
+                    UPDATE celebration_events
+                    SET state = 'completed',
+                        message_id = COALESCE($2, message_id),
+                        last_error_code = COALESCE($3, last_error_code),
+                        completed_at_utc = NOW(),
+                        processing_started_at_utc = NULL,
+                        updated_at_utc = NOW()
+                    WHERE id = ANY($1::bigint[])
+                    """,
+                    event_ids,
+                    message_id,
+                    note_code,
+                )
+                if message_id is not None:
+                    await connection.execute(
+                        """
+                        UPDATE birthday_celebrations AS bc
+                        SET announcement_message_id = COALESCE(bc.announcement_message_id, $2),
+                            updated_at_utc = NOW()
+                        FROM celebration_events AS ce
+                        WHERE ce.id = ANY($1::bigint[])
+                          AND ce.event_kind = 'announcement'
+                          AND bc.guild_id = ce.guild_id
+                          AND bc.user_id = ce.user_id
+                          AND bc.occurrence_start_at_utc = ce.scheduled_for_utc
+                        """,
+                        event_ids,
+                        message_id,
+                    )
 
     async def reschedule_events(
         self,
@@ -1930,37 +2127,113 @@ class PostgresRepository:
 
     async def complete_event_as_skipped(self, event_id: int, error_code: str) -> None:
         async with self._pool.acquire() as connection:
-            await connection.execute(
-                """
-                UPDATE celebration_events
-                SET state = 'completed',
-                    last_error_code = $2,
-                    completed_at_utc = NOW(),
-                    processing_started_at_utc = NULL,
-                    updated_at_utc = NOW()
-                WHERE id = $1
-                """,
-                event_id,
-                error_code,
-            )
+            async with connection.transaction():
+                await connection.execute(
+                    """
+                    UPDATE celebration_events
+                    SET state = 'completed',
+                        last_error_code = $2,
+                        completed_at_utc = NOW(),
+                        processing_started_at_utc = NULL,
+                        updated_at_utc = NOW()
+                    WHERE id = $1
+                    """,
+                    event_id,
+                    error_code,
+                )
+                await connection.execute(
+                    """
+                    UPDATE birthday_celebrations AS bc
+                    SET quest_reaction_target = 0,
+                        quest_reaction_count = 0,
+                        quest_reaction_goal_met = FALSE,
+                        quest_completed_at_utc = CASE
+                            WHEN bc.quest_completed_at_utc IS NOT NULL THEN bc.quest_completed_at_utc
+                            WHEN bc.quest_enabled = TRUE
+                                 AND bc.quest_wish_goal_met = TRUE
+                                 AND (
+                                     bc.quest_checkin_required = FALSE
+                                     OR bc.quest_checked_in_at_utc IS NOT NULL
+                                 ) THEN NOW()
+                            ELSE NULL
+                        END,
+                        featured_birthday = CASE
+                            WHEN bc.featured_birthday = TRUE THEN TRUE
+                            WHEN bc.quest_enabled = TRUE
+                                 AND bc.quest_wish_goal_met = TRUE
+                                 AND (
+                                     bc.quest_checkin_required = FALSE
+                                     OR bc.quest_checked_in_at_utc IS NOT NULL
+                                 ) THEN TRUE
+                            ELSE FALSE
+                        END,
+                        updated_at_utc = NOW()
+                    FROM celebration_events AS ce
+                    WHERE ce.id = $1
+                      AND ce.event_kind = 'announcement'
+                      AND bc.guild_id = ce.guild_id
+                      AND bc.user_id = ce.user_id
+                      AND bc.occurrence_start_at_utc = ce.scheduled_for_utc
+                      AND bc.quest_reaction_target > 0
+                    """,
+                    event_id,
+                )
 
     async def complete_events_as_skipped(self, event_ids: list[int], error_code: str) -> None:
         if not event_ids:
             return
         async with self._pool.acquire() as connection:
-            await connection.execute(
-                """
-                UPDATE celebration_events
-                SET state = 'completed',
-                    last_error_code = $2,
-                    completed_at_utc = NOW(),
-                    processing_started_at_utc = NULL,
-                    updated_at_utc = NOW()
-                WHERE id = ANY($1::bigint[])
-                """,
-                event_ids,
-                error_code,
-            )
+            async with connection.transaction():
+                await connection.execute(
+                    """
+                    UPDATE celebration_events
+                    SET state = 'completed',
+                        last_error_code = $2,
+                        completed_at_utc = NOW(),
+                        processing_started_at_utc = NULL,
+                        updated_at_utc = NOW()
+                    WHERE id = ANY($1::bigint[])
+                    """,
+                    event_ids,
+                    error_code,
+                )
+                await connection.execute(
+                    """
+                    UPDATE birthday_celebrations AS bc
+                    SET quest_reaction_target = 0,
+                        quest_reaction_count = 0,
+                        quest_reaction_goal_met = FALSE,
+                        quest_completed_at_utc = CASE
+                            WHEN bc.quest_completed_at_utc IS NOT NULL THEN bc.quest_completed_at_utc
+                            WHEN bc.quest_enabled = TRUE
+                                 AND bc.quest_wish_goal_met = TRUE
+                                 AND (
+                                     bc.quest_checkin_required = FALSE
+                                     OR bc.quest_checked_in_at_utc IS NOT NULL
+                                 ) THEN NOW()
+                            ELSE NULL
+                        END,
+                        featured_birthday = CASE
+                            WHEN bc.featured_birthday = TRUE THEN TRUE
+                            WHEN bc.quest_enabled = TRUE
+                                 AND bc.quest_wish_goal_met = TRUE
+                                 AND (
+                                     bc.quest_checkin_required = FALSE
+                                     OR bc.quest_checked_in_at_utc IS NOT NULL
+                                 ) THEN TRUE
+                            ELSE FALSE
+                        END,
+                        updated_at_utc = NOW()
+                    FROM celebration_events AS ce
+                    WHERE ce.id = ANY($1::bigint[])
+                      AND ce.event_kind = 'announcement'
+                      AND bc.guild_id = ce.guild_id
+                      AND bc.user_id = ce.user_id
+                      AND bc.occurrence_start_at_utc = ce.scheduled_for_utc
+                      AND bc.quest_reaction_target > 0
+                    """,
+                    event_ids,
+                )
 
     async def skip_stale_start_events(self, stale_before_utc: datetime) -> int:
         async with self._pool.acquire() as connection:
@@ -2555,11 +2828,15 @@ class PostgresRepository:
         user_id: int,
         occurrence_start_at_utc: datetime,
         late_delivery: bool,
+        announcement_message_id: int | None,
         capsule_state: str,
         revealed_wish_count: int,
         quest_enabled: bool,
         quest_wish_target: int,
         quest_wish_goal_met: bool,
+        quest_reaction_target: int,
+        quest_reaction_count: int,
+        quest_reaction_goal_met: bool,
         quest_checkin_required: bool,
         quest_completed_at_utc: datetime | None,
         featured_birthday: bool,
@@ -2576,11 +2853,15 @@ class PostgresRepository:
                 user_id,
                 occurrence_start_at_utc,
                 late_delivery,
+                announcement_message_id,
                 capsule_state,
                 revealed_wish_count,
                 quest_enabled,
                 quest_wish_target,
                 quest_wish_goal_met,
+                quest_reaction_target,
+                quest_reaction_count,
+                quest_reaction_goal_met,
                 quest_checkin_required,
                 quest_completed_at_utc,
                 featured_birthday,
@@ -2592,18 +2873,32 @@ class PostgresRepository:
                 updated_at_utc
             )
             VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-                CASE WHEN $13 IS NULL THEN NULL ELSE NOW() END,
-                $16,
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+                $17, $18, $19,
+                CASE WHEN $17 IS NULL THEN NULL ELSE NOW() END,
+                $20,
                 NOW()
             )
             ON CONFLICT (guild_id, user_id, occurrence_start_at_utc) DO UPDATE SET
                 late_delivery = birthday_celebrations.late_delivery OR EXCLUDED.late_delivery,
+                announcement_message_id = COALESCE(
+                    birthday_celebrations.announcement_message_id,
+                    EXCLUDED.announcement_message_id
+                ),
                 capsule_state = EXCLUDED.capsule_state,
                 revealed_wish_count = EXCLUDED.revealed_wish_count,
                 quest_enabled = EXCLUDED.quest_enabled,
                 quest_wish_target = EXCLUDED.quest_wish_target,
                 quest_wish_goal_met = EXCLUDED.quest_wish_goal_met,
+                quest_reaction_target = EXCLUDED.quest_reaction_target,
+                quest_reaction_count = GREATEST(
+                    birthday_celebrations.quest_reaction_count,
+                    EXCLUDED.quest_reaction_count
+                ),
+                quest_reaction_goal_met = (
+                    birthday_celebrations.quest_reaction_goal_met
+                    OR EXCLUDED.quest_reaction_goal_met
+                ),
                 quest_checkin_required = EXCLUDED.quest_checkin_required,
                 quest_completed_at_utc = COALESCE(
                     birthday_celebrations.quest_completed_at_utc,
@@ -2637,11 +2932,15 @@ class PostgresRepository:
             user_id,
             occurrence_start_at_utc,
             late_delivery,
+            announcement_message_id,
             capsule_state,
             revealed_wish_count,
             quest_enabled,
             quest_wish_target,
             quest_wish_goal_met,
+            quest_reaction_target,
+            quest_reaction_count,
+            quest_reaction_goal_met,
             quest_checkin_required,
             quest_completed_at_utc,
             featured_birthday,
@@ -2713,6 +3012,7 @@ class PostgresRepository:
             capsules_enabled=row["capsules_enabled"],
             quests_enabled=row["quests_enabled"],
             quest_wish_target=row["quest_wish_target"],
+            quest_reaction_target=row["quest_reaction_target"],
             quest_checkin_enabled=row["quest_checkin_enabled"],
             surprises_enabled=row["surprises_enabled"],
             created_at_utc=row["created_at_utc"],
@@ -2817,12 +3117,16 @@ class PostgresRepository:
             user_id=row["user_id"],
             occurrence_start_at_utc=row["occurrence_start_at_utc"],
             late_delivery=row["late_delivery"],
+            announcement_message_id=row["announcement_message_id"],
             capsule_state=row["capsule_state"],
             capsule_message_id=row["capsule_message_id"],
             revealed_wish_count=row["revealed_wish_count"],
             quest_enabled=row["quest_enabled"],
             quest_wish_target=row["quest_wish_target"],
             quest_wish_goal_met=row["quest_wish_goal_met"],
+            quest_reaction_target=row["quest_reaction_target"],
+            quest_reaction_count=row["quest_reaction_count"],
+            quest_reaction_goal_met=row["quest_reaction_goal_met"],
             quest_checkin_required=row["quest_checkin_required"],
             quest_checked_in_at_utc=row["quest_checked_in_at_utc"],
             quest_completed_at_utc=row["quest_completed_at_utc"],

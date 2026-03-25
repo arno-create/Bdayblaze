@@ -12,6 +12,8 @@ def test_build_help_embed_mentions_operator_flows() -> None:
     assert any(field.name == "Getting started" for field in embed.fields)
     assert "/birthday test-message" in embed.fields[0].value
     assert "/birthday studio" in embed.fields[0].value
+    user_field = next(field for field in embed.fields if field.name == "User commands")
+    assert "/birthday privacy" in user_field.value
     admin_field = next(field for field in embed.fields if field.name == "Admin commands")
     assert "/birthday import" in admin_field.value
     assert "/birthday anniversary ..." in admin_field.value
@@ -20,6 +22,7 @@ def test_build_help_embed_mentions_operator_flows() -> None:
     )
     assert "Media Tools" in safety_field.value
     assert "Regular webpages" in safety_field.value
+    assert "shared birthday announcement post" in safety_field.value
 
 
 def test_build_about_embed_uses_package_metadata(monkeypatch) -> None:

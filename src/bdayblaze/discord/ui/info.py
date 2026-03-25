@@ -33,6 +33,7 @@ def build_help_embed() -> discord.Embed:
             "`/birthday set` Save your birthday for this server.\n"
             "`/birthday view` See your saved record.\n"
             "`/birthday remove` Delete your server-scoped data.\n"
+            "`/birthday privacy` Review visibility and privacy defaults.\n"
             "`/birthday today` Show birthdays currently active under bot celebration logic.\n"
             "`/birthday next` See the nearest upcoming birthday.\n"
             "`/birthday upcoming` Browse upcoming visible birthdays.\n"
@@ -68,6 +69,8 @@ def build_help_embed() -> discord.Embed:
             "Use `/birthday studio` -> Media Tools for shared image and thumbnail URLs.\n"
             "Direct media URLs can preview as embeds. Regular webpages are shown as webpage URLs "
             "and unsupported files are called out separately instead of being silently dropped.\n"
+            "Birthday Quests can optionally count reactions on the shared birthday announcement "
+            "post without using Message Content.\n"
             "Studio also blocks obvious profanity, NSFW wording, slurs, harassment-style text, "
             "and unsafe URL patterns."
         ),
@@ -120,7 +123,8 @@ def build_about_embed() -> discord.Embed:
         name="Permissions and config",
         value=(
             "Announcements and birthday roles only work when this server's settings, "
-            "channel access, and role permissions allow them."
+            "channel access, and role permissions allow them. Birthday Quest reactions use only "
+            "the non-privileged guild reaction intent."
         ),
         inline=False,
     )

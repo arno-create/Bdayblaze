@@ -37,6 +37,8 @@ class FakeExperienceRepository:
         self.saved_wish: BirthdayWish | None = None
         self.removed_wish: BirthdayWish | None = None
         self.current_celebration: BirthdayCelebration | None = None
+        self.reaction_refresh_calls: list[tuple[int, int, int]] = []
+        self.reaction_disable_calls: list[tuple[int, int]] = []
         self.timeline_entries: list[TimelineEntry] = [
             TimelineEntry(
                 celebration_id=1,
@@ -205,6 +207,70 @@ class FakeExperienceRepository:
         )
         return self.current_celebration
 
+    async def has_tracked_birthday_announcement_message(
+        self,
+        guild_id: int,
+        message_id: int,
+    ) -> bool:
+        return bool(
+            self.current_celebration is not None
+            and self.current_celebration.guild_id == guild_id
+            and self.current_celebration.announcement_message_id == message_id
+        )
+
+    async def fetch_announcement_channel_for_message(
+        self,
+        guild_id: int,
+        message_id: int,
+    ) -> int | None:
+        if (
+            self.current_celebration is not None
+            and self.current_celebration.guild_id == guild_id
+            and self.current_celebration.announcement_message_id == message_id
+        ):
+            return 123
+        return None
+
+    async def refresh_birthday_announcement_reactions(
+        self,
+        guild_id: int,
+        message_id: int,
+        reaction_count: int,
+    ) -> list[BirthdayCelebration]:
+        self.reaction_refresh_calls.append((guild_id, message_id, reaction_count))
+        if (
+            self.current_celebration is None
+            or self.current_celebration.guild_id != guild_id
+            or self.current_celebration.announcement_message_id != message_id
+        ):
+            return []
+        self.current_celebration = replace(
+            self.current_celebration,
+            quest_reaction_count=reaction_count,
+            quest_reaction_goal_met=reaction_count >= self.current_celebration.quest_reaction_target,
+        )
+        return [self.current_celebration]
+
+    async def disable_birthday_announcement_reaction_tracking(
+        self,
+        guild_id: int,
+        message_id: int,
+    ) -> list[BirthdayCelebration]:
+        self.reaction_disable_calls.append((guild_id, message_id))
+        if (
+            self.current_celebration is None
+            or self.current_celebration.guild_id != guild_id
+            or self.current_celebration.announcement_message_id != message_id
+        ):
+            return []
+        self.current_celebration = replace(
+            self.current_celebration,
+            quest_reaction_target=0,
+            quest_reaction_count=0,
+            quest_reaction_goal_met=False,
+        )
+        return [self.current_celebration]
+
     async def list_pending_nitro_concierge(self, guild_id: int, *, limit: int) -> list[object]:
         return []
 
@@ -301,6 +367,7 @@ async def test_build_timeline_includes_matching_counts_and_streak_for_self() -> 
         now_utc=datetime(2026, 3, 24, 12, tzinfo=UTC),
     )
 
+    assert timeline.active_celebration is None
     assert timeline.celebration_streak == 2
     assert timeline.same_day_count == 2
     assert timeline.month_total_count == 7
@@ -322,12 +389,16 @@ async def test_check_in_quest_marks_current_celebration_complete() -> None:
         user_id=42,
         occurrence_start_at_utc=datetime(2026, 3, 25, tzinfo=UTC),
         late_delivery=False,
+        announcement_message_id=777,
         capsule_state="pending_public",
         capsule_message_id=None,
         revealed_wish_count=3,
         quest_enabled=True,
         quest_wish_target=3,
         quest_wish_goal_met=True,
+        quest_reaction_target=5,
+        quest_reaction_count=5,
+        quest_reaction_goal_met=True,
         quest_checkin_required=True,
         quest_checked_in_at_utc=None,
         quest_completed_at_utc=None,
@@ -353,6 +424,65 @@ async def test_check_in_quest_marks_current_celebration_complete() -> None:
     assert updated.quest_checked_in_at_utc is not None
     assert updated.quest_completed_at_utc is not None
     assert updated.featured_birthday is True
+
+
+@pytest.mark.asyncio
+async def test_update_settings_validates_reaction_target_range() -> None:
+    repository = FakeExperienceRepository()
+    service = ExperienceService(repository)  # type: ignore[arg-type]
+
+    with pytest.raises(ValidationError, match="reaction target"):
+        await service.update_settings(
+            1,
+            quest_reaction_target=0,
+        )
+
+
+@pytest.mark.asyncio
+async def test_reaction_refresh_methods_delegate_to_repository() -> None:
+    repository = FakeExperienceRepository()
+    repository.current_celebration = BirthdayCelebration(
+        id=12,
+        guild_id=1,
+        user_id=42,
+        occurrence_start_at_utc=datetime(2026, 3, 25, tzinfo=UTC),
+        late_delivery=False,
+        announcement_message_id=888,
+        capsule_state="pending_public",
+        capsule_message_id=None,
+        revealed_wish_count=2,
+        quest_enabled=True,
+        quest_wish_target=3,
+        quest_wish_goal_met=False,
+        quest_reaction_target=5,
+        quest_reaction_count=0,
+        quest_reaction_goal_met=False,
+        quest_checkin_required=False,
+        quest_checked_in_at_utc=None,
+        quest_completed_at_utc=None,
+        featured_birthday=False,
+        surprise_reward_type=None,
+        surprise_reward_label=None,
+        surprise_note_text=None,
+        surprise_selected_at_utc=None,
+        nitro_fulfillment_status=None,
+        nitro_fulfilled_by_user_id=None,
+        nitro_fulfilled_at_utc=None,
+        created_at_utc=datetime(2026, 3, 25, tzinfo=UTC),
+        updated_at_utc=datetime(2026, 3, 25, tzinfo=UTC),
+    )
+    service = ExperienceService(repository)  # type: ignore[arg-type]
+
+    assert await service.has_tracked_birthday_announcement_message(1, 888) is True
+    assert await service.fetch_announcement_channel_for_message(1, 888) == 123
+
+    refreshed = await service.refresh_birthday_announcement_reactions(1, 888, 4)
+    assert refreshed[0].quest_reaction_count == 4
+    assert repository.reaction_refresh_calls == [(1, 888, 4)]
+
+    disabled = await service.disable_birthday_announcement_reaction_tracking(1, 888)
+    assert disabled[0].quest_reaction_target == 0
+    assert repository.reaction_disable_calls == [(1, 888)]
 
 
 @pytest.mark.asyncio

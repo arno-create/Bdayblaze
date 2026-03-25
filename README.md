@@ -6,8 +6,9 @@ Bdayblaze is a production-minded Discord birthday bot focused on privacy-first s
 
 - Guild-scoped birthday storage with optional birth year, per-user timezone override, and server-scoped visibility.
 - Slash-first UX with private `/birthday studio`, `/birthday setup`, and `/birthday test-message` flows.
-- Birthday Capsules, Birthday Quests, Birthday Surprises, and Timeline profiles without extra workers.
-- Restart-safe scheduler with durable event records, bounded stale-send recovery, and no Message Content intent.
+- Birthday Capsules, Birthday Quests, Birthday Surprises, and `/birthday timeline` profiles without extra workers.
+- Quest reactions can use the shared birthday announcement post without Message Content intent or per-reactor storage.
+- Restart-safe scheduler with durable event records, bounded stale-send recovery, and no privileged intents.
 - Celebration Studio with strict placeholder validation, guided media tools, compact previews, and explicit reset paths.
 - Deterministic abuse protection for saved Studio/admin text plus practical unsafe-URL blocking.
 - Built-in health endpoints for Render-style hosting with separate liveness and readiness signals.
@@ -67,6 +68,7 @@ src/bdayblaze/
 - `Manage Roles` is only needed if birthday roles are enabled.
 - Do not enable Message Content intent.
 - Privileged intents are not required.
+- Birthday Quest reaction tracking uses only the non-privileged guild reaction intent already enabled in code.
 
 ## Command surface
 
@@ -137,11 +139,12 @@ Use `/birthday studio` -> `Media tools` for shared image and thumbnail URLs.
 
 Accepted states:
 
-- `Likely direct media`: Discord should usually render it as an embed image.
-- `Webpage URL`: the URL resolves to a page, not a direct image/GIF/WebP asset.
-- `Unsupported media URL`: the URL points to a file type Discord will not render as embed media.
+- `Direct media accepted`: Discord should usually render it as an embed image.
+- `Webpage link rejected`: the URL resolves to a page, not a direct image/GIF/WebP asset.
+- `Unsupported media rejected`: the URL points to a file type Discord will not render as embed media.
 - `Needs validation`: the URL looks safe but must be probed before saving.
-- `Invalid or unsafe`: the URL is blocked locally.
+- `Invalid or unsafe URL rejected`: the URL is blocked locally.
+- `Validation unavailable`: the probe could not confirm the URL right now.
 
 Direct-media examples:
 
@@ -156,11 +159,30 @@ Webpage example:
 Important behavior:
 
 - Studio save-time media validation is stricter than a plain `https://` check.
+- Failed saves never clear the last saved media entry.
 - Query-string and signed URLs are supported.
 - Extensionless object-storage URLs are supported only through Media Tools validation.
 - HTML pages are not treated as image assets.
 - Shared media is never used for live birthday DMs.
 - `Reset media` clears only the shared image and thumbnail fields.
+
+### Birthday Capsules, Quests, and Surprises
+
+- Birthday Capsules stay private until the target member's birthday window opens.
+- Wishes are text-first and can include one optional safe HTTPS link.
+- Birthday Quests can track:
+  - revealed wish count
+  - reactions on the shared birthday announcement post when a live public route exists
+  - optional birthday check-in
+- Reaction quests use the shared post total reaction count across emoji and do not store individual reactors.
+- If no live public birthday post exists, the reaction objective is skipped instead of blocking quest completion.
+- Birthday Surprises stay compact and server-safe:
+  - `featured`
+  - `badge`
+  - `custom_note`
+  - `nitro_concierge`
+- Nitro concierge is always manual admin follow-up. The bot never purchases, gifts, or delivers Nitro.
+- `/birthday timeline` is the member-facing celebration card for countdowns, active quest progress, capsule state, and recent celebration history.
 
 ### Preview and safety
 
@@ -184,6 +206,7 @@ Important behavior:
 - Birthday records are stored per guild membership, never globally across servers.
 - Birth year is optional and hidden by default.
 - Birthday Capsule wishes are stored per guild, revealed on the birthday, and not logged raw.
+- Reaction quests store only per-celebration reaction totals tied to the birthday announcement message id.
 - Timeline history stores compact celebration metadata, not large text snapshots.
 - Nitro concierge is manual admin fulfillment only; the bot never buys or sends Nitro.
 - Visibility is server-scoped:
@@ -264,6 +287,7 @@ The code can expose clearer startup state, but it cannot force Render to auto-de
 - Scheduler state is persisted before Discord side effects run.
 - Stale-send recovery is bounded to 3 history requests of 10 bot-authored messages each.
 - If a sent message is deleted or falls outside that bounded recovery window before recovery runs, one duplicate announcement can still occur.
+- Reaction quest refreshes are debounced by announcement message id to keep API and database churn bounded on busy servers.
 
 ## Schema notes
 
@@ -276,13 +300,25 @@ The code can expose clearer startup state, but it cannot force Render to auto-de
   - tracked member anniversaries
   - recurring annual celebrations
 - Migration `005_server_anniversary_kind.sql` adds first-class server-anniversary metadata on recurring celebrations.
+- Migration `006_studio_audit_channel_and_runtime_notes.sql` adds nullable `studio_audit_channel_id` to `guild_settings`.
 - Migration `007_signature_feature_wave.sql` adds:
   - `guild_experience_settings`
   - `birthday_wishes`
   - `birthday_celebrations`
   - `guild_surprise_rewards`
   - `capsule_reveal` scheduler events
-- Migration `006_studio_audit_channel_and_runtime_notes.sql` adds nullable `studio_audit_channel_id` to `guild_settings`.
+- Migration `008_reaction_quest_tracking.sql` adds:
+  - `quest_reaction_target` on `guild_experience_settings`
+  - `announcement_message_id` on `birthday_celebrations`
+  - reaction quest counters and goal state on `birthday_celebrations`
+  - an index for tracked birthday announcement message lookups
+
+## Website and legal
+
+- `website/` contains the repo-managed static landing page bundle with no build step.
+- `LICENSE` ships Apache 2.0 for the project.
+- `NOTICE` keeps project attribution alongside the license.
+- AI-generated cake/card rendering is intentionally not part of this release candidate yet.
 
 ## Testing and checks
 

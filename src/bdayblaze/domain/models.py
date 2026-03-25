@@ -140,6 +140,7 @@ class GuildExperienceSettings:
     capsules_enabled: bool
     quests_enabled: bool
     quest_wish_target: int
+    quest_reaction_target: int
     quest_checkin_enabled: bool
     surprises_enabled: bool
     created_at_utc: datetime | None = None
@@ -152,6 +153,7 @@ class GuildExperienceSettings:
             capsules_enabled=False,
             quests_enabled=False,
             quest_wish_target=3,
+            quest_reaction_target=5,
             quest_checkin_enabled=True,
             surprises_enabled=False,
         )
@@ -228,12 +230,16 @@ class BirthdayCelebration:
     user_id: int
     occurrence_start_at_utc: datetime
     late_delivery: bool
+    announcement_message_id: int | None
     capsule_state: CapsuleState
     capsule_message_id: int | None
     revealed_wish_count: int
     quest_enabled: bool
     quest_wish_target: int
     quest_wish_goal_met: bool
+    quest_reaction_target: int
+    quest_reaction_count: int
+    quest_reaction_goal_met: bool
     quest_checkin_required: bool
     quest_checked_in_at_utc: datetime | None
     quest_completed_at_utc: datetime | None
@@ -447,6 +453,7 @@ class TimelineEntry:
 @dataclass(slots=True, frozen=True)
 class BirthdayTimeline:
     birthday: MemberBirthday
+    active_celebration: BirthdayCelebration | None
     celebration_count: int
     celebration_streak: int
     wishes_received_count: int

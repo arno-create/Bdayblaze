@@ -333,8 +333,9 @@ def build_media_tools_embed(
     budget = BudgetedEmbed.create(
         title="Media Tools",
         description=(
-            "Save only direct HTTPS image, GIF, or WebP file URLs here. Browser page links "
-            "from Tenor, Giphy, Google image results, and similar wrappers are rejected."
+            "Save only direct HTTPS image, GIF, or WebP file URLs here. Saved media stays in "
+            "place until a replacement passes validation. Webpage wrappers, unsupported files, "
+            "and unsafe links are called out explicitly instead of disappearing."
         ),
         color=discord.Color.blurple(),
     )
@@ -373,6 +374,14 @@ def build_media_tools_embed(
             ),
             inline=False,
         )
+    budget.add_field(
+        name="Save protection",
+        value=(
+            "Blocked saves never clear the currently saved media. The Saved media section shows "
+            "what is still live, and Latest validation shows the exact URL that was checked."
+        ),
+        inline=False,
+    )
     budget.add_field(
         name="Common fixes",
         value=(
@@ -658,9 +667,10 @@ def build_message_template_embed(
             (
                 f"Enabled: {_format_enabled(experience_state.quests_enabled)}",
                 f"Wish target: {experience_state.quest_wish_target}",
+                f"Reaction target: {experience_state.quest_reaction_target}",
                 "Check-in required: "
                 f"{_format_enabled(experience_state.quest_checkin_enabled)}",
-                "Tracked objectives: unlocked wishes and optional birthday check-in only",
+                "Tracked objectives: unlocked wishes, shared-post reactions, and optional check-in",
             ),
             inline=False,
         )
@@ -668,7 +678,8 @@ def build_message_template_embed(
             name="Quest rewards",
             value=(
                 "Completed quests can unlock a timeline badge and featured birthday marker.\n"
-                "No passive reaction or message-content tracking is used."
+                "Reaction goals use the shared birthday announcement post when one exists. "
+                "No message-content tracking is used."
             ),
             inline=False,
         )
@@ -2264,6 +2275,11 @@ class QuestSettingsModal(AdminPanelModal, title="Birthday Quest settings"):
         required=True,
         max_length=2,
     )
+    reaction_target: discord.ui.TextInput[QuestSettingsModal] = discord.ui.TextInput(
+        label="Reaction target",
+        required=True,
+        max_length=2,
+    )
     check_in: discord.ui.TextInput[QuestSettingsModal] = discord.ui.TextInput(
         label="Require check-in (yes/no)",
         required=True,
@@ -2284,6 +2300,7 @@ class QuestSettingsModal(AdminPanelModal, title="Birthday Quest settings"):
         self.birthday_service = birthday_service
         self.enabled.default = "yes" if settings.quests_enabled else "no"
         self.wish_target.default = str(settings.quest_wish_target)
+        self.reaction_target.default = str(settings.quest_reaction_target)
         self.check_in.default = "yes" if settings.quest_checkin_enabled else "no"
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
@@ -2297,6 +2314,7 @@ class QuestSettingsModal(AdminPanelModal, title="Birthday Quest settings"):
             interaction.guild.id,
             quests_enabled=_parse_yes_no(self.enabled.value, label="Enable quests"),
             quest_wish_target=int(self.wish_target.value),
+            quest_reaction_target=int(self.reaction_target.value),
             quest_checkin_enabled=_parse_yes_no(self.check_in.value, label="Require check-in"),
         )
         await interaction.response.send_message(
@@ -2305,6 +2323,7 @@ class QuestSettingsModal(AdminPanelModal, title="Birthday Quest settings"):
                 (
                     f"Quests: {_format_enabled(saved.quests_enabled)} | "
                     f"Wish target: {saved.quest_wish_target} | "
+                    f"Reaction target: {saved.quest_reaction_target} | "
                     f"Check-in: {_format_enabled(saved.quest_checkin_enabled)}"
                 ),
             ),

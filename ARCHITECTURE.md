@@ -83,6 +83,7 @@ One row per guild. Stores opt-in experience toggles and compact thresholds for:
 - Birthday Quests
 - Birthday Surprises
 - quest wish targets
+- quest reaction targets
 - optional quest check-in
 
 ### `birthday_wishes`
@@ -99,9 +100,10 @@ One active unrevealed row per `(guild_id, author_user_id, target_user_id)`. Stor
 One row per `(guild_id, user_id, occurrence_start_at_utc)`. Stores:
 
 - late-delivery marker
+- shared birthday announcement message id when a public post exists
 - capsule reveal state/message id
 - revealed-wish counts
-- quest progression and completion
+- quest progression and completion, including reaction totals and reaction-goal state
 - featured marker
 - Birthday Surprise selection
 - manual Nitro concierge fulfillment state
@@ -140,6 +142,7 @@ Grouped announcement send state. Used for dedupe and bounded stale-send recovery
   - reclaim stale `processing` work
   - recover overdue birthdays, anniversaries, recurring events, and role removals inside the grace window
   - recover uncertain announcement batches with a bounded fallback scan
+- Shared birthday-post reaction quest progress is refreshed outside the scheduler through debounced raw reaction events and explicit status/timeline refreshes.
 - Normal loop:
   - claim due work
   - execute pending events
@@ -200,6 +203,7 @@ Diagnostics cover:
 - invalid or ambiguous media configuration
 - blocked saved Studio/admin content
 - eligibility exclusions
+- reaction-objective fallback when a live birthday announcement post never became available
 
 Discord 400 invalid-payload failures are classified as permanent operator/config problems instead of retryable transport failures.
 
@@ -231,6 +235,7 @@ HTTP endpoints:
 - Celebration events are persisted before Discord side effects run.
 - Event states are explicit: `pending`, `processing`, `completed`.
 - Birthday Capsules, Quests, Surprises, and Timeline rows piggyback on the existing scheduler/event pipeline instead of introducing another worker.
+- Reaction quest tracking uses the shared announcement message id plus a bounded in-memory debounce/cache instead of per-reactor tables or a background service.
 - Permanent invalid payload/media failures complete as skipped instead of looping forever.
 - Active role cleanup uses stored role snapshot data so config changes do not orphan roles.
 - DM failures are recorded as skip outcomes without noisy retries.
@@ -243,6 +248,7 @@ HTTP endpoints:
 - Admin setup, Studio, preview, health, and import/export flows are ephemeral.
 - Logs and diagnostics do not include raw birth dates, birth years, raw template text, or raw blocked payloads.
 - Message Content intent is not used.
+- Quest reactions record only celebration-level totals; individual reactors are not stored.
 
 ## Extension seams
 
