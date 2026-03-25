@@ -11,6 +11,7 @@ from bdayblaze.domain.announcement_template import (
     AnnouncementRenderRecipient,
     default_template_for_kind,
     render_announcement_template,
+    validate_announcement_presentation,
 )
 from bdayblaze.domain.announcement_theme import (
     announcement_theme_color_value,
@@ -48,6 +49,7 @@ def build_announcement_message(
     late_delivery: bool = False,
     mention_suppressed: bool = False,
 ) -> PreparedAnnouncement:
+    validated_presentation = validate_announcement_presentation(presentation)
     context = AnnouncementRenderContext(
         kind=kind,
         server_name=server_name,
@@ -76,25 +78,25 @@ def build_announcement_message(
             announcement_theme,
             recipient_count=max(len(recipients), 1),
             celebration_mode=celebration_mode,
-            title_override=presentation.title_override,
+            title_override=validated_presentation.title_override,
         ),
         description=description,
         color=discord.Color(
             announcement_theme_color_value(
                 announcement_theme,
                 celebration_mode=celebration_mode,
-                accent_override=presentation.accent_color,
+                accent_override=validated_presentation.accent_color,
             )
         ),
     )
     embed = budget.build()
-    if presentation.image_url:
-        embed.set_image(url=presentation.image_url)
-    if presentation.thumbnail_url:
-        embed.set_thumbnail(url=presentation.thumbnail_url)
+    if validated_presentation.image_url:
+        embed.set_image(url=validated_presentation.image_url)
+    if validated_presentation.thumbnail_url:
+        embed.set_thumbnail(url=validated_presentation.thumbnail_url)
     footer_parts: list[str] = []
-    if presentation.footer_text:
-        footer_parts.append(presentation.footer_text)
+    if validated_presentation.footer_text:
+        footer_parts.append(validated_presentation.footer_text)
     if preview_label is not None:
         budget.set_author(preview_label)
         footer_parts.append(

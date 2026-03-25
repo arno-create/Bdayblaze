@@ -21,15 +21,24 @@ from bdayblaze.domain.announcement_theme import (
     announcement_theme_label,
     supported_announcement_themes,
 )
-from bdayblaze.domain.models import GuildSettings, RecurringCelebration
+from bdayblaze.domain.models import (
+    AnnouncementStudioPresentation,
+    GuildSettings,
+    RecurringCelebration,
+)
 from bdayblaze.domain.timezones import timezone_guidance
 from bdayblaze.logging import get_logger, redact_identifier
 from bdayblaze.services.birthday_service import BirthdayService
+from bdayblaze.services.diagnostics import (
+    build_presentation_diagnostics,
+    classify_discord_http_failure,
+)
 from bdayblaze.services.errors import ValidationError
 from bdayblaze.services.settings_service import SettingsService
 
-_SETUP_TITLE: Final = "Birthday setup"
-_STUDIO_TITLE: Final = "Celebration Studio"
+_SETUP_TITLE: Final = "🛠 Birthday Setup"
+_STUDIO_TITLE: Final = "✨ Celebration Studio"
+_UI_UNSET: Final = object()
 _UI_LOGGER = get_logger(component="celebration_studio")
 SectionName = Literal[
     "home",
@@ -41,13 +50,13 @@ SectionName = Literal[
     "help",
 ]
 _SECTION_LABELS: Final[dict[SectionName, str]] = {
-    "home": "Studio home",
-    "birthday": "Birthday announcement",
-    "birthday_dm": "Birthday DM",
-    "anniversary": "Member anniversary",
-    "server_anniversary": "Server anniversary",
-    "events": "Custom annual events",
-    "help": "Template help",
+    "home": "🏠 Studio overview",
+    "birthday": "🎂 Birthday announcement",
+    "birthday_dm": "💌 Birthday DM",
+    "anniversary": "🎉 Member anniversary",
+    "server_anniversary": "🏰 Server anniversary",
+    "events": "📅 Custom annual events",
+    "help": "🧩 Studio help",
 }
 
 
@@ -80,6 +89,7 @@ async def _send_safe_ui_error(
     if isinstance(error, ValidationError):
         message = str(error)
     elif isinstance(error, discord.HTTPException):
+        failure = classify_discord_http_failure(error, surface="ui")
         _UI_LOGGER.warning(
             "celebration_studio_http_error",
             surface=surface,
@@ -88,11 +98,10 @@ async def _send_safe_ui_error(
             status=error.status,
             discord_code=error.code,
         )
-        message = (
-            "Discord rejected that UI response. Try refreshing the panel or shortening the "
-            "current content."
-        )
-        if is_admin and error.status == 400:
+        message = failure.summary
+        if failure.action:
+            message = f"{message}\nAction: {failure.action}"
+        if is_admin and failure.permanent:
             message = f"{message}\nHint: `BDAY-UI-400`."
     else:
         _UI_LOGGER.exception(
@@ -135,13 +144,13 @@ def build_setup_embed(settings: GuildSettings, note: str | None = None) -> disco
     budget = BudgetedEmbed.create(
         title=_SETUP_TITLE,
         description=(
-            "Control routing, timezones, eligibility rules, and operator safeguards before "
-            "birthday or anniversary messages go live."
+            "Control routing, timezone, eligibility, and delivery safeguards before anything "
+            "goes live."
         ),
         color=discord.Color.blurple(),
     )
     budget.add_field(
-        name="Announcements",
+        name="🎂 Birthday announcement",
         value=(
             f"Status: {_format_enabled(settings.announcements_enabled)}\n"
             f"Birthday channel: {_format_channel(settings.announcement_channel_id)}\n"
@@ -151,7 +160,7 @@ def build_setup_embed(settings: GuildSettings, note: str | None = None) -> disco
         inline=False,
     )
     budget.add_field(
-        name="Eligibility and anti-spam",
+        name="🧱 Eligibility and anti-spam",
         value=(
             "Eligibility role: "
             f"{_format_eligibility_role(settings.eligibility_role_id)}\n"
@@ -162,7 +171,7 @@ def build_setup_embed(settings: GuildSettings, note: str | None = None) -> disco
         inline=False,
     )
     budget.add_field(
-        name="Roles and private delivery",
+        name="💌 Roles and private delivery",
         value=(
             "Birthday role: "
             f"{_format_enabled(settings.role_enabled)} "
@@ -172,7 +181,7 @@ def build_setup_embed(settings: GuildSettings, note: str | None = None) -> disco
         inline=False,
     )
     budget.add_field(
-        name="Anniversaries",
+        name="🎉 Anniversary routing",
         value=(
             f"Member anniversaries: {_format_enabled(settings.anniversary_enabled)}\n"
             f"Anniversary channel: {_format_channel(anniversary_channel)}\n"
@@ -181,7 +190,7 @@ def build_setup_embed(settings: GuildSettings, note: str | None = None) -> disco
         inline=False,
     )
     budget.add_field(
-        name="Default timezone",
+        name="🌍 Default timezone",
         value=(
             f"Saved: `{settings.default_timezone}`\n"
             f"Examples: {timezone_guidance(allow_server_default=False)}"
@@ -189,9 +198,9 @@ def build_setup_embed(settings: GuildSettings, note: str | None = None) -> disco
         inline=False,
     )
     if note:
-        budget.add_field(name="Saved", value=note, inline=False)
+        budget.add_field(name="✅ Updated", value=note, inline=False)
     budget.set_footer(
-        "Open Celebration Studio from this panel to manage templates, media, and previews."
+        "Open Celebration Studio from this panel to manage copy, media, previews, and resets."
     )
     return budget.build()
 
@@ -225,21 +234,25 @@ def build_message_template_embed(
 ) -> discord.Embed:
     state = _server_anniversary_state(guild=guild, celebration=server_anniversary)
     budget = BudgetedEmbed.create(
-        title=_STUDIO_TITLE,
+        title=(
+            _STUDIO_TITLE
+            if section == "home"
+            else f"{_STUDIO_TITLE} · {_SECTION_LABELS[section]}"
+        ),
         description=_section_description(section),
         color=discord.Color.blurple(),
     )
     budget.add_field(
-        name="Current section",
+        name="📍 Current focus",
         value=_SECTION_LABELS[section],
         inline=False,
     )
     if note:
-        budget.add_field(name="Update", value=note, inline=False)
+        budget.add_field(name="✅ Update", value=note, inline=False)
 
     if section == "home":
         budget.add_field(
-            name="Birthday announcement",
+            name="🎂 Birthday announcement",
             value=(
                 f"Status: {_format_enabled(settings.announcements_enabled)}\n"
                 f"Channel: {_format_channel(settings.announcement_channel_id)}\n"
@@ -249,7 +262,7 @@ def build_message_template_embed(
             inline=False,
         )
         budget.add_field(
-            name="Birthday DM",
+            name="💌 Birthday DM",
             value=(
                 f"Status: {_format_enabled(settings.birthday_dm_enabled)}\n"
                 f"Copy length: {len(settings.birthday_dm_template or DEFAULT_DM_TEMPLATE)} chars\n"
@@ -258,7 +271,7 @@ def build_message_template_embed(
             inline=False,
         )
         budget.add_field(
-            name="Member anniversaries",
+            name="🎉 Member anniversary",
             value=(
                 f"Status: {_format_enabled(settings.anniversary_enabled)}\n"
                 "Channel: "
@@ -268,7 +281,7 @@ def build_message_template_embed(
             inline=False,
         )
         budget.add_field(
-            name="Server anniversary",
+            name="🏰 Server anniversary",
             value=(
                 f"Status: {_format_enabled(state.enabled)}\n"
                 f"Date: {_format_month_day(state.month, state.day)}\n"
@@ -277,16 +290,16 @@ def build_message_template_embed(
             ),
             inline=False,
         )
-        budget.add_line_fields("Visual style", _presentation_lines(settings), inline=False)
+        budget.add_line_fields("🎨 Shared visuals", _presentation_lines(settings), inline=False)
         if recurring_events:
             budget.add_line_fields(
-                "Custom annual events",
+                "📅 Custom annual events",
                 [_format_event_line(celebration) for celebration in recurring_events[:4]],
                 inline=False,
             )
         else:
             budget.add_field(
-                name="Custom annual events",
+                name="📅 Custom annual events",
                 value="No custom annual events are configured yet.",
                 inline=False,
             )
@@ -298,12 +311,22 @@ def build_message_template_embed(
                 inline=False,
             )
         budget.add_field(
-            name="Media and preview notes",
+            name="🖼 Media URL examples",
             value=(
-                "Image and thumbnail URLs must use HTTPS and point to PNG, JPG, JPEG, GIF, "
-                "or WEBP files.\n"
-                "Previews never ping members and only show what Discord would render.\n"
-                "Long templates are trimmed in studio summaries but saved in full after validation."
+                "`https://cdn.example.com/birthday/banner.gif`\n"
+                "`https://images.example.com/render?id=42&sig=abc123`\n"
+                "`https://media.example.com/assets/celebration`"
+            ),
+            inline=False,
+        )
+        budget.add_field(
+            name="🧪 Preview and reset notes",
+            value=(
+                "Media URLs must use HTTPS, include a real host and path, and can be signed, "
+                "query-string, or extensionless CDN URLs when they are safe enough to preview.\n"
+                "Preview is the final Discord render check. It never pings members.\n"
+                "Reset copy restores the default template. Reset media clears only image and "
+                "thumbnail fields. Reset shared visuals clears title, footer, color, and media."
             ),
             inline=False,
         )
@@ -318,19 +341,27 @@ def build_message_template_embed(
                 f"Theme: {announcement_theme_label(settings.announcement_theme)}",
                 f"Celebration style: {settings.celebration_mode.title()}",
             ),
-            field_label="Birthday announcement template",
+            field_label="🎂 Birthday announcement copy",
         )
     elif section == "birthday_dm":
-        _add_delivery_section(
-            budget,
-            settings=settings,
-            template=settings.birthday_dm_template or DEFAULT_DM_TEMPLATE,
-            routing_lines=(
+        budget.add_field(
+            name="💌 Birthday DM copy",
+            value=code_block_snippet(settings.birthday_dm_template or DEFAULT_DM_TEMPLATE),
+            inline=False,
+        )
+        budget.add_line_fields(
+            "🔁 Routing and behavior",
+            (
                 f"Live status: {_format_enabled(settings.birthday_dm_enabled)}",
                 "Delivery model: best effort private DM",
                 "Previews stay private and never ping anyone.",
             ),
-            field_label="Birthday DM template",
+            inline=False,
+        )
+        budget.add_line_fields(
+            "🎨 Theme coverage",
+            _birthday_dm_presentation_lines(settings),
+            inline=False,
         )
     elif section == "anniversary":
         _add_delivery_section(
@@ -343,11 +374,11 @@ def build_message_template_embed(
                 f"{_format_channel(_effective_anniversary_channel(settings))}",
                 "Model: tracked members only",
             ),
-            field_label="Member anniversary template",
+            field_label="🎉 Member anniversary copy",
         )
     elif section == "server_anniversary":
         budget.add_line_fields(
-            "Schedule and routing",
+            "🏰 Schedule and routing",
             (
                 f"Live status: {_format_enabled(state.enabled)}",
                 f"Date: {_format_month_day(state.month, state.day)}",
@@ -358,37 +389,39 @@ def build_message_template_embed(
             inline=False,
         )
         budget.add_field(
-            name="Server anniversary template",
+            name="📝 Server anniversary copy",
             value=code_block_snippet(
                 state.template or default_template_for_kind("server_anniversary")
             ),
             inline=False,
         )
-        budget.add_line_fields("Shared visuals", _presentation_lines(settings), inline=False)
+        budget.add_line_fields("🎨 Shared visuals", _presentation_lines(settings), inline=False)
     else:
         if recurring_events:
             budget.add_line_fields(
-                "Configured events",
+                "📅 Configured events",
                 [_format_event_line(celebration) for celebration in recurring_events],
                 inline=False,
             )
         else:
             budget.add_field(
-                name="Configured events",
+                name="📅 Configured events",
                 value="No custom annual events are configured yet.",
                 inline=False,
             )
         budget.add_field(
-            name="Managing events",
+            name="🧭 Managing events",
             value=(
                 "Use `/birthday event add`, `/birthday event edit`, and "
-                "`/birthday event list` for direct event management."
+                "`/birthday event list` for direct event management.\n"
+                "Use `/birthday test-message kind:recurring_event` with an event id to dry-run one."
             ),
             inline=False,
         )
 
     budget.set_footer(
-        "Use the section menu to move between birthdays, DMs, anniversaries, and annual events."
+        "Use the section menu to move between public birthdays, DMs, anniversaries, "
+        "and yearly events."
     )
     return budget.build()
 
@@ -402,8 +435,8 @@ def _add_delivery_section(
     field_label: str,
 ) -> None:
     budget.add_field(name=field_label, value=code_block_snippet(template), inline=False)
-    budget.add_line_fields("Routing and behavior", routing_lines, inline=False)
-    budget.add_line_fields("Shared visuals", _presentation_lines(settings), inline=False)
+    budget.add_line_fields("📡 Routing and behavior", routing_lines, inline=False)
+    budget.add_line_fields("🎨 Shared visuals", _presentation_lines(settings), inline=False)
 
 
 def _presentation_lines(settings: GuildSettings) -> tuple[str, ...]:
@@ -415,6 +448,16 @@ def _presentation_lines(settings: GuildSettings) -> tuple[str, ...]:
         f"Image URL: {settings.announcement_image_url or 'None'}",
         f"Thumbnail URL: {settings.announcement_thumbnail_url or 'None'}",
         f"Accent color: {_format_accent_color(settings.announcement_accent_color)}",
+    )
+
+
+def _birthday_dm_presentation_lines(settings: GuildSettings) -> tuple[str, ...]:
+    return (
+        f"Theme: {announcement_theme_label(settings.announcement_theme)}",
+        f"Theme note: {announcement_theme_description(settings.announcement_theme)}",
+        f"Style: {settings.celebration_mode.title()}",
+        "Shared title, footer, image, thumbnail, and accent overrides stay on public "
+        "announcement surfaces.",
     )
 
 
@@ -450,31 +493,31 @@ def _server_anniversary_state(
 def _section_description(section: SectionName) -> str:
     descriptions: dict[SectionName, str] = {
         "home": (
-            "Manage celebration copy, safe rich-media presentation, and preview flow without "
-            "leaving Discord."
+            "Everything that shapes live celebrations lives here: copy, shared visuals, routing "
+            "awareness, and operator previews."
         ),
         "birthday": (
-            "Birthday announcements use the shared theme plus the birthday-specific "
-            "description template."
+            "This is the public birthday post: the main server announcement plus shared "
+            "visual styling."
         ),
         "birthday_dm": (
-            "Birthday DMs stay private and use a separate template from public announcements."
+            "This is the private birthday DM. It has its own copy, but still follows the "
+            "saved theme."
         ),
         "anniversary": (
-            "Member anniversaries reuse the shared presentation but keep their own "
-            "announcement copy and routing."
+            "Tracked join anniversaries reuse shared visuals, but keep separate copy and routing."
         ),
         "server_anniversary": (
-            "Treat the server birthday as a first-class annual celebration with its own "
-            "schedule and copy."
+            "Treat the server birthday as a first-class annual celebration with explicit "
+            "date, routing, and preview controls."
         ),
         "events": (
-            "Custom annual events stay intentionally lightweight: yearly date-based "
-            "celebrations with optional overrides."
+            "Custom annual events stay intentionally lightweight: one date, one optional "
+            "channel, one yearly celebration."
         ),
         "help": (
-            "Reference safe placeholders, media support, and preview behavior before editing "
-            "templates."
+            "Reference placeholders, media examples, preview expectations, and reset "
+            "behavior before editing anything."
         ),
     }
     return descriptions[section]
@@ -510,13 +553,63 @@ def _format_month_day(month: int | None, day: int | None) -> str:
 
 def _format_event_line(celebration: RecurringCelebration) -> str:
     return (
-        f"{celebration.name} | {month_name[celebration.event_month]} {celebration.event_day} | "
-        f"{_format_enabled(celebration.enabled)} | {_format_channel(celebration.channel_id)}"
+        f"`{celebration.id}` {celebration.name} • {month_name[celebration.event_month]} "
+        f"{celebration.event_day} • {_format_enabled(celebration.enabled)} • "
+        f"{_format_channel(celebration.channel_id)}"
     )
 
 
 def _effective_anniversary_channel(settings: GuildSettings) -> int | None:
     return settings.anniversary_channel_id or settings.announcement_channel_id
+
+
+def build_server_anniversary_control_embed(
+    settings: GuildSettings,
+    *,
+    guild: discord.Guild,
+    celebration: RecurringCelebration | None,
+    note: str | None = None,
+) -> discord.Embed:
+    state = _server_anniversary_state(guild=guild, celebration=celebration)
+    budget = BudgetedEmbed.create(
+        title="🏰 Server Anniversary Controls",
+        description=(
+            "Choose live status, date source, and channel routing without raw text inputs."
+        ),
+        color=discord.Color.blurple(),
+    )
+    if note:
+        budget.add_field(name="✅ Update", value=note, inline=False)
+    budget.add_line_fields(
+        "Status and date",
+        (
+            f"Live status: {_format_enabled(state.enabled)}",
+            f"Date: {_format_month_day(state.month, state.day)}",
+            "Date source: "
+            f"{'Guild creation date' if state.use_guild_created_date else 'Custom saved date'}",
+        ),
+        inline=False,
+    )
+    budget.add_line_fields(
+        "Routing",
+        (
+            f"Channel override: {_format_channel(state.channel_id)}",
+            "Live route: "
+            f"{_format_channel(state.channel_id or settings.announcement_channel_id)}",
+        ),
+        inline=False,
+    )
+    budget.add_field(
+        name="🧪 Preview and copy",
+        value=(
+            "Use Preview below to see the exact current render.\n"
+            "Server anniversary copy still lives in the main Studio section."
+        ),
+        inline=False,
+    )
+    budget.add_line_fields("🎨 Shared visuals", _presentation_lines(settings), inline=False)
+    budget.set_footer("Use the controls below, then return to Celebration Studio.")
+    return budget.build()
 
 
 class SetupView(AdminPanelView):
@@ -818,6 +911,17 @@ class MessageTemplateView(AdminPanelView):
             return False
         return True
 
+    async def _latest_context(
+        self,
+        guild: discord.Guild,
+    ) -> tuple[GuildSettings, RecurringCelebration | None, tuple[RecurringCelebration, ...]]:
+        latest = await self.settings_service.get_settings(guild.id)
+        server_anniversary, recurring_events = await _load_studio_context(
+            guild,
+            self.birthday_service,
+        )
+        return latest, server_anniversary, recurring_events
+
     async def refresh(
         self,
         interaction: discord.Interaction,
@@ -826,10 +930,8 @@ class MessageTemplateView(AdminPanelView):
         note: str | None = None,
     ) -> None:
         assert interaction.guild is not None
-        latest = await self.settings_service.get_settings(interaction.guild.id)
-        server_anniversary, recurring_events = await _load_studio_context(
-            interaction.guild,
-            self.birthday_service,
+        latest, server_anniversary, recurring_events = await self._latest_context(
+            interaction.guild
         )
         next_section = section or self.section
         await interaction.response.edit_message(
@@ -856,35 +958,41 @@ class MessageTemplateView(AdminPanelView):
     def _configure_buttons(self) -> None:
         if self.section == "birthday":
             self.edit_primary.label = "Edit birthday copy"
-            self.edit_secondary.label = "Edit visuals"
+            self.edit_secondary.label = "Edit shared visuals"
+            self.preview_current.label = "Preview birthday"
             self.reset_current.label = "Reset birthday copy"
         elif self.section == "birthday_dm":
             self.edit_primary.label = "Edit DM copy"
-            self.edit_secondary.label = "Edit visuals"
+            self.edit_secondary.label = "Edit announcement visuals"
+            self.preview_current.label = "Preview DM"
             self.reset_current.label = "Reset DM copy"
         elif self.section == "anniversary":
             self.edit_primary.label = "Edit anniversary copy"
-            self.edit_secondary.label = "Edit visuals"
+            self.edit_secondary.label = "Edit shared visuals"
+            self.preview_current.label = "Preview anniversary"
             self.reset_current.label = "Reset anniversary copy"
         elif self.section == "server_anniversary":
-            self.edit_primary.label = "Edit schedule"
+            self.edit_primary.label = "Schedule controls"
             self.edit_secondary.label = "Edit event copy"
+            self.preview_current.label = "Preview server anniversary"
             self.reset_current.label = "Reset to guild date"
         elif self.section == "events":
             self.edit_primary.label = "Event commands"
-            self.edit_secondary.label = "Edit visuals"
-            self.reset_current.label = "Reset visuals"
+            self.edit_secondary.label = "Edit shared visuals"
+            self.preview_current.label = "Preview first event"
+            self.reset_current.label = "Reset shared visuals"
             self.preview_current.disabled = len(self.recurring_events) == 0
         elif self.section == "help":
             self.edit_primary.disabled = True
             self.edit_secondary.disabled = True
             self.preview_current.disabled = True
             self.reset_current.disabled = True
+            self.reset_media.disabled = True
         else:
-            self.edit_primary.label = "Edit birthday copy"
-            self.edit_secondary.label = "Edit visuals"
+            self.edit_primary.label = "Open birthday copy"
+            self.edit_secondary.label = "Edit shared visuals"
             self.preview_current.label = "Preview birthday"
-            self.reset_current.label = "Reset visuals"
+            self.reset_current.label = "Reset shared visuals"
 
     @discord.ui.button(label="Edit", style=discord.ButtonStyle.primary, row=2)
     async def edit_primary(
@@ -892,22 +1000,40 @@ class MessageTemplateView(AdminPanelView):
         interaction: discord.Interaction,
         _: discord.ui.Button[MessageTemplateView],
     ) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "This can only be used in a server.",
+                ephemeral=True,
+            )
+            return
+        latest, server_anniversary, recurring_events = await self._latest_context(
+            interaction.guild
+        )
         if self.section == "server_anniversary":
-            await interaction.response.send_modal(
-                ServerAnniversaryConfigModal(
+            await interaction.response.send_message(
+                embed=build_server_anniversary_control_embed(
+                    latest,
+                    guild=interaction.guild,
+                    celebration=server_anniversary,
+                ),
+                view=ServerAnniversaryControlView(
                     settings_service=self.settings_service,
                     birthday_service=self.birthday_service,
-                    settings=self.settings,
+                    settings=latest,
                     owner_id=self.owner_id,
-                    guild=self.guild,
-                    celebration=self.server_anniversary,
-                )
+                    guild=interaction.guild,
+                    celebration=server_anniversary,
+                    recurring_events=recurring_events,
+                ),
+                ephemeral=True,
             )
             return
         if self.section == "events":
             await interaction.response.send_message(
                 "Manage custom annual events with `/birthday event add`, "
-                "`/birthday event edit`, and `/birthday event list`.",
+                "`/birthday event edit`, and `/birthday event list`.\n"
+                "Use `/birthday test-message` with `kind: recurring_event` and an event id "
+                "to dry-run one.",
                 ephemeral=True,
             )
             return
@@ -922,11 +1048,11 @@ class MessageTemplateView(AdminPanelView):
             TemplateEditModal(
                 settings_service=self.settings_service,
                 birthday_service=self.birthday_service,
-                settings=self.settings,
+                settings=latest,
                 owner_id=self.owner_id,
                 target=target,
-                guild=self.guild,
-                celebration=self.server_anniversary,
+                guild=interaction.guild,
+                celebration=server_anniversary,
             )
         )
 
@@ -936,23 +1062,30 @@ class MessageTemplateView(AdminPanelView):
         interaction: discord.Interaction,
         _: discord.ui.Button[MessageTemplateView],
     ) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "This can only be used in a server.",
+                ephemeral=True,
+            )
+            return
+        latest, server_anniversary, _ = await self._latest_context(interaction.guild)
         if self.section == "server_anniversary":
             await interaction.response.send_modal(
                 TemplateEditModal(
                     settings_service=self.settings_service,
                     birthday_service=self.birthday_service,
-                    settings=self.settings,
+                    settings=latest,
                     owner_id=self.owner_id,
                     target="server_anniversary",
-                    guild=self.guild,
-                    celebration=self.server_anniversary,
+                    guild=interaction.guild,
+                    celebration=server_anniversary,
                 )
             )
             return
         await interaction.response.send_modal(
             StudioPresentationModal(
                 settings_service=self.settings_service,
-                settings=self.settings,
+                settings=latest,
                 owner_id=self.owner_id,
                 birthday_service=self.birthday_service,
                 section=self.section,
@@ -971,14 +1104,15 @@ class MessageTemplateView(AdminPanelView):
                 ephemeral=True,
             )
             return
+        latest, server_anniversary, recurring_events = await self._latest_context(interaction.guild)
         try:
             status_embed, preview_embed = await _build_studio_preview_pair(
                 guild=interaction.guild,
-                settings=self.settings,
+                settings=latest,
                 settings_service=self.settings_service,
                 section=self.section,
-                server_anniversary=self.server_anniversary,
-                recurring_events=self.recurring_events,
+                server_anniversary=server_anniversary,
+                recurring_events=recurring_events,
             )
         except ValidationError as exc:
             await interaction.response.send_message(str(exc), ephemeral=True)
@@ -1001,18 +1135,56 @@ class MessageTemplateView(AdminPanelView):
                 ephemeral=True,
             )
             return
+        latest, server_anniversary, recurring_events = await self._latest_context(interaction.guild)
         try:
-            note = await self._reset_section(interaction.guild)
+            note = await self._reset_section(
+                interaction.guild,
+                server_anniversary=server_anniversary,
+            )
         except ValidationError as exc:
             await interaction.response.send_message(str(exc), ephemeral=True)
             return
-        latest = await self.settings_service.get_settings(interaction.guild.id)
-        server_anniversary, recurring_events = await _load_studio_context(
-            interaction.guild,
-            self.birthday_service,
-        )
+        latest, server_anniversary, recurring_events = await self._latest_context(interaction.guild)
         await interaction.response.send_message(
             embed=_build_return_embed("Celebration Studio updated", note),
+            view=StudioReturnView(
+                settings_service=self.settings_service,
+                birthday_service=self.birthday_service,
+                settings=latest,
+                owner_id=self.owner_id,
+                guild=interaction.guild,
+                section=self.section,
+                server_anniversary=server_anniversary,
+                recurring_events=recurring_events,
+            ),
+            ephemeral=True,
+        )
+
+    @discord.ui.button(label="Reset media", style=discord.ButtonStyle.secondary, row=3)
+    async def reset_media(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button[MessageTemplateView],
+    ) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "This can only be used in a server.",
+                ephemeral=True,
+            )
+            return
+        await self.settings_service.update_settings(
+            interaction.guild,
+            announcement_image_url=None,
+            announcement_thumbnail_url=None,
+        )
+        latest, server_anniversary, recurring_events = await self._latest_context(
+            interaction.guild
+        )
+        await interaction.response.send_message(
+            embed=_build_return_embed(
+                "Celebration Studio updated",
+                "Shared image and thumbnail media were cleared.",
+            ),
             view=StudioReturnView(
                 settings_service=self.settings_service,
                 birthday_service=self.birthday_service,
@@ -1045,7 +1217,12 @@ class MessageTemplateView(AdminPanelView):
             ),
         )
 
-    async def _reset_section(self, guild: discord.Guild) -> str:
+    async def _reset_section(
+        self,
+        guild: discord.Guild,
+        *,
+        server_anniversary: RecurringCelebration | None,
+    ) -> str:
         if self.section == "birthday":
             await self.settings_service.update_settings(guild, announcement_template=None)
             return "Birthday announcement copy reset to the safe default."
@@ -1061,7 +1238,7 @@ class MessageTemplateView(AdminPanelView):
             await self.birthday_service.reset_server_anniversary(
                 guild_id=guild.id,
                 guild_created_at_utc=guild.created_at,
-                enabled=self.server_anniversary.enabled if self.server_anniversary else False,
+                enabled=server_anniversary.enabled if server_anniversary else False,
             )
             return "Server anniversary reset to the guild creation date."
         await self.settings_service.update_settings(
@@ -1575,36 +1752,374 @@ class StudioPresentationModal(AdminPanelModal, title="Celebration visuals"):
         )
 
 
-class ServerAnniversaryConfigModal(AdminPanelModal, title="Server anniversary"):
-    enabled_input: discord.ui.TextInput[ServerAnniversaryConfigModal] = discord.ui.TextInput(
-        label="Enabled (yes/no)",
-        required=True,
-        max_length=5,
-        placeholder="yes",
+class ServerAnniversaryControlView(AdminPanelView):
+    def __init__(
+        self,
+        *,
+        settings_service: SettingsService,
+        birthday_service: BirthdayService | None,
+        settings: GuildSettings,
+        owner_id: int,
+        guild: discord.Guild,
+        celebration: RecurringCelebration | None,
+        recurring_events: tuple[RecurringCelebration, ...],
+    ) -> None:
+        super().__init__(timeout=900)
+        self.settings_service = settings_service
+        self.birthday_service = birthday_service
+        self.settings = settings
+        self.owner_id = owner_id
+        self.guild = guild
+        self.celebration = celebration
+        self.recurring_events = recurring_events
+        self.add_item(ServerAnniversaryChannelSelect(self))
+        self.add_item(ServerAnniversaryDateSourceSelect(self))
+        current_state = _server_anniversary_state(guild=guild, celebration=celebration)
+        self.toggle_enabled.label = "Disable live" if current_state.enabled else "Enable live"
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(
+                "These server-anniversary controls belong to a different admin.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def _latest_context(
+        self,
+    ) -> tuple[GuildSettings, RecurringCelebration | None, tuple[RecurringCelebration, ...]]:
+        latest = await self.settings_service.get_settings(self.guild.id)
+        server_anniversary, recurring_events = await _load_studio_context(
+            self.guild,
+            self.birthday_service,
+        )
+        return latest, server_anniversary, recurring_events
+
+    async def refresh(
+        self,
+        interaction: discord.Interaction,
+        *,
+        note: str | None = None,
+    ) -> None:
+        latest, server_anniversary, recurring_events = await self._latest_context()
+        await interaction.response.edit_message(
+            embed=build_server_anniversary_control_embed(
+                latest,
+                guild=self.guild,
+                celebration=server_anniversary,
+                note=note,
+            ),
+            view=ServerAnniversaryControlView(
+                settings_service=self.settings_service,
+                birthday_service=self.birthday_service,
+                settings=latest,
+                owner_id=self.owner_id,
+                guild=self.guild,
+                celebration=server_anniversary,
+                recurring_events=recurring_events,
+            ),
+        )
+
+    async def _save(
+        self,
+        *,
+        enabled: bool | None = None,
+        use_guild_created_date: bool | None = None,
+        channel_id: int | None | object = _UI_UNSET,
+        override_month: int | None | object = _UI_UNSET,
+        override_day: int | None | object = _UI_UNSET,
+    ) -> None:
+        if self.birthday_service is None:
+            raise ValidationError("Server anniversary tools are not available in this panel.")
+        current = await self.birthday_service.get_server_anniversary(self.guild.id)
+        state = _server_anniversary_state(guild=self.guild, celebration=current)
+        target_enabled = state.enabled if enabled is None else enabled
+        target_use_guild_created_date = (
+            state.use_guild_created_date
+            if use_guild_created_date is None
+            else use_guild_created_date
+        )
+        target_channel_id = state.channel_id if channel_id is _UI_UNSET else channel_id
+        target_month = state.month if override_month is _UI_UNSET else override_month
+        target_day = state.day if override_day is _UI_UNSET else override_day
+        await self.birthday_service.upsert_server_anniversary(
+            guild_id=self.guild.id,
+            guild_created_at_utc=self.guild.created_at,
+            override_month=(
+                None
+                if target_use_guild_created_date
+                else int(target_month) if target_month is not None else None
+            ),
+            override_day=(
+                None
+                if target_use_guild_created_date
+                else int(target_day) if target_day is not None else None
+            ),
+            channel_id=target_channel_id,  # type: ignore[arg-type]
+            template=current.template if current is not None else None,
+            enabled=target_enabled,
+            use_guild_created_date=target_use_guild_created_date,
+        )
+
+    @discord.ui.button(label="Enable live", style=discord.ButtonStyle.secondary, row=2)
+    async def toggle_enabled(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button[ServerAnniversaryControlView],
+    ) -> None:
+        current = (
+            await self.birthday_service.get_server_anniversary(self.guild.id)
+            if self.birthday_service is not None
+            else None
+        )
+        current_state = _server_anniversary_state(guild=self.guild, celebration=current)
+        await self._save(enabled=not current_state.enabled)
+        await self.refresh(
+            interaction,
+            note=(
+                "Server anniversary delivery was enabled."
+                if not current_state.enabled
+                else "Server anniversary delivery was disabled."
+            ),
+        )
+
+    @discord.ui.button(label="Set custom date", style=discord.ButtonStyle.primary, row=2)
+    async def set_custom_date(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button[ServerAnniversaryControlView],
+    ) -> None:
+        latest, server_anniversary, _ = await self._latest_context()
+        await interaction.response.send_modal(
+            ServerAnniversaryDateModal(
+                settings_service=self.settings_service,
+                birthday_service=self.birthday_service,
+                settings=latest,
+                owner_id=self.owner_id,
+                guild=self.guild,
+                celebration=server_anniversary,
+            )
+        )
+
+    @discord.ui.button(label="Clear channel", style=discord.ButtonStyle.secondary, row=2)
+    async def clear_channel(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button[ServerAnniversaryControlView],
+    ) -> None:
+        await self._save(channel_id=None)
+        await self.refresh(
+            interaction,
+            note="Server anniversary now uses the main birthday announcement channel.",
+        )
+
+    @discord.ui.button(label="Preview", style=discord.ButtonStyle.secondary, row=3)
+    async def preview(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button[ServerAnniversaryControlView],
+    ) -> None:
+        latest, server_anniversary, recurring_events = await self._latest_context()
+        status_embed, preview_embed = await _build_studio_preview_pair(
+            guild=self.guild,
+            settings=latest,
+            settings_service=self.settings_service,
+            section="server_anniversary",
+            server_anniversary=server_anniversary,
+            recurring_events=recurring_events,
+        )
+        await interaction.response.send_message(
+            embeds=[status_embed, preview_embed],
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @discord.ui.button(label="Reset to guild date", style=discord.ButtonStyle.danger, row=3)
+    async def reset_to_guild_date(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button[ServerAnniversaryControlView],
+    ) -> None:
+        if self.birthday_service is None:
+            await interaction.response.send_message(
+                "Server anniversary tools are not available in this panel.",
+                ephemeral=True,
+            )
+            return
+        current = await self.birthday_service.get_server_anniversary(self.guild.id)
+        current_state = _server_anniversary_state(guild=self.guild, celebration=current)
+        await self.birthday_service.reset_server_anniversary(
+            guild_id=self.guild.id,
+            guild_created_at_utc=self.guild.created_at,
+            enabled=current_state.enabled,
+        )
+        await self.refresh(interaction, note="Server anniversary reset to the guild creation date.")
+
+    @discord.ui.button(label="Back to Studio", style=discord.ButtonStyle.secondary, row=3)
+    async def back_to_studio(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button[ServerAnniversaryControlView],
+    ) -> None:
+        latest, server_anniversary, recurring_events = await self._latest_context()
+        await interaction.response.edit_message(
+            embed=build_message_template_embed(
+                latest,
+                section="server_anniversary",
+                guild=self.guild,
+                server_anniversary=server_anniversary,
+                recurring_events=recurring_events,
+            ),
+            view=MessageTemplateView(
+                settings_service=self.settings_service,
+                settings=latest,
+                owner_id=self.owner_id,
+                guild=self.guild,
+                birthday_service=self.birthday_service,
+                section="server_anniversary",
+                server_anniversary=server_anniversary,
+                recurring_events=recurring_events,
+            ),
+        )
+
+
+class ServerAnniversaryChannelSelect(discord.ui.ChannelSelect["ServerAnniversaryControlView"]):
+    def __init__(self, control_view: ServerAnniversaryControlView) -> None:
+        super().__init__(
+            channel_types=[discord.ChannelType.text, discord.ChannelType.news],
+            placeholder="Optional channel override for the server anniversary",
+            min_values=0,
+            max_values=1,
+            row=0,
+        )
+        self.control_view = control_view
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        channel_id = self.values[0].id if self.values else None
+        await self.control_view._save(channel_id=channel_id)
+        await self.control_view.refresh(
+            interaction,
+            note=(
+                "Server anniversary channel override updated."
+                if channel_id is not None
+                else "Server anniversary now uses the main birthday announcement channel."
+            ),
+        )
+
+
+class ServerAnniversaryDateSourceSelect(discord.ui.Select["ServerAnniversaryControlView"]):
+    def __init__(self, control_view: ServerAnniversaryControlView) -> None:
+        state = _server_anniversary_state(
+            guild=control_view.guild,
+            celebration=control_view.celebration,
+        )
+        super().__init__(
+            placeholder=(
+                "Date source: "
+                f"{'Guild creation date' if state.use_guild_created_date else 'Custom saved date'}"
+            ),
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(
+                    label="Guild creation date",
+                    value="guild",
+                    description="Use the server's created-at date when Discord provides it.",
+                    default=state.use_guild_created_date,
+                ),
+                discord.SelectOption(
+                    label="Custom saved date",
+                    value="custom",
+                    description="Use a custom month/day for the yearly server anniversary.",
+                    default=not state.use_guild_created_date,
+                ),
+            ],
+            row=1,
+        )
+        self.control_view = control_view
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        use_guild_created_date = self.values[0] == "guild"
+        await self.control_view._save(use_guild_created_date=use_guild_created_date)
+        await self.control_view.refresh(
+            interaction,
+            note=(
+                "Server anniversary now follows the guild creation date."
+                if use_guild_created_date
+                else "Server anniversary now uses a custom saved date."
+            ),
+        )
+
+
+class ServerAnniversaryReturnView(AdminPanelView):
+    def __init__(
+        self,
+        *,
+        settings_service: SettingsService,
+        birthday_service: BirthdayService | None,
+        owner_id: int,
+        guild: discord.Guild,
+    ) -> None:
+        super().__init__(timeout=600)
+        self.settings_service = settings_service
+        self.birthday_service = birthday_service
+        self.owner_id = owner_id
+        self.guild = guild
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(
+                "This update belongs to a different admin.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(
+        label="Back to server anniversary controls",
+        style=discord.ButtonStyle.primary,
     )
-    date_source_input: discord.ui.TextInput[ServerAnniversaryConfigModal] = discord.ui.TextInput(
-        label="Date source (guild/custom)",
+    async def back(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button[ServerAnniversaryReturnView],
+    ) -> None:
+        latest = await self.settings_service.get_settings(self.guild.id)
+        server_anniversary, recurring_events = await _load_studio_context(
+            self.guild,
+            self.birthday_service,
+        )
+        await interaction.response.edit_message(
+            embed=build_server_anniversary_control_embed(
+                latest,
+                guild=self.guild,
+                celebration=server_anniversary,
+            ),
+            view=ServerAnniversaryControlView(
+                settings_service=self.settings_service,
+                birthday_service=self.birthday_service,
+                settings=latest,
+                owner_id=self.owner_id,
+                guild=self.guild,
+                celebration=server_anniversary,
+                recurring_events=recurring_events,
+            ),
+        )
+
+
+class ServerAnniversaryDateModal(AdminPanelModal, title="Set custom server anniversary date"):
+    month_input: discord.ui.TextInput[ServerAnniversaryDateModal] = discord.ui.TextInput(
+        label="Month",
         required=True,
-        max_length=6,
-        placeholder="guild",
-    )
-    month_input: discord.ui.TextInput[ServerAnniversaryConfigModal] = discord.ui.TextInput(
-        label="Custom month",
-        required=False,
         max_length=2,
         placeholder="3",
     )
-    day_input: discord.ui.TextInput[ServerAnniversaryConfigModal] = discord.ui.TextInput(
-        label="Custom day",
-        required=False,
+    day_input: discord.ui.TextInput[ServerAnniversaryDateModal] = discord.ui.TextInput(
+        label="Day",
+        required=True,
         max_length=2,
         placeholder="25",
-    )
-    channel_input: discord.ui.TextInput[ServerAnniversaryConfigModal] = discord.ui.TextInput(
-        label="Channel override id",
-        required=False,
-        max_length=20,
-        placeholder="Leave blank to use the main announcement channel",
     )
 
     def __init__(
@@ -1614,7 +2129,7 @@ class ServerAnniversaryConfigModal(AdminPanelModal, title="Server anniversary"):
         birthday_service: BirthdayService | None,
         settings: GuildSettings,
         owner_id: int,
-        guild: discord.Guild | None,
+        guild: discord.Guild,
         celebration: RecurringCelebration | None,
     ) -> None:
         super().__init__()
@@ -1622,63 +2137,47 @@ class ServerAnniversaryConfigModal(AdminPanelModal, title="Server anniversary"):
         self.birthday_service = birthday_service
         self.settings = settings
         self.owner_id = owner_id
+        self.guild = guild
         state = _server_anniversary_state(guild=guild, celebration=celebration)
-        self.enabled_input.default = "yes" if state.enabled else "no"
-        self.date_source_input.default = "guild" if state.use_guild_created_date else "custom"
-        self.month_input.default = (
-            str(state.month) if state.month is not None and not state.use_guild_created_date else ""
-        )
-        self.day_input.default = (
-            str(state.day) if state.day is not None and not state.use_guild_created_date else ""
-        )
-        self.channel_input.default = str(state.channel_id) if state.channel_id is not None else ""
+        if state.month is not None:
+            self.month_input.default = str(state.month)
+        if state.day is not None:
+            self.day_input.default = str(state.day)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        if interaction.guild is None or self.birthday_service is None:
+        if self.birthday_service is None:
             await interaction.response.send_message(
-                "This panel cannot edit the server anniversary here.",
+                "Server anniversary tools are not available in this panel.",
                 ephemeral=True,
             )
             return
         try:
-            enabled = _parse_bool(self.enabled_input.value, label="Enabled")
-            use_guild_created_date = _parse_date_source(self.date_source_input.value)
-            override_month = _parse_optional_int(self.month_input.value, label="Month")
-            override_day = _parse_optional_int(self.day_input.value, label="Day")
-            channel_id = _parse_optional_int(self.channel_input.value, label="Channel override id")
-            existing = await self.birthday_service.get_server_anniversary(interaction.guild.id)
+            month = _parse_optional_int(self.month_input.value, label="Month")
+            day = _parse_optional_int(self.day_input.value, label="Day")
+            existing = await self.birthday_service.get_server_anniversary(self.guild.id)
             await self.birthday_service.upsert_server_anniversary(
-                guild_id=interaction.guild.id,
-                guild_created_at_utc=interaction.guild.created_at,
-                override_month=override_month,
-                override_day=override_day,
-                channel_id=channel_id,
-                template=existing.template if existing else None,
-                enabled=enabled,
-                use_guild_created_date=use_guild_created_date,
+                guild_id=self.guild.id,
+                guild_created_at_utc=self.guild.created_at,
+                override_month=month,
+                override_day=day,
+                channel_id=existing.channel_id if existing is not None else None,
+                template=existing.template if existing is not None else None,
+                enabled=existing.enabled if existing is not None else False,
+                use_guild_created_date=False,
             )
-        except (ValidationError, ValueError) as exc:
+        except ValidationError as exc:
             await interaction.response.send_message(str(exc), ephemeral=True)
             return
-        latest = await self.settings_service.get_settings(interaction.guild.id)
-        server_anniversary, recurring_events = await _load_studio_context(
-            interaction.guild,
-            self.birthday_service,
-        )
         await interaction.response.send_message(
             embed=_build_return_embed(
-                "Server anniversary saved",
-                "Server anniversary status, date source, and routing were updated.",
+                "Server anniversary updated",
+                "Custom server-anniversary date saved.",
             ),
-            view=StudioReturnView(
+            view=ServerAnniversaryReturnView(
                 settings_service=self.settings_service,
                 birthday_service=self.birthday_service,
-                settings=latest,
                 owner_id=self.owner_id,
-                guild=interaction.guild,
-                section="server_anniversary",
-                server_anniversary=server_anniversary,
-                recurring_events=recurring_events,
+                guild=self.guild,
             ),
             ephemeral=True,
         )
@@ -1697,49 +2196,95 @@ async def _build_studio_preview_pair(
         raise ValidationError("Select a delivery section before previewing.")
     if section in {"home", "birthday"}:
         preview = preview_context_for_kind("birthday_announcement")
-        preview_embed = build_announcement_message(
-            kind="birthday_announcement",
-            server_name=guild.name,
-            recipients=preview.recipients,
-            celebration_mode=settings.celebration_mode,
-            announcement_theme=settings.announcement_theme,
-            presentation=settings.presentation(),
-            template=settings.announcement_template,
-            preview_label="Preview only - birthday announcement",
-        ).embed
+        route = _format_channel(settings.announcement_channel_id)
         readiness = await settings_service.describe_delivery(
             guild,
             kind="birthday_announcement",
         )
+        try:
+            preview_embed = build_announcement_message(
+                kind="birthday_announcement",
+                server_name=guild.name,
+                recipients=preview.recipients,
+                celebration_mode=settings.celebration_mode,
+                announcement_theme=settings.announcement_theme,
+                presentation=settings.presentation(),
+                template=settings.announcement_template,
+                preview_label="Preview only - birthday announcement",
+            ).embed
+        except ValueError as exc:
+            return (
+                _build_preview_status_embed(
+                    settings,
+                    readiness,
+                    section=section,
+                    route=route,
+                    mention_suppressed=(
+                        len(preview.recipients) >= settings.mention_suppression_threshold
+                    ),
+                    preview_error=str(exc),
+                ),
+                _build_preview_unavailable_embed(_SECTION_LABELS[section], str(exc)),
+            )
     elif section == "birthday_dm":
         preview = preview_context_for_kind("birthday_dm")
-        preview_embed = build_announcement_message(
-            kind="birthday_dm",
-            server_name=guild.name,
-            recipients=preview.recipients,
-            celebration_mode=settings.celebration_mode,
-            announcement_theme=settings.announcement_theme,
-            presentation=settings.presentation(),
-            template=settings.birthday_dm_template,
-            preview_label="Preview only - birthday DM",
-        ).embed
+        route = "Private DM"
         readiness = await settings_service.describe_delivery(guild, kind="birthday_dm")
+        try:
+            preview_embed = build_announcement_message(
+                kind="birthday_dm",
+                server_name=guild.name,
+                recipients=preview.recipients,
+                celebration_mode=settings.celebration_mode,
+                announcement_theme=settings.announcement_theme,
+                presentation=settings.presentation_for_kind("birthday_dm"),
+                template=settings.birthday_dm_template,
+                preview_label="Preview only - birthday DM",
+            ).embed
+        except ValueError as exc:
+            return (
+                _build_preview_status_embed(
+                    settings,
+                    readiness,
+                    section=section,
+                    route=route,
+                    mention_suppressed=False,
+                    preview_error=str(exc),
+                ),
+                _build_preview_unavailable_embed(_SECTION_LABELS[section], str(exc)),
+            )
     elif section == "anniversary":
         preview = preview_context_for_kind("anniversary")
-        preview_embed = build_announcement_message(
-            kind="anniversary",
-            server_name=guild.name,
-            recipients=preview.recipients,
-            celebration_mode=settings.celebration_mode,
-            announcement_theme=settings.announcement_theme,
-            presentation=settings.presentation(),
-            template=settings.anniversary_template,
-            preview_label="Preview only - member anniversary",
-            event_name=preview.event_name,
-            event_month=preview.event_month,
-            event_day=preview.event_day,
-        ).embed
         readiness = await settings_service.describe_delivery(guild, kind="anniversary")
+        route = _format_channel(_effective_anniversary_channel(settings))
+        try:
+            preview_embed = build_announcement_message(
+                kind="anniversary",
+                server_name=guild.name,
+                recipients=preview.recipients,
+                celebration_mode=settings.celebration_mode,
+                announcement_theme=settings.announcement_theme,
+                presentation=settings.presentation(),
+                template=settings.anniversary_template,
+                preview_label="Preview only - member anniversary",
+                event_name=preview.event_name,
+                event_month=preview.event_month,
+                event_day=preview.event_day,
+            ).embed
+        except ValueError as exc:
+            return (
+                _build_preview_status_embed(
+                    settings,
+                    readiness,
+                    section=section,
+                    route=route,
+                    mention_suppressed=(
+                        len(preview.recipients) >= settings.mention_suppression_threshold
+                    ),
+                    preview_error=str(exc),
+                ),
+                _build_preview_unavailable_embed(_SECTION_LABELS[section], str(exc)),
+            )
     elif section == "server_anniversary":
         state = _server_anniversary_state(guild=guild, celebration=server_anniversary)
         if state.month is None or state.day is None:
@@ -1747,76 +2292,211 @@ async def _build_studio_preview_pair(
                 "Discord did not provide the guild creation date. "
                 "Save a custom server-anniversary date first."
             )
-        preview_embed = build_announcement_message(
-            kind="server_anniversary",
-            server_name=guild.name,
-            recipients=[],
-            celebration_mode=settings.celebration_mode,
-            announcement_theme=settings.announcement_theme,
-            presentation=settings.presentation(),
-            template=state.template,
-            preview_label="Preview only - server anniversary",
-            event_name=state.name,
-            event_month=state.month,
-            event_day=state.day,
-        ).embed
         readiness = await settings_service.describe_delivery(
             guild,
             kind="server_anniversary",
             channel_id=state.channel_id,
         )
+        route = _format_channel(state.channel_id or settings.announcement_channel_id)
+        try:
+            preview_embed = build_announcement_message(
+                kind="server_anniversary",
+                server_name=guild.name,
+                recipients=[],
+                celebration_mode=settings.celebration_mode,
+                announcement_theme=settings.announcement_theme,
+                presentation=settings.presentation(),
+                template=state.template,
+                preview_label="Preview only - server anniversary",
+                event_name=state.name,
+                event_month=state.month,
+                event_day=state.day,
+            ).embed
+        except ValueError as exc:
+            return (
+                _build_preview_status_embed(
+                    settings,
+                    readiness,
+                    section=section,
+                    route=route,
+                    mention_suppressed=False,
+                    preview_error=str(exc),
+                ),
+                _build_preview_unavailable_embed(_SECTION_LABELS[section], str(exc)),
+            )
     else:
         if not recurring_events:
             raise ValidationError("Create a recurring annual event before previewing one here.")
         celebration = recurring_events[0]
-        preview_embed = build_announcement_message(
-            kind="recurring_event",
-            server_name=guild.name,
-            recipients=[],
-            celebration_mode=settings.celebration_mode,
-            announcement_theme=settings.announcement_theme,
-            presentation=settings.presentation(),
-            template=celebration.template,
-            preview_label=f"Preview only - {celebration.name}",
-            event_name=celebration.name,
-            event_month=celebration.event_month,
-            event_day=celebration.event_day,
-        ).embed
         readiness = await settings_service.describe_delivery(
             guild,
             kind="recurring_event",
             channel_id=celebration.channel_id,
         )
-    return _build_preview_status_embed(settings, readiness), preview_embed
+        route = _format_channel(celebration.channel_id or settings.announcement_channel_id)
+        try:
+            preview_embed = build_announcement_message(
+                kind="recurring_event",
+                server_name=guild.name,
+                recipients=[],
+                celebration_mode=settings.celebration_mode,
+                announcement_theme=settings.announcement_theme,
+                presentation=settings.presentation(),
+                template=celebration.template,
+                preview_label=f"Preview only - {celebration.name}",
+                event_name=celebration.name,
+                event_month=celebration.event_month,
+                event_day=celebration.event_day,
+            ).embed
+        except ValueError as exc:
+            return (
+                _build_preview_status_embed(
+                    settings,
+                    readiness,
+                    section=section,
+                    route=route,
+                    mention_suppressed=False,
+                    preview_error=str(exc),
+                ),
+                _build_preview_unavailable_embed(_SECTION_LABELS[section], str(exc)),
+            )
+    return (
+        _build_preview_status_embed(
+            settings,
+            readiness,
+            section=section,
+            route=route,
+            mention_suppressed=(
+                len(preview.recipients) >= settings.mention_suppression_threshold
+                if section in {"home", "birthday", "anniversary"}
+                else False
+            ),
+        ),
+        preview_embed,
+    )
 
 
 def _build_preview_status_embed(
     settings: GuildSettings,
     readiness: object,
+    *,
+    section: SectionName,
+    route: str,
+    mention_suppressed: bool,
+    preview_error: str | None = None,
 ) -> discord.Embed:
     from bdayblaze.domain.models import AnnouncementDeliveryReadiness
 
     assert isinstance(readiness, AnnouncementDeliveryReadiness)
+    presentation = _preview_presentation_for_section(settings, section=section)
+    media_diagnostics = build_presentation_diagnostics(presentation)
     budget = BudgetedEmbed.create(
-        title="Dry-run preview",
+        title="🧪 Dry-Run Preview",
         description="Preview only. No live celebration was sent.",
         color=discord.Color.green() if readiness.status == "ready" else discord.Color.orange(),
     )
+    budget.add_field(name="Preview surface", value=_SECTION_LABELS[section], inline=False)
     budget.add_field(name="Live delivery readiness", value=readiness.summary, inline=False)
     if readiness.details:
         budget.add_line_fields("Details", readiness.details, inline=False)
     budget.add_line_fields(
-        "Current presentation",
+        "Routing and mentions",
         (
-            f"Theme: {announcement_theme_label(settings.announcement_theme)}",
-            f"Style: {settings.celebration_mode.title()}",
-            f"Title override: {settings.announcement_title_override or 'Default'}",
-            f"Image: {settings.announcement_image_url or 'None'}",
-            f"Thumbnail: {settings.announcement_thumbnail_url or 'None'}",
+            f"Live route: {route}",
+            _preview_mention_status(section=section, mention_suppressed=mention_suppressed),
+        ),
+        inline=False,
+    )
+    budget.add_line_fields(
+        "Media and visuals",
+        _preview_visual_lines(
+            settings,
+            section=section,
+            media_diagnostics=media_diagnostics,
+        ),
+        inline=False,
+    )
+    if media_diagnostics:
+        budget.add_line_fields(
+            "Media diagnostics",
+            [diagnostic.detail_line() for diagnostic in media_diagnostics],
+            inline=False,
+        )
+    if preview_error:
+        budget.add_field(name="Preview blocked", value=preview_error, inline=False)
+    return budget.build()
+
+
+def _build_preview_unavailable_embed(section_label: str, reason: str) -> discord.Embed:
+    budget = BudgetedEmbed.create(
+        title="Preview unavailable",
+        description=reason,
+        color=discord.Color.orange(),
+    )
+    budget.add_field(
+        name="What to do next",
+        value=(
+            f"Review `{section_label}`, fix the blocked setting, and rerun preview.\n"
+            "Live delivery should not be treated as ready until this preview succeeds."
         ),
         inline=False,
     )
     return budget.build()
+
+
+def _preview_mention_status(
+    *,
+    section: SectionName,
+    mention_suppressed: bool,
+) -> str:
+    if section == "birthday_dm":
+        return "Mentions: not used in private DMs."
+    if section in {"server_anniversary", "events"}:
+        return "Mentions: not used for this celebration type."
+    if mention_suppressed:
+        return "Mentions: would be suppressed for a batch this size."
+    return "Mentions: would be allowed for a small live batch."
+
+
+def _preview_presentation_for_section(
+    settings: GuildSettings,
+    *,
+    section: SectionName,
+) -> AnnouncementStudioPresentation:
+    kind = {
+        "home": "birthday_announcement",
+        "birthday": "birthday_announcement",
+        "birthday_dm": "birthday_dm",
+        "anniversary": "anniversary",
+        "server_anniversary": "server_anniversary",
+        "events": "recurring_event",
+        "help": "birthday_announcement",
+    }[section]
+    return settings.presentation_for_kind(kind)
+
+
+def _preview_visual_lines(
+    settings: GuildSettings,
+    *,
+    section: SectionName,
+    media_diagnostics: tuple[object, ...],
+) -> tuple[str, ...]:
+    if section == "birthday_dm":
+        return (
+            "Media status: Not used for live birthday DMs",
+            f"Theme: {announcement_theme_label(settings.announcement_theme)}",
+            f"Style: {settings.celebration_mode.title()}",
+            "Shared title, footer, image, thumbnail, and accent overrides stay on public "
+            "announcement surfaces.",
+        )
+    return (
+        f"Media status: {'Ready' if not media_diagnostics else 'Needs attention'}",
+        f"Theme: {announcement_theme_label(settings.announcement_theme)}",
+        f"Style: {settings.celebration_mode.title()}",
+        f"Title override: {settings.announcement_title_override or 'Default'}",
+        f"Image: {settings.announcement_image_url or 'None'}",
+        f"Thumbnail: {settings.announcement_thumbnail_url or 'None'}",
+    )
 
 
 async def _load_studio_context(
@@ -1848,32 +2528,14 @@ def _build_return_embed(title: str, note: str) -> discord.Embed:
 def _section_select_description(section: SectionName) -> str:
     descriptions: dict[SectionName, str] = {
         "home": "Overview of all celebration surfaces",
-        "birthday": "Public birthday announcement copy and visuals",
+        "birthday": "Public birthday post copy and visuals",
         "birthday_dm": "Private birthday DM copy",
-        "anniversary": "Member anniversary setup",
-        "server_anniversary": "Server birthday schedule and copy",
-        "events": "Recurring annual event overview",
-        "help": "Placeholders, media support, and reset notes",
+        "anniversary": "Tracked member anniversary setup",
+        "server_anniversary": "Server birthday controls and copy",
+        "events": "Yearly custom event overview",
+        "help": "Placeholders, media examples, and reset notes",
     }
     return descriptions[section]
-
-
-def _parse_bool(value: str, *, label: str) -> bool:
-    normalized = value.strip().lower()
-    if normalized in {"yes", "y", "true", "on", "enabled"}:
-        return True
-    if normalized in {"no", "n", "false", "off", "disabled"}:
-        return False
-    raise ValidationError(f"{label} must be yes or no.")
-
-
-def _parse_date_source(value: str) -> bool:
-    normalized = value.strip().lower()
-    if normalized == "guild":
-        return True
-    if normalized == "custom":
-        return False
-    raise ValidationError("Date source must be `guild` or `custom`.")
 
 
 def _parse_optional_int(value: str, *, label: str) -> int | None:

@@ -27,6 +27,7 @@ from bdayblaze.domain.announcement_template import (
 from bdayblaze.domain.models import BirthdayPreview, GuildSettings, MemberBirthday
 from bdayblaze.domain.timezones import autocomplete_timezones
 from bdayblaze.services.birthday_service import BirthdayService
+from bdayblaze.services.diagnostics import build_presentation_diagnostics
 from bdayblaze.services.errors import NotFoundError, ValidationError
 from bdayblaze.services.health_service import HealthService
 from bdayblaze.services.settings_service import SettingsService
@@ -412,10 +413,10 @@ class BirthdayGroup(
             ephemeral=True,
         )
 
-    @app_commands.command(name="message", description="Open Celebration Studio.")
+    @app_commands.command(name="studio", description="Open Celebration Studio.")
     @app_commands.checks.has_permissions(manage_guild=True)
     @app_commands.guild_only()
-    async def message(self, interaction: discord.Interaction) -> None:
+    async def studio(self, interaction: discord.Interaction) -> None:
         assert interaction.guild is not None
         settings = await self._settings_service.get_settings(interaction.guild.id)
         server_anniversary = await self._birthday_service.get_server_anniversary(
@@ -497,6 +498,7 @@ class BirthdayGroup(
             kind=kind,
             channel_id=recurring_channel_id,
         )
+        preview_error: str | None = None
         try:
             preview_embed = await _build_preview_embed(
                 interaction.guild,
@@ -506,11 +508,24 @@ class BirthdayGroup(
                 member=member,
                 event_id=event_id,
             )
-        except (ValidationError, NotFoundError) as exc:
-            await interaction.followup.send(str(exc), ephemeral=True)
-            return
+        except (ValidationError, NotFoundError, ValueError) as exc:
+            preview_error = str(exc)
+            preview_embed = _build_preview_unavailable_embed(
+                _preview_kind_label(kind),
+                preview_error,
+            )
         await interaction.followup.send(
-            embeds=[_build_dry_run_status_embed(readiness, settings), preview_embed],
+            embeds=[
+                _build_dry_run_status_embed(
+                    readiness,
+                    settings,
+                    kind=kind,
+                    channel_id=recurring_channel_id,
+                    preview_member_count=_preview_member_count(kind=kind, member=member),
+                    preview_error=preview_error,
+                ),
+                preview_embed,
+            ],
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
@@ -843,7 +858,36 @@ class BirthdayGroup(
             await interaction.followup.send(str(exc), ephemeral=True)
             return
         latest = await self._settings_service.get_settings(interaction.guild.id)
-        await interaction.followup.send(embed=build_setup_embed(latest), ephemeral=True)
+        server_anniversary = await self._birthday_service.get_server_anniversary(
+            interaction.guild.id
+        )
+        recurring_events = tuple(
+            await self._birthday_service.list_recurring_celebrations(
+                interaction.guild.id,
+                limit=8,
+            )
+        )
+        await interaction.followup.send(
+            embed=build_message_template_embed(
+                latest,
+                note="Member anniversary routing updated.",
+                section="anniversary",
+                guild=interaction.guild,
+                server_anniversary=server_anniversary,
+                recurring_events=recurring_events,
+            ),
+            view=MessageTemplateView(
+                settings_service=self._settings_service,
+                settings=latest,
+                owner_id=interaction.user.id,
+                guild=interaction.guild,
+                birthday_service=self._birthday_service,
+                section="anniversary",
+                server_anniversary=server_anniversary,
+                recurring_events=recurring_events,
+            ),
+            ephemeral=True,
+        )
 
     @anniversary.command(
         name="sync",
@@ -1107,14 +1151,31 @@ class ConfirmBirthdayDeletionView(discord.ui.View):
 def _build_dry_run_status_embed(
     readiness: object,
     settings: GuildSettings,
+    *,
+    kind: Literal[
+        "birthday_announcement",
+        "birthday_dm",
+        "anniversary",
+        "server_anniversary",
+        "recurring_event",
+    ],
+    channel_id: int | None,
+    preview_member_count: int,
+    preview_error: str | None = None,
 ) -> discord.Embed:
     from bdayblaze.domain.models import AnnouncementDeliveryReadiness
 
     assert isinstance(readiness, AnnouncementDeliveryReadiness)
+    media_diagnostics = build_presentation_diagnostics(settings.presentation_for_kind(kind))
     embed = BudgetedEmbed.create(
-        title="Dry-run preview",
+        title="🧪 Dry-Run Preview",
         description="Preview only. No live celebration was sent.",
         color=discord.Color.green() if readiness.status == "ready" else discord.Color.orange(),
+    )
+    embed.add_field(
+        name="Preview surface",
+        value=_preview_kind_label(kind),
+        inline=False,
     )
     embed.add_field(
         name="Live delivery readiness",
@@ -1124,15 +1185,34 @@ def _build_dry_run_status_embed(
     if readiness.details:
         embed.add_line_fields("Details", readiness.details, inline=False)
     embed.add_line_fields(
-        "Current presentation",
+        "Routing and mentions",
         (
-            f"Theme: {settings.announcement_theme}",
-            f"Style: {settings.celebration_mode}",
-            f"Image: {settings.announcement_image_url or 'None'}",
-            f"Thumbnail: {settings.announcement_thumbnail_url or 'None'}",
+            f"Live route: {_preview_route_for_kind(settings, kind=kind, channel_id=channel_id)}",
+            _preview_mention_status(
+                kind=kind,
+                preview_member_count=preview_member_count,
+                threshold=settings.mention_suppression_threshold,
+            ),
         ),
         inline=False,
     )
+    embed.add_line_fields(
+        "Media and visuals",
+        _preview_visual_lines(
+            settings,
+            kind=kind,
+            media_diagnostics=media_diagnostics,
+        ),
+        inline=False,
+    )
+    if media_diagnostics:
+        embed.add_line_fields(
+            "Media diagnostics",
+            [diagnostic.detail_line() for diagnostic in media_diagnostics],
+            inline=False,
+        )
+    if preview_error:
+        embed.add_field(name="Preview blocked", value=preview_error, inline=False)
     return embed.build()
 
 
@@ -1142,18 +1222,18 @@ def _build_health_embed(issues: object) -> discord.Embed:
     assert isinstance(issues, list)
     if not issues:
         return BudgetedEmbed.create(
-            title="Health check",
+            title="🩺 Health Check",
             description="No actionable issues were detected.",
             color=discord.Color.green(),
         ).build()
 
     typed_issues = [issue for issue in issues if isinstance(issue, HealthIssue)]
     embed = BudgetedEmbed.create(
-        title="Health check",
+        title="🩺 Health Check",
         color=discord.Color.orange(),
     )
     embed.add_line_fields(
-        "Issues",
+        "Actionable issues",
         [
             f"[{issue.severity.upper()}] `{issue.code}`: {issue.summary}\n"
             f"Action: {issue.action}"
@@ -1176,19 +1256,32 @@ def _build_recurring_event_list_embed(
         if isinstance(celebration, RecurringCelebration)
     ]
     embed = BudgetedEmbed.create(
-        title="Recurring events",
+        title="📅 Recurring Events",
         color=discord.Color.blurple(),
     )
     embed.add_line_fields(
-        "Configured events",
+        "Configured yearly events",
         [
             (
-                f"`{celebration.id}` - {celebration.name} on "
-                f"{celebration.event_month:02d}/{celebration.event_day:02d} - "
-                f"{'Enabled' if celebration.enabled else 'Disabled'}"
+                f"`{celebration.id}` {celebration.name} • "
+                f"{celebration.event_month:02d}/{celebration.event_day:02d} • "
+                f"{'Enabled' if celebration.enabled else 'Disabled'} • "
+                (
+                    f"<#{celebration.channel_id}>"
+                    if celebration.channel_id is not None
+                    else "Main announcement channel"
+                )
             )
             for celebration in typed_celebrations
         ],
+        inline=False,
+    )
+    embed.add_field(
+        name="Preview path",
+        value=(
+            "Use `/birthday test-message` with `kind: recurring_event` and the event id "
+            "to dry-run the current saved render."
+        ),
         inline=False,
     )
     return embed.build()
@@ -1196,7 +1289,7 @@ def _build_recurring_event_list_embed(
 
 def _build_privacy_embed() -> discord.Embed:
     embed = BudgetedEmbed.create(
-        title="Privacy",
+        title="🔒 Privacy",
         description=(
             "Bdayblaze stores birthdays per server membership, not across servers. "
             "Only month/day, an optional birth year, an optional timezone override, "
@@ -1270,7 +1363,7 @@ def _build_import_preview_embed(preview: object, applied: bool = False) -> disco
 
     assert isinstance(preview, BirthdayImportPreview)
     embed = BudgetedEmbed.create(
-        title="Birthday import preview" if not applied else "Birthday import applied",
+        title="📥 Birthday Import Preview" if not applied else "✅ Birthday Import Applied",
         color=discord.Color.blurple(),
     )
     embed.add_field(name="Rows", value=str(preview.total_rows), inline=True)
@@ -1292,6 +1385,22 @@ def _build_import_preview_embed(preview: object, applied: bool = False) -> disco
             ),
             inline=False,
         )
+    return embed.build()
+
+
+def _build_preview_unavailable_embed(kind_label: str, reason: str) -> discord.Embed:
+    embed = BudgetedEmbed.create(
+        title="Preview unavailable",
+        description=reason,
+        color=discord.Color.orange(),
+    )
+    embed.add_field(
+        name="What to do next",
+        value=(
+            f"Fix `{kind_label}` settings, rerun preview, and only then trust live readiness."
+        ),
+        inline=False,
+    )
     return embed.build()
 
 
@@ -1320,7 +1429,7 @@ async def _build_preview_embed(
             recipients=[],
             celebration_mode=settings.celebration_mode,
             announcement_theme=settings.announcement_theme,
-            presentation=settings.presentation(),
+            presentation=settings.presentation_for_kind("recurring_event"),
             template=celebration.template,
             preview_label="Preview only - recurring event",
             event_name=celebration.name,
@@ -1348,7 +1457,7 @@ async def _build_preview_embed(
             recipients=[],
             celebration_mode=settings.celebration_mode,
             announcement_theme=settings.announcement_theme,
-            presentation=settings.presentation(),
+            presentation=settings.presentation_for_kind("server_anniversary"),
             template=template,
             preview_label="Preview only - server anniversary",
             event_name="Server anniversary",
@@ -1398,7 +1507,7 @@ async def _build_preview_embed(
             recipients=preview_recipients,
             celebration_mode=settings.celebration_mode,
             announcement_theme=settings.announcement_theme,
-            presentation=settings.presentation(),
+            presentation=settings.presentation_for_kind("anniversary"),
             template=settings.anniversary_template,
             preview_label="Preview only - anniversary",
             event_name=preview.event_name,
@@ -1412,7 +1521,7 @@ async def _build_preview_embed(
         recipients=recipients,
         celebration_mode=settings.celebration_mode,
         announcement_theme=settings.announcement_theme,
-        presentation=settings.presentation(),
+        presentation=settings.presentation_for_kind(kind),
         template=(
             settings.announcement_template
             if kind == "birthday_announcement"
@@ -1441,6 +1550,117 @@ async def _build_validated_import_preview(
         allowed_user_ids=allowed_user_ids,
     )
     return validated_preview, allowed_user_ids
+
+
+def _preview_kind_label(
+    kind: Literal[
+        "birthday_announcement",
+        "birthday_dm",
+        "anniversary",
+        "server_anniversary",
+        "recurring_event",
+    ],
+) -> str:
+    return {
+        "birthday_announcement": "🎂 Birthday announcement",
+        "birthday_dm": "💌 Birthday DM",
+        "anniversary": "🎉 Member anniversary",
+        "server_anniversary": "🏰 Server anniversary",
+        "recurring_event": "📅 Recurring annual event",
+    }[kind]
+
+
+def _preview_route_for_kind(
+    settings: GuildSettings,
+    *,
+    kind: Literal[
+        "birthday_announcement",
+        "birthday_dm",
+        "anniversary",
+        "server_anniversary",
+        "recurring_event",
+    ],
+    channel_id: int | None,
+) -> str:
+    if kind == "birthday_dm":
+        return "Private DM"
+    if kind == "anniversary":
+        target_channel_id = (
+            channel_id
+            or settings.anniversary_channel_id
+            or settings.announcement_channel_id
+        )
+    else:
+        target_channel_id = channel_id or settings.announcement_channel_id
+    return f"<#{target_channel_id}>" if target_channel_id is not None else "Not configured"
+
+
+def _preview_member_count(
+    *,
+    kind: Literal[
+        "birthday_announcement",
+        "birthday_dm",
+        "anniversary",
+        "server_anniversary",
+        "recurring_event",
+    ],
+    member: discord.Member | None,
+) -> int:
+    if kind in {"server_anniversary", "recurring_event"}:
+        return 0
+    if member is not None:
+        return 1
+    return len(preview_context_for_kind(kind).recipients)
+
+
+def _preview_mention_status(
+    *,
+    kind: Literal[
+        "birthday_announcement",
+        "birthday_dm",
+        "anniversary",
+        "server_anniversary",
+        "recurring_event",
+    ],
+    preview_member_count: int,
+    threshold: int,
+) -> str:
+    if kind == "birthday_dm":
+        return "Mentions: not used in private DMs."
+    if kind in {"server_anniversary", "recurring_event"}:
+        return "Mentions: not used for this celebration type."
+    if preview_member_count >= threshold:
+        return "Mentions: would be suppressed for a batch this size."
+    return "Mentions: would be allowed for a small live batch."
+
+
+def _preview_visual_lines(
+    settings: GuildSettings,
+    *,
+    kind: Literal[
+        "birthday_announcement",
+        "birthday_dm",
+        "anniversary",
+        "server_anniversary",
+        "recurring_event",
+    ],
+    media_diagnostics: tuple[object, ...],
+) -> tuple[str, ...]:
+    if kind == "birthday_dm":
+        return (
+            "Media status: Not used for live birthday DMs",
+            f"Theme: {settings.announcement_theme}",
+            f"Style: {settings.celebration_mode}",
+            "Shared title, footer, image, thumbnail, and accent overrides stay on public "
+            "announcement surfaces.",
+        )
+    return (
+        f"Media status: {'Ready' if not media_diagnostics else 'Needs attention'}",
+        f"Theme: {settings.announcement_theme}",
+        f"Style: {settings.celebration_mode}",
+        f"Image: {settings.announcement_image_url or 'None'}",
+        f"Thumbnail: {settings.announcement_thumbnail_url or 'None'}",
+    )
 
 
 async def _require_ready_delivery(

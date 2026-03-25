@@ -25,7 +25,11 @@ from bdayblaze.discord.embed_budget import (
     embed_text_length,
 )
 from bdayblaze.discord.ui import info
-from bdayblaze.discord.ui.setup import build_message_template_embed, build_setup_embed
+from bdayblaze.discord.ui.setup import (
+    build_message_template_embed,
+    build_server_anniversary_control_embed,
+    build_setup_embed,
+)
 from bdayblaze.domain.models import (
     AnnouncementDeliveryReadiness,
     BirthdayImportError,
@@ -195,12 +199,23 @@ def test_admin_status_and_info_embeds_stay_within_discord_limits() -> None:
     embeds = [
         info.build_help_embed(),
         info.build_about_embed(),
-        _build_dry_run_status_embed(readiness, _settings()),
+        _build_dry_run_status_embed(
+            readiness,
+            _settings(),
+            kind="birthday_announcement",
+            channel_id=123,
+            preview_member_count=2,
+        ),
         _build_health_embed(issues),
         _build_import_preview_embed(preview),
         _build_import_preview_embed(preview, applied=True),
         _build_privacy_embed(),
         _build_recurring_event_list_embed(list(_recurring_events())),
+        build_server_anniversary_control_embed(
+            _settings(),
+            guild=SimpleNamespace(created_at=datetime(2020, 3, 25, tzinfo=UTC)),
+            celebration=_server_anniversary(),
+        ),
     ]
 
     for embed in embeds:

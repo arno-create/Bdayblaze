@@ -19,10 +19,14 @@ from bdayblaze.domain.models import (
     GuildSettings,
 )
 from bdayblaze.logging import get_logger, redact_identifier
-from bdayblaze.services.diagnostics import evaluate_member_eligibility
+from bdayblaze.services.diagnostics import (
+    classify_discord_http_failure,
+    evaluate_member_eligibility,
+)
 from bdayblaze.services.scheduler import (
     AnnouncementSendResult,
     DirectSendResult,
+    GatewayPermanentError,
     GatewayRetryableError,
 )
 
@@ -128,25 +132,28 @@ class DiscordSchedulerGateway:
                 skipped_user_ids=skipped_user_ids,
             )
 
-        prepared = build_announcement_message(
-            kind="birthday_announcement",
-            server_name=guild.name,
-            recipients=render_recipients,
-            celebration_mode=celebration_mode,  # type: ignore[arg-type]
-            announcement_theme=announcement_theme,  # type: ignore[arg-type]
-            presentation=_presentation(
-                announcement_theme=announcement_theme,
-                title_override=title_override,
-                footer_text=footer_text,
-                image_url=image_url,
-                thumbnail_url=thumbnail_url,
-                accent_color=accent_color,
-            ),
-            template=template,
-            batch_token=batch_token,
-            late_delivery=_late_delivery(scheduled_for_utc),
-            mention_suppressed=len(render_recipients) >= mention_suppression_threshold,
-        )
+        try:
+            prepared = build_announcement_message(
+                kind="birthday_announcement",
+                server_name=guild.name,
+                recipients=render_recipients,
+                celebration_mode=celebration_mode,  # type: ignore[arg-type]
+                announcement_theme=announcement_theme,  # type: ignore[arg-type]
+                presentation=_presentation(
+                    announcement_theme=announcement_theme,
+                    title_override=title_override,
+                    footer_text=footer_text,
+                    image_url=image_url,
+                    thumbnail_url=thumbnail_url,
+                    accent_color=accent_color,
+                ),
+                template=template,
+                batch_token=batch_token,
+                late_delivery=_late_delivery(scheduled_for_utc),
+                mention_suppressed=len(render_recipients) >= mention_suppression_threshold,
+            )
+        except ValueError as exc:
+            raise GatewayPermanentError(_invalid_delivery_code(str(exc))) from exc
         try:
             message = await channel.send(
                 content=prepared.content,
@@ -160,7 +167,10 @@ class DiscordSchedulerGateway:
         except discord.Forbidden:
             return _skip_all(recipients, "announcement_forbidden")
         except discord.HTTPException as exc:
-            raise GatewayRetryableError("announcement_http_error") from exc
+            failure = classify_discord_http_failure(exc, surface="announcement")
+            if failure.permanent:
+                raise GatewayPermanentError(failure.code) from exc
+            raise GatewayRetryableError(failure.code) from exc
         self._logger.info(
             "announcement_sent",
             guild_id=guild_id,
@@ -224,28 +234,31 @@ class DiscordSchedulerGateway:
                 skipped_user_ids=skipped_user_ids,
             )
 
-        prepared = build_announcement_message(
-            kind="anniversary",
-            server_name=guild.name,
-            recipients=render_recipients,
-            celebration_mode=celebration_mode,  # type: ignore[arg-type]
-            announcement_theme=announcement_theme,  # type: ignore[arg-type]
-            presentation=_presentation(
-                announcement_theme=announcement_theme,
-                title_override=title_override,
-                footer_text=footer_text,
-                image_url=image_url,
-                thumbnail_url=thumbnail_url,
-                accent_color=accent_color,
-            ),
-            template=template,
-            batch_token=batch_token,
-            event_name=event_name,
-            event_month=event_month,
-            event_day=event_day,
-            late_delivery=_late_delivery(scheduled_for_utc),
-            mention_suppressed=len(render_recipients) >= mention_suppression_threshold,
-        )
+        try:
+            prepared = build_announcement_message(
+                kind="anniversary",
+                server_name=guild.name,
+                recipients=render_recipients,
+                celebration_mode=celebration_mode,  # type: ignore[arg-type]
+                announcement_theme=announcement_theme,  # type: ignore[arg-type]
+                presentation=_presentation(
+                    announcement_theme=announcement_theme,
+                    title_override=title_override,
+                    footer_text=footer_text,
+                    image_url=image_url,
+                    thumbnail_url=thumbnail_url,
+                    accent_color=accent_color,
+                ),
+                template=template,
+                batch_token=batch_token,
+                event_name=event_name,
+                event_month=event_month,
+                event_day=event_day,
+                late_delivery=_late_delivery(scheduled_for_utc),
+                mention_suppressed=len(render_recipients) >= mention_suppression_threshold,
+            )
+        except ValueError as exc:
+            raise GatewayPermanentError(_invalid_delivery_code(str(exc))) from exc
         try:
             message = await channel.send(
                 content=prepared.content,
@@ -259,7 +272,10 @@ class DiscordSchedulerGateway:
         except discord.Forbidden:
             return _skip_all(recipients, "announcement_forbidden")
         except discord.HTTPException as exc:
-            raise GatewayRetryableError("announcement_http_error") from exc
+            failure = classify_discord_http_failure(exc, surface="announcement")
+            if failure.permanent:
+                raise GatewayPermanentError(failure.code) from exc
+            raise GatewayRetryableError(failure.code) from exc
         self._logger.info(
             "anniversary_announcement_sent",
             guild_id=guild_id,
@@ -305,38 +321,44 @@ class DiscordSchedulerGateway:
         )
         if not decision.allowed:
             return DirectSendResult(status=decision.code or "member_ineligible")
-        prepared = build_announcement_message(
-            kind="birthday_dm",
-            server_name=guild.name,
-            recipients=[
-                AnnouncementRenderRecipient(
-                    mention=member.mention,
-                    display_name=member.display_name,
-                    username=member.name,
-                    birth_month=birth_month,
-                    birth_day=birth_day,
-                    timezone=timezone,
-                )
-            ],
-            celebration_mode=celebration_mode,  # type: ignore[arg-type]
-            announcement_theme=announcement_theme,  # type: ignore[arg-type]
-            presentation=_presentation(
-                announcement_theme=announcement_theme,
-                title_override=None,
-                footer_text=None,
-                image_url=None,
-                thumbnail_url=None,
-                accent_color=None,
-            ),
-            template=template,
-            late_delivery=_late_delivery(scheduled_for_utc),
-        )
+        try:
+            prepared = build_announcement_message(
+                kind="birthday_dm",
+                server_name=guild.name,
+                recipients=[
+                    AnnouncementRenderRecipient(
+                        mention=member.mention,
+                        display_name=member.display_name,
+                        username=member.name,
+                        birth_month=birth_month,
+                        birth_day=birth_day,
+                        timezone=timezone,
+                    )
+                ],
+                celebration_mode=celebration_mode,  # type: ignore[arg-type]
+                announcement_theme=announcement_theme,  # type: ignore[arg-type]
+                presentation=_presentation(
+                    announcement_theme=announcement_theme,
+                    title_override=None,
+                    footer_text=None,
+                    image_url=None,
+                    thumbnail_url=None,
+                    accent_color=None,
+                ),
+                template=template,
+                late_delivery=_late_delivery(scheduled_for_utc),
+            )
+        except ValueError as exc:
+            raise GatewayPermanentError(_invalid_delivery_code(str(exc))) from exc
         try:
             await member.send(embed=prepared.embed, allowed_mentions=discord.AllowedMentions.none())
         except discord.Forbidden:
             return DirectSendResult(status="dm_forbidden")
         except discord.HTTPException as exc:
-            raise GatewayRetryableError("birthday_dm_http_error") from exc
+            failure = classify_discord_http_failure(exc, surface="birthday_dm")
+            if failure.permanent:
+                raise GatewayPermanentError(failure.code) from exc
+            raise GatewayRetryableError(failure.code) from exc
         return DirectSendResult(
             status="sent",
             note_code="late_delivery" if _late_delivery(scheduled_for_utc) else None,
@@ -369,30 +391,33 @@ class DiscordSchedulerGateway:
             return DirectSendResult(status="announcement_channel_missing")
         if not _channel_ready(channel):
             return DirectSendResult(status="announcement_forbidden")
-        prepared = build_announcement_message(
-            kind=(
-                "server_anniversary"
-                if celebration_kind == "server_anniversary"
-                else "recurring_event"
-            ),
-            server_name=guild.name,
-            recipients=[],
-            celebration_mode=celebration_mode,  # type: ignore[arg-type]
-            announcement_theme=announcement_theme,  # type: ignore[arg-type]
-            presentation=_presentation(
-                announcement_theme=announcement_theme,
-                title_override=title_override,
-                footer_text=footer_text,
-                image_url=image_url,
-                thumbnail_url=thumbnail_url,
-                accent_color=accent_color,
-            ),
-            template=template,
-            event_name=event_name,
-            event_month=event_month,
-            event_day=event_day,
-            late_delivery=_late_delivery(scheduled_for_utc),
-        )
+        try:
+            prepared = build_announcement_message(
+                kind=(
+                    "server_anniversary"
+                    if celebration_kind == "server_anniversary"
+                    else "recurring_event"
+                ),
+                server_name=guild.name,
+                recipients=[],
+                celebration_mode=celebration_mode,  # type: ignore[arg-type]
+                announcement_theme=announcement_theme,  # type: ignore[arg-type]
+                presentation=_presentation(
+                    announcement_theme=announcement_theme,
+                    title_override=title_override,
+                    footer_text=footer_text,
+                    image_url=image_url,
+                    thumbnail_url=thumbnail_url,
+                    accent_color=accent_color,
+                ),
+                template=template,
+                event_name=event_name,
+                event_month=event_month,
+                event_day=event_day,
+                late_delivery=_late_delivery(scheduled_for_utc),
+            )
+        except ValueError as exc:
+            raise GatewayPermanentError(_invalid_delivery_code(str(exc))) from exc
         try:
             message = await channel.send(
                 embed=prepared.embed,
@@ -401,7 +426,10 @@ class DiscordSchedulerGateway:
         except discord.Forbidden:
             return DirectSendResult(status="announcement_forbidden")
         except discord.HTTPException as exc:
-            raise GatewayRetryableError("announcement_http_error") from exc
+            failure = classify_discord_http_failure(exc, surface="announcement")
+            if failure.permanent:
+                raise GatewayPermanentError(failure.code) from exc
+            raise GatewayRetryableError(failure.code) from exc
         return DirectSendResult(
             status="sent",
             message_id=message.id,
@@ -666,3 +694,10 @@ def _skip_all(
 
 def _late_delivery(scheduled_for_utc: datetime) -> bool:
     return datetime.now(UTC) - scheduled_for_utc > timedelta(minutes=1)
+
+
+def _invalid_delivery_code(message: str) -> str:
+    lowered = message.lower()
+    if "image" in lowered or "thumbnail" in lowered or "url" in lowered:
+        return "invalid_media_url"
+    return "invalid_announcement_payload"

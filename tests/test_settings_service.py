@@ -130,6 +130,31 @@ async def test_settings_service_rejects_invalid_studio_media_url() -> None:
 
 
 @pytest.mark.asyncio
+async def test_settings_service_accepts_signed_extensionless_media_url() -> None:
+    repository = FakeSettingsRepository(GuildSettings.default(1))
+    service = SettingsService(repository)  # type: ignore[arg-type]
+
+    saved = await service.update_settings(
+        FakeGuild(1),  # type: ignore[arg-type]
+        announcement_image_url="https://cdn.example.com/assets/banner?sig=abc123",
+    )
+
+    assert saved.announcement_image_url == "https://cdn.example.com/assets/banner?sig=abc123"
+
+
+@pytest.mark.asyncio
+async def test_settings_service_rejects_obvious_non_image_media_url() -> None:
+    repository = FakeSettingsRepository(GuildSettings.default(1))
+    service = SettingsService(repository)  # type: ignore[arg-type]
+
+    with pytest.raises(ValidationError, match="non-image file"):
+        await service.update_settings(
+            FakeGuild(1),  # type: ignore[arg-type]
+            announcement_thumbnail_url="https://example.com/file.zip",
+        )
+
+
+@pytest.mark.asyncio
 async def test_settings_service_rejects_invalid_studio_accent_color() -> None:
     repository = FakeSettingsRepository(GuildSettings.default(1))
     service = SettingsService(repository)  # type: ignore[arg-type]

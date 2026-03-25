@@ -2,14 +2,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Literal
 
 import discord
 
+from bdayblaze.domain.announcement_template import validate_media_url
 from bdayblaze.domain.birthday_logic import membership_age_days
 from bdayblaze.domain.models import (
     AnnouncementDeliveryReadiness,
     AnnouncementDeliveryStatus,
+    AnnouncementStudioPresentation,
     DeliveryDiagnostic,
+    EventKind,
     GuildSettings,
 )
 
@@ -19,6 +23,23 @@ class EligibilityDecision:
     allowed: bool
     code: str | None = None
     summary: str | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class DiscordHttpFailure:
+    code: str
+    summary: str
+    action: str | None = None
+    permanent: bool = False
+
+
+_MEDIA_ERROR_MARKERS = (
+    "image",
+    "thumbnail",
+    "icon_url",
+    "embed.image.url",
+    "embed.thumbnail.url",
+)
 
 
 def build_channel_diagnostics(
@@ -165,13 +186,16 @@ def describe_birthday_announcement_readiness(
             details=tuple(item.detail_line() for item in disabled_diagnostics),
             diagnostics=disabled_diagnostics,
         )
-    diagnostics = build_channel_diagnostics(
-        guild,
-        channel_id=settings.announcement_channel_id,
-        label="announcement",
+    diagnostics = (
+        *build_channel_diagnostics(
+            guild,
+            channel_id=settings.announcement_channel_id,
+            label="announcement",
+        ),
+        *build_presentation_diagnostics(settings.presentation()),
     )
     return _readiness_from_diagnostics(
-        diagnostics,
+        tuple(diagnostics),
         ready_summary="Preview ready. Live birthday announcements are currently ready.",
         blocked_summary="Preview ready. Live birthday announcements are blocked.",
     )
@@ -197,13 +221,16 @@ def describe_anniversary_readiness(
             diagnostics=disabled_diagnostics,
         )
     effective_channel_id = settings.anniversary_channel_id or settings.announcement_channel_id
-    diagnostics = build_channel_diagnostics(
-        guild,
-        channel_id=effective_channel_id,
-        label="anniversary",
+    diagnostics = (
+        *build_channel_diagnostics(
+            guild,
+            channel_id=effective_channel_id,
+            label="anniversary",
+        ),
+        *build_presentation_diagnostics(settings.presentation()),
     )
     return _readiness_from_diagnostics(
-        diagnostics,
+        tuple(diagnostics),
         ready_summary="Preview ready. Live anniversary announcements are currently ready.",
         blocked_summary="Preview ready. Live anniversary announcements are blocked.",
     )
@@ -267,6 +294,121 @@ def describe_birthday_dm_readiness(settings: GuildSettings) -> AnnouncementDeliv
         summary="Preview ready. Live birthday DMs are best-effort per member.",
         details=tuple(item.detail_line() for item in diagnostics),
         diagnostics=diagnostics,
+    )
+
+
+def build_presentation_diagnostics(
+    presentation: AnnouncementStudioPresentation,
+) -> tuple[DeliveryDiagnostic, ...]:
+    diagnostics: list[DeliveryDiagnostic] = []
+    for label, code, value in (
+        ("Announcement image", "announcement_image_invalid", presentation.image_url),
+        ("Announcement thumbnail", "announcement_thumbnail_invalid", presentation.thumbnail_url),
+    ):
+        try:
+            validate_media_url(value, label=label)
+        except ValueError as exc:
+            diagnostics.append(
+                DeliveryDiagnostic(
+                    severity="error",
+                    code=code,
+                    summary=str(exc),
+                    action=(
+                        "Open `/birthday studio`, then clear or replace the saved media URL."
+                    ),
+                )
+            )
+    return tuple(diagnostics)
+
+
+def classify_discord_http_failure(
+    error: discord.HTTPException,
+    *,
+    surface: Literal["announcement", "birthday_dm", "ui", "role"],
+) -> DiscordHttpFailure:
+    if error.status == 400:
+        lower_text = f"{getattr(error, 'text', '')} {error.code}".lower()
+        if any(marker in lower_text for marker in _MEDIA_ERROR_MARKERS):
+            return DiscordHttpFailure(
+                code="invalid_media_url",
+                summary="Discord rejected the current image or thumbnail URL.",
+                action="Open `/birthday studio`, then clear or replace the saved media URL.",
+                permanent=True,
+            )
+        summary = {
+            "announcement": "Discord rejected the current announcement payload.",
+            "birthday_dm": "Discord rejected the current birthday DM payload.",
+            "ui": "Discord rejected the current admin panel or preview payload.",
+            "role": "Discord rejected the current role-management request.",
+        }[surface]
+        action = (
+            "Rerun preview, then shorten the template or clear media until the preview succeeds."
+            if surface in {"announcement", "birthday_dm"}
+            else "Refresh the panel, then shorten the current content or clear media."
+            if surface == "ui"
+            else "Check role permissions and try again."
+        )
+        return DiscordHttpFailure(
+            code={
+                "announcement": "invalid_announcement_payload",
+                "birthday_dm": "invalid_birthday_dm_payload",
+                "ui": "invalid_ui_payload",
+                "role": "invalid_role_request",
+            }[surface],
+            summary=summary,
+            action=action,
+            permanent=True,
+        )
+
+    return DiscordHttpFailure(
+        code={
+            "announcement": "announcement_http_error",
+            "birthday_dm": "birthday_dm_http_error",
+            "ui": f"ui_http_{error.status}",
+            "role": "role_http_error",
+        }[surface],
+        summary="Discord rejected that request.",
+        action="Try again in a moment.",
+        permanent=False,
+    )
+
+
+def describe_delivery_error_code(
+    *,
+    event_kind: EventKind,
+    error_code: str,
+) -> tuple[str, str]:
+    if error_code == "invalid_media_url":
+        return (
+            "A saved image or thumbnail URL was rejected by Discord.",
+            "Open `/birthday studio`, clear or replace the media URL, then rerun preview.",
+        )
+    if error_code in {"invalid_announcement_payload", "invalid_birthday_dm_payload"}:
+        label = {
+            "announcement": "birthday announcement",
+            "anniversary_announcement": "anniversary announcement",
+            "birthday_dm": "birthday DM",
+            "recurring_announcement": "recurring celebration",
+            "role_start": "birthday role start",
+            "role_end": "birthday role cleanup",
+        }[event_kind]
+        return (
+            f"Discord rejected a {label} payload.",
+            "Rerun preview, then shorten the content or clear media until the preview succeeds.",
+        )
+    if error_code == "recovery_window_expired":
+        return (
+            "A queued celebration aged past the recovery window and was skipped.",
+            "Check recent uptime or deployment gaps before relying on the next scheduled run.",
+        )
+    if error_code == "late_delivery":
+        return (
+            "A celebration was recovered late but still completed.",
+            "Review recent uptime or Discord API failures if late recoveries keep appearing.",
+        )
+    return (
+        f"Recent {event_kind} issue: {error_code}.",
+        "Review recent logs and rerun preview for the affected delivery type if needed.",
     )
 
 

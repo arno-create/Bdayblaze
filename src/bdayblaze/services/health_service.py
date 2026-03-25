@@ -7,7 +7,12 @@ import discord
 from bdayblaze.domain.birthday_logic import validate_timezone
 from bdayblaze.domain.models import HealthIssue, SchedulerMetrics
 from bdayblaze.repositories.postgres import PostgresRepository
-from bdayblaze.services.diagnostics import build_channel_diagnostics, build_role_diagnostics
+from bdayblaze.services.diagnostics import (
+    build_channel_diagnostics,
+    build_presentation_diagnostics,
+    build_role_diagnostics,
+    describe_delivery_error_code,
+)
 
 
 class HealthService:
@@ -48,6 +53,16 @@ class HealthService:
                         code="invalid_timezone",
                         summary="The saved default timezone is invalid.",
                         action="Open /birthday setup and save a valid IANA timezone.",
+                    )
+                )
+
+            for diagnostic in build_presentation_diagnostics(settings.presentation()):
+                issues.append(
+                    HealthIssue(
+                        severity=diagnostic.severity,
+                        code=diagnostic.code,
+                        summary=diagnostic.summary,
+                        action=diagnostic.action or "Review the saved celebration media settings.",
                     )
                 )
 
@@ -255,31 +270,17 @@ class HealthService:
             limit=5,
         )
         for recent_issue in recent_issues:
-            if recent_issue.last_error_code == "late_delivery":
-                issues.append(
-                    HealthIssue(
-                        severity="info",
-                        code="recent_late_delivery",
-                        summary=(
-                            f"Recent {recent_issue.event_kind} delivery was recovered late "
-                            "but completed."
-                        ),
-                        action=(
-                            "Review recent uptime or Discord API failures if late recoveries "
-                            "keep appearing."
-                        ),
-                    )
-                )
-                continue
+            assert recent_issue.last_error_code is not None
+            summary, action = describe_delivery_error_code(
+                event_kind=recent_issue.event_kind,
+                error_code=recent_issue.last_error_code,
+            )
             issues.append(
                 HealthIssue(
                     severity="info",
                     code=f"recent_{recent_issue.last_error_code}",
-                    summary=(
-                        f"Recent {recent_issue.event_kind} issue: "
-                        f"{recent_issue.last_error_code or 'unknown'}."
-                    ),
-                    action="Review recent logs and preview the affected delivery type if needed.",
+                    summary=summary,
+                    action=action,
                 )
             )
 

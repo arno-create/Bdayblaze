@@ -117,6 +117,8 @@
 
 - Permission and readiness checks are centralized so setup, previews, health checks, and live delivery use the same wording and blockers.
 - Admin-heavy embeds use shared budget enforcement so setup, Celebration Studio, dry runs, health checks, import previews, and recurring-event summaries do not exceed Discord field or total embed limits.
+- Media validation is centralized and lightweight: HTTPS only, real host/path required, bounded length, signed/query/extensionless CDN URLs allowed, and obvious non-image suffixes rejected.
+- Preview builders use the same effective presentation rules as live delivery, so birthday DM previews do not drift from the actual DM payload.
 - Diagnostics cover:
   - missing `View Channel`
   - missing `Send Messages`
@@ -127,6 +129,7 @@
   - DM unavailable
   - invalid template/media configuration
   - eligibility exclusions such as ignored bots, missing eligibility role, and minimum membership age
+- Discord 400 invalid-payload failures are classified as permanent config/operator issues instead of being retried like transient transport errors.
 - Live birthday announcements, birthday DMs, anniversaries, and recurring events all use the same persisted-event model.
 - Server anniversary stays on the recurring-announcement scheduler path internally, but renders as its own announcement kind in previews and live sends.
 
@@ -136,6 +139,7 @@
 - Event states are explicit: `pending`, `processing`, `completed`.
 - Announcement batches are explicit: `pending`, `sending`, `sent`.
 - Failed work retries with bounded backoff and non-sensitive retry metadata.
+- Permanent invalid media/payload failures complete as skipped with operator-safe error codes instead of entering noisy retry loops.
 - Active role cleanup uses a stored role snapshot so admin config changes do not orphan live birthday roles.
 - DM failures are recorded as skip outcomes without noisy retry loops.
 - Channel-history scans are reserved for narrow stale-send recovery instead of normal dedupe.

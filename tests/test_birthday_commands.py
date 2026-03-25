@@ -194,6 +194,30 @@ async def test_build_preview_embed_uses_member_birthday_for_dm_preview() -> None
 
 
 @pytest.mark.asyncio
+async def test_build_preview_embed_ignores_shared_media_for_dm_preview() -> None:
+    service = FakeBirthdayService()
+    member = FakeMember(42, FakeRole(55))
+    settings = replace(
+        GuildSettings.default(1),
+        birthday_dm_template="Happy birthday {user.display_name}",
+        birthday_dm_enabled=True,
+        announcement_image_url="https://cdn.example.com/not-image.pdf",
+        announcement_thumbnail_url="https://cdn.example.com/also-bad.zip",
+    )
+
+    embed = await _build_preview_embed(
+        FakeGuild(1),
+        settings,
+        service,  # type: ignore[arg-type]
+        kind="birthday_dm",
+        member=member,  # type: ignore[arg-type]
+        event_id=None,
+    )
+
+    assert embed.description == "Happy birthday Jamie"
+
+
+@pytest.mark.asyncio
 async def test_build_preview_embed_supports_server_anniversary_preview() -> None:
     service = FakeBirthdayService()
     settings = replace(GuildSettings.default(1), announcements_enabled=True)
@@ -209,6 +233,26 @@ async def test_build_preview_embed_supports_server_anniversary_preview() -> None
 
     assert embed.title
     assert "Server anniversary" in embed.description
+
+
+@pytest.mark.asyncio
+async def test_build_preview_embed_surfaces_invalid_saved_media() -> None:
+    service = FakeBirthdayService()
+    settings = replace(
+        GuildSettings.default(1),
+        announcements_enabled=True,
+        announcement_image_url="https://cdn.example.com/notes.pdf",
+    )
+
+    with pytest.raises(ValueError, match="non-image file"):
+        await _build_preview_embed(
+            FakeGuild(1),
+            settings,
+            service,  # type: ignore[arg-type]
+            kind="birthday_announcement",
+            member=None,
+            event_id=None,
+        )
 
 
 @pytest.mark.asyncio

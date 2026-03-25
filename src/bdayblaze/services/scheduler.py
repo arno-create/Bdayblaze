@@ -27,6 +27,12 @@ class GatewayRetryableError(Exception):
         self.code = code
 
 
+class GatewayPermanentError(Exception):
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
 @dataclass(slots=True, frozen=True)
 class AnnouncementSendResult:
     message_id: int | None
@@ -318,71 +324,80 @@ class BirthdaySchedulerService:
                 await self._repository.mark_events_completed(event_ids, existing_message_id)
                 return
 
-        if first_event.event_kind == "announcement":
-            recipients = [
-                AnnouncementRecipientSnapshot(
-                    user_id=event.user_id,
-                    birth_month=int(event.payload["birth_month"]),
-                    birth_day=int(event.payload["birth_day"]),
-                    timezone=str(event.payload["timezone"]),
+        try:
+            if first_event.event_kind == "announcement":
+                recipients = [
+                    AnnouncementRecipientSnapshot(
+                        user_id=event.user_id,
+                        birth_month=int(event.payload["birth_month"]),
+                        birth_day=int(event.payload["birth_day"]),
+                        timezone=str(event.payload["timezone"]),
+                    )
+                    for event in batch_events
+                    if event.user_id is not None
+                ]
+                result = await self._gateway.send_birthday_announcement(
+                    guild_id=guild_id,
+                    channel_id=channel_id,
+                    recipients=recipients,
+                    celebration_mode=celebration_mode,
+                    announcement_theme=announcement_theme,
+                    batch_token=batch_token,
+                    template=str(first_event.payload["template"]),
+                    title_override=_optional_str(first_event.payload.get("title_override")),
+                    footer_text=_optional_str(first_event.payload.get("footer_text")),
+                    image_url=_optional_str(first_event.payload.get("image_url")),
+                    thumbnail_url=_optional_str(first_event.payload.get("thumbnail_url")),
+                    accent_color=_optional_int(first_event.payload.get("accent_color")),
+                    scheduled_for_utc=first_event.scheduled_for_utc,
+                    mention_suppression_threshold=int(
+                        first_event.payload.get("mention_suppression_threshold", 8)
+                    ),
+                    eligibility_role_id=_optional_int(first_event.payload.get("eligibility_role_id")),
+                    ignore_bots=bool(first_event.payload.get("ignore_bots", True)),
+                    minimum_membership_days=int(
+                        first_event.payload.get("minimum_membership_days", 0)
+                    ),
                 )
-                for event in batch_events
-                if event.user_id is not None
-            ]
-            result = await self._gateway.send_birthday_announcement(
-                guild_id=guild_id,
-                channel_id=channel_id,
-                recipients=recipients,
-                celebration_mode=celebration_mode,
-                announcement_theme=announcement_theme,
-                batch_token=batch_token,
-                template=str(first_event.payload["template"]),
-                title_override=_optional_str(first_event.payload.get("title_override")),
-                footer_text=_optional_str(first_event.payload.get("footer_text")),
-                image_url=_optional_str(first_event.payload.get("image_url")),
-                thumbnail_url=_optional_str(first_event.payload.get("thumbnail_url")),
-                accent_color=_optional_int(first_event.payload.get("accent_color")),
-                scheduled_for_utc=first_event.scheduled_for_utc,
-                mention_suppression_threshold=int(
-                    first_event.payload.get("mention_suppression_threshold", 8)
-                ),
-                eligibility_role_id=_optional_int(first_event.payload.get("eligibility_role_id")),
-                ignore_bots=bool(first_event.payload.get("ignore_bots", True)),
-                minimum_membership_days=int(first_event.payload.get("minimum_membership_days", 0)),
-            )
-        else:
-            anniversary_recipients = [
-                AnniversaryRecipientSnapshot(
-                    user_id=event.user_id,
-                    joined_at_utc=datetime.fromisoformat(str(event.payload["joined_at_utc"])),
+            else:
+                anniversary_recipients = [
+                    AnniversaryRecipientSnapshot(
+                        user_id=event.user_id,
+                        joined_at_utc=datetime.fromisoformat(str(event.payload["joined_at_utc"])),
+                    )
+                    for event in batch_events
+                    if event.user_id is not None
+                ]
+                result = await self._gateway.send_anniversary_announcement(
+                    guild_id=guild_id,
+                    channel_id=channel_id,
+                    recipients=anniversary_recipients,
+                    celebration_mode=celebration_mode,
+                    announcement_theme=announcement_theme,
+                    batch_token=batch_token,
+                    template=str(first_event.payload["template"]),
+                    title_override=_optional_str(first_event.payload.get("title_override")),
+                    footer_text=_optional_str(first_event.payload.get("footer_text")),
+                    image_url=_optional_str(first_event.payload.get("image_url")),
+                    thumbnail_url=_optional_str(first_event.payload.get("thumbnail_url")),
+                    accent_color=_optional_int(first_event.payload.get("accent_color")),
+                    scheduled_for_utc=first_event.scheduled_for_utc,
+                    event_name=str(first_event.payload.get("event_name", "Join anniversary")),
+                    event_month=int(first_event.payload["event_month"]),
+                    event_day=int(first_event.payload["event_day"]),
+                    mention_suppression_threshold=int(
+                        first_event.payload.get("mention_suppression_threshold", 8)
+                    ),
+                    eligibility_role_id=_optional_int(first_event.payload.get("eligibility_role_id")),
+                    ignore_bots=bool(first_event.payload.get("ignore_bots", True)),
+                    minimum_membership_days=int(
+                        first_event.payload.get("minimum_membership_days", 0)
+                    ),
                 )
-                for event in batch_events
-                if event.user_id is not None
-            ]
-            result = await self._gateway.send_anniversary_announcement(
-                guild_id=guild_id,
-                channel_id=channel_id,
-                recipients=anniversary_recipients,
-                celebration_mode=celebration_mode,
-                announcement_theme=announcement_theme,
-                batch_token=batch_token,
-                template=str(first_event.payload["template"]),
-                title_override=_optional_str(first_event.payload.get("title_override")),
-                footer_text=_optional_str(first_event.payload.get("footer_text")),
-                image_url=_optional_str(first_event.payload.get("image_url")),
-                thumbnail_url=_optional_str(first_event.payload.get("thumbnail_url")),
-                accent_color=_optional_int(first_event.payload.get("accent_color")),
-                scheduled_for_utc=first_event.scheduled_for_utc,
-                event_name=str(first_event.payload.get("event_name", "Join anniversary")),
-                event_month=int(first_event.payload["event_month"]),
-                event_day=int(first_event.payload["event_day"]),
-                mention_suppression_threshold=int(
-                    first_event.payload.get("mention_suppression_threshold", 8)
-                ),
-                eligibility_role_id=_optional_int(first_event.payload.get("eligibility_role_id")),
-                ignore_bots=bool(first_event.payload.get("ignore_bots", True)),
-                minimum_membership_days=int(first_event.payload.get("minimum_membership_days", 0)),
-            )
+        except GatewayPermanentError as exc:
+            await self._repository.mark_announcement_batch_sent(batch_token, message_id=None)
+            await self._repository.complete_events_as_skipped(event_ids, exc.code)
+            return
 
         if result.message_id is not None:
             await self._repository.mark_announcement_batch_sent(
@@ -436,6 +451,9 @@ class BirthdaySchedulerService:
                 minimum_membership_days=int(event.payload.get("minimum_membership_days", 0)),
                 scheduled_for_utc=event.scheduled_for_utc,
             )
+        except GatewayPermanentError as exc:
+            await self._repository.complete_event_as_skipped(event.id, exc.code)
+            return
         except GatewayRetryableError as exc:
             await self._repository.reschedule_events(
                 [event.id],
@@ -474,6 +492,9 @@ class BirthdaySchedulerService:
                 event_day=int(event.payload["event_day"]),
                 scheduled_for_utc=event.scheduled_for_utc,
             )
+        except GatewayPermanentError as exc:
+            await self._repository.complete_event_as_skipped(event.id, exc.code)
+            return
         except GatewayRetryableError as exc:
             await self._repository.reschedule_events(
                 [event.id],

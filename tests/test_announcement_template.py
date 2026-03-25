@@ -159,9 +159,39 @@ def test_validate_media_url_accepts_https_image_with_query_string() -> None:
     )
 
 
+def test_validate_media_url_accepts_signed_extensionless_media_path() -> None:
+    assert (
+        validate_media_url(
+            "https://cdn.example.com/assets/birthday-banner?sig=abc123&expires=999",
+            label="Announcement image",
+        )
+        == "https://cdn.example.com/assets/birthday-banner?sig=abc123&expires=999"
+    )
+
+
+def test_validate_media_url_accepts_dynamic_media_endpoint() -> None:
+    assert (
+        validate_media_url(
+            "https://images.example.com/render.php?id=42&format=gif",
+            label="Announcement image",
+        )
+        == "https://images.example.com/render.php?id=42&format=gif"
+    )
+
+
 def test_validate_media_url_rejects_non_https_values() -> None:
     with pytest.raises(ValueError, match="must use HTTPS"):
         validate_media_url("http://example.com/happy.png", label="Announcement image")
+
+
+def test_validate_media_url_rejects_missing_file_path() -> None:
+    with pytest.raises(ValueError, match="must include a file path"):
+        validate_media_url("https://cdn.example.com/", label="Announcement image")
+
+
+def test_validate_media_url_rejects_non_image_suffixes() -> None:
+    with pytest.raises(ValueError, match="non-image file"):
+        validate_media_url("https://cdn.example.com/invite.pdf", label="Announcement image")
 
 
 def test_validate_accent_color_parses_hex_values() -> None:

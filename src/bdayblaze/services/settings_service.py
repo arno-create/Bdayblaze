@@ -23,6 +23,7 @@ from bdayblaze.domain.models import (
 from bdayblaze.repositories.postgres import PostgresRepository
 from bdayblaze.services.diagnostics import (
     build_channel_diagnostics,
+    build_presentation_diagnostics,
     build_role_diagnostics,
     describe_anniversary_readiness,
     describe_birthday_announcement_readiness,
@@ -238,10 +239,15 @@ class SettingsService:
         if kind == "anniversary":
             return describe_anniversary_readiness(guild, settings)
         if kind in {"recurring_event", "server_anniversary"}:
-            diagnostics = build_channel_diagnostics(
-                guild,
-                channel_id=channel_id or settings.announcement_channel_id,
-                label="server anniversary" if kind == "server_anniversary" else "recurring event",
+            diagnostics = (
+                *build_channel_diagnostics(
+                    guild,
+                    channel_id=channel_id or settings.announcement_channel_id,
+                    label=(
+                        "server anniversary" if kind == "server_anniversary" else "recurring event"
+                    ),
+                ),
+                *build_presentation_diagnostics(settings.presentation()),
             )
             if not diagnostics:
                 return AnnouncementDeliveryReadiness(
@@ -260,7 +266,7 @@ class SettingsService:
                     else "Preview ready. Live recurring-event delivery is blocked."
                 ),
                 details=tuple(item.detail_line() for item in diagnostics),
-                diagnostics=diagnostics,
+                diagnostics=tuple(diagnostics),
             )
         return describe_birthday_announcement_readiness(guild, settings)
 

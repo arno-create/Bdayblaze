@@ -123,7 +123,7 @@ When `PORT` is present, the bot starts a small built-in HTTP health server so Re
 ### Admin commands
 
 - `/birthday setup`
-- `/birthday message`
+- `/birthday studio`
 - `/birthday test-message`
 - `/birthday export`
 - `/birthday import`
@@ -159,7 +159,7 @@ When `PORT` is present, the bot starts a small built-in HTTP health server so Re
 
 ### Celebration Studio
 
-- `/birthday message` opens Celebration Studio, the private admin surface for:
+- `/birthday studio` opens Celebration Studio, the private admin surface for:
   - birthday announcements
   - birthday DMs
   - member anniversaries
@@ -173,10 +173,19 @@ When `PORT` is present, the bot starts a small built-in HTTP health server so Re
   - optional image URL
   - optional thumbnail URL
   - optional accent color override
+- Media URLs must use `https://`, include a real host and path, and stay within Discord-safe size limits.
+- Signed URLs, query-string URLs, and extensionless CDN/object URLs are allowed when they are safe enough for Discord to try rendering.
+- Clearly non-image URLs such as `.pdf`, `.zip`, `.mp4`, or `.svg` are rejected up front.
 - Theme presets include `classic`, `festive`, `minimal`, `cute`, `elegant`, and `gaming`.
 - Template rendering uses a strict placeholder whitelist. There is no Jinja, eval, or arbitrary embed builder.
 - Literal braces can be escaped with `{{` and `}}`.
 - Long templates, placeholder references, and diagnostics are chunked or trimmed inside the panel so Discord embed limits are not exceeded.
+- Preview is the final render check. `/birthday test-message` and Studio previews stay private, never ping members, and report live-readiness separately from preview success.
+- Studio reset actions are explicit:
+  - reset current copy
+  - reset shared visuals
+  - reset media only
+  - reset server anniversary back to the guild creation date
 - Studio modal saves return a compact confirmation card with a path back to the relevant studio section instead of spawning another full-size panel.
 
 ### Event coverage
@@ -184,7 +193,7 @@ When `PORT` is present, the bot starts a small built-in HTTP health server so Re
 - Birthday announcements remain the primary event type.
 - Optional birthday DM greetings can be enabled per server.
 - Join anniversaries are supported as tracked annual announcements. This pass keeps them tracked-only rather than full-guild auto-discovery.
-- Server anniversary is a first-class annual celebration. It defaults to the guild creation date when Discord provides it, and admins can override that date privately.
+- Server anniversary is a first-class annual celebration. It defaults to the guild creation date when Discord provides it, and admins can manage enable state, date source, channel override, preview, and reset with Discord-native controls.
 - Admins can also define compact annual recurring celebrations such as a community founding day.
 
 ### Large-server controls
@@ -218,6 +227,7 @@ When `PORT` is present, the bot starts a small built-in HTTP health server so Re
   - recurring annual celebrations
   - additional scheduler event kinds and browse/scheduler indexes
 - Migration `005_server_anniversary_kind.sql` adds recurring-celebration metadata so server anniversary can be stored as an explicit first-class annual event while still using the existing recurring scheduler path.
+- This Studio hardening pass does not require an additional migration; it stays on the existing schema and scheduler model.
 
 ## Testing and checks
 

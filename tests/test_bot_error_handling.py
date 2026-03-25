@@ -44,7 +44,7 @@ class FakeFollowup:
 
 def _interaction(*, manage_guild: bool, done: bool = False) -> SimpleNamespace:
     return SimpleNamespace(
-        command=SimpleNamespace(qualified_name="birthday message"),
+        command=SimpleNamespace(qualified_name="birthday studio"),
         guild_id=123,
         user=SimpleNamespace(
             id=456,
@@ -74,7 +74,8 @@ async def test_app_command_error_surfaces_safe_http_payload_hint_for_admins() ->
     await bot.on_app_command_error(interaction, error)  # type: ignore[arg-type]
 
     assert interaction.response.messages
-    assert "Discord rejected that UI response" in interaction.response.messages[0]
+    assert "admin panel or preview payload" in interaction.response.messages[0]
+    assert "Action:" in interaction.response.messages[0]
     assert "BDAY-UI-400" in interaction.response.messages[0]
     assert bot._logger.warning_calls
 

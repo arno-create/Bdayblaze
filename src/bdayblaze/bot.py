@@ -8,6 +8,7 @@ from bdayblaze.container import ServiceContainer
 from bdayblaze.discord.cogs.birthday import BirthdayGroup
 from bdayblaze.discord.cogs.info import InfoCog
 from bdayblaze.logging import get_logger, redact_identifier
+from bdayblaze.services.diagnostics import classify_discord_http_failure
 from bdayblaze.services.errors import BdayblazeError
 
 
@@ -71,6 +72,7 @@ class BdayblazeBot(commands.Bot):
             message = str(original)
             error_hint = None
         elif isinstance(original, discord.HTTPException):
+            failure = classify_discord_http_failure(original, surface="ui")
             self._logger.warning(
                 "app_command_http_error",
                 command=command_name,
@@ -80,11 +82,10 @@ class BdayblazeBot(commands.Bot):
                 discord_code=original.code,
                 error_type=type(original).__name__,
             )
-            if original.status == 400:
-                message = (
-                    "Discord rejected that UI response. Try again after shortening the current "
-                    "template or refreshing the panel."
-                )
+            if failure.permanent:
+                message = failure.summary
+                if failure.action:
+                    message = f"{message}\nAction: {failure.action}"
                 error_hint = "BDAY-UI-400"
             else:
                 message = "Discord rejected that action. Try again in a moment."

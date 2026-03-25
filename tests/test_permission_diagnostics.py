@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+import discord
 import pytest
 
 from bdayblaze.domain.models import GuildSettings
@@ -163,3 +164,27 @@ def test_evaluate_member_eligibility_reports_minimum_membership_age() -> None:
 
     assert decision.allowed is False
     assert decision.code == "membership_age_unmet"
+
+
+def test_build_presentation_diagnostics_reports_invalid_media() -> None:
+    settings = replace(
+        GuildSettings.default(1),
+        announcement_image_url="https://example.com/manual.pdf",
+    )
+
+    diagnostics_result = diagnostics.build_presentation_diagnostics(settings.presentation())
+
+    assert [item.code for item in diagnostics_result] == ["announcement_image_invalid"]
+
+
+def test_classify_discord_http_failure_marks_invalid_payload_as_permanent() -> None:
+    response = SimpleNamespace(status=400, reason="Bad Request")
+    error = discord.HTTPException(
+        response,  # type: ignore[arg-type]
+        {"code": 50035, "message": "Invalid Form Body"},
+    )
+
+    failure = diagnostics.classify_discord_http_failure(error, surface="announcement")
+
+    assert failure.permanent is True
+    assert failure.code == "invalid_announcement_payload"

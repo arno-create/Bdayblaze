@@ -34,7 +34,7 @@
 - `/birthday remove` provides a direct deletion path for the caller's record in the current server.
 - `/birthday today`, `/birthday next`, `/birthday upcoming`, `/birthday month`, `/birthday twins`, and `/birthday list` are guild-scoped and visibility-aware.
 - `/birthday privacy` explains what is stored and why.
-- `/birthday member ...`, `/birthday import`, `/birthday export`, setup, Celebration Studio, health, and dry-run tools are admin-only and private to the admin using them.
+- `/birthday member ...`, `/birthday import`, `/birthday export`, `/birthday setup`, `/birthday studio`, health, and dry-run tools are admin-only and private to the admin using them.
 - `/birthday test-message` sends a private preview only and reports live-delivery readiness separately from preview success.
 
 ## Import and export
@@ -56,6 +56,9 @@
 - Custom announcement text uses a strict placeholder whitelist.
 - There is no eval, Jinja, arbitrary attribute access, or free-form JSON embed execution.
 - Celebration Studio stores compact configuration values such as validated URLs, text fields, preset names, and accent colors.
+- Media URLs must use HTTPS, include a real host and non-empty path, and stay within bounded length limits.
+- Signed URLs, query-string URLs, and extensionless CDN/object paths may be accepted when they are safe enough for Discord to render.
+- The bot does not fetch remote media during saves; preview remains the final Discord render check.
 - Celebration Studio keeps those values structured and compact. It does not store uploaded binaries, arbitrary JSON embed payloads, or free-form rendering logic.
 - Uploaded binaries are not stored in the database.
 

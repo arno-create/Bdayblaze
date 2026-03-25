@@ -107,6 +107,19 @@ class GuildSettings:
             accent_color=self.announcement_accent_color,
         )
 
+    def presentation_for_kind(self, kind: AnnouncementKind) -> AnnouncementStudioPresentation:
+        presentation = self.presentation()
+        if kind != "birthday_dm":
+            return presentation
+        return AnnouncementStudioPresentation(
+            theme=presentation.theme,
+            title_override=None,
+            footer_text=None,
+            image_url=None,
+            thumbnail_url=None,
+            accent_color=None,
+        )
+
 
 @dataclass(slots=True, frozen=True)
 class MemberBirthday:

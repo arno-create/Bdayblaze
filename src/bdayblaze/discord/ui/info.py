@@ -10,7 +10,7 @@ from bdayblaze.discord.embed_budget import BudgetedEmbed
 
 def build_help_embed() -> discord.Embed:
     budget = BudgetedEmbed.create(
-        title="Bdayblaze help",
+        title="📘 Bdayblaze Help",
         description=(
             "Birthday tracking for Discord servers with privacy-first defaults and "
             "lightweight admin controls."
@@ -22,7 +22,7 @@ def build_help_embed() -> discord.Embed:
         value=(
             "1. Save your date with `/birthday set`.\n"
             "2. Server admins can open `/birthday setup`.\n"
-            "3. Open Celebration Studio with `/birthday message`.\n"
+            "3. Open Celebration Studio with `/birthday studio`.\n"
             "4. Use `/birthday test-message` before going live."
         ),
         inline=False,
@@ -46,7 +46,7 @@ def build_help_embed() -> discord.Embed:
         name="Admin commands",
         value=(
             "`/birthday setup` Configure channel, timezone, and role behavior.\n"
-            "`/birthday message` Open Celebration Studio.\n"
+            "`/birthday studio` Open Celebration Studio.\n"
             "`/birthday test-message` Send a private operator dry run.\n"
             "`/birthday member ...` View, set, or remove another member's record.\n"
             "`/birthday export` and `/birthday import` manage CSV backup and restore.\n"
@@ -73,7 +73,7 @@ def build_about_embed() -> discord.Embed:
     package_version = _package_version()
 
     budget = BudgetedEmbed.create(
-        title="About Bdayblaze",
+        title="📌 About Bdayblaze",
         description=(
             "Bdayblaze helps Discord servers celebrate birthdays with server-scoped storage, "
             "private setup tools, and restart-safe scheduling."
