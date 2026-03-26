@@ -82,12 +82,14 @@ Admins:
 - The public marketing site is a separate static bundle served from the repository root.
 - Canonical static entrypoint: [`index.html`](index.html)
 - Canonical static assets: [`styles.css`](styles.css), [`site.js`](site.js), [`.nojekyll`](.nojekyll), and [`assets/`](assets/)
-- GitHub Pages should publish `main / (root)` so the landing page and `privacy/index.html` are served from the same source of truth.
+- GitHub Pages should publish `main / (root)` so the landing page plus `privacy/index.html` and `terms/index.html` are served from the same source of truth.
 
 ## Privacy and legal
 
 - [Privacy policy](PRIVACY.md)
 - [Public privacy page](https://arno-create.github.io/Bdayblaze/privacy/)
+- [Terms of Service](TERMS.md)
+- [Public Terms of Service page](https://arno-create.github.io/Bdayblaze/terms/)
 - [License](LICENSE)
 - [Notice](NOTICE)
 

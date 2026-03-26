@@ -788,6 +788,13 @@ main {
   margin: 0 0 1rem;
 }
 
+.policy-meta {
+  margin: -0.15rem 0 0;
+  color: rgba(255, 236, 209, 0.72);
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
 @media (max-width: 1120px) {
   .trust-strip,
   .flow-list,
