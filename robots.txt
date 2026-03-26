@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://arno-create.github.io/Bdayblaze/sitemap.xml

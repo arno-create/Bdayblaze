@@ -30,6 +30,7 @@ html {
 body {
   margin: 0;
   min-height: 100vh;
+  overflow-x: clip;
   background:
     radial-gradient(circle at 12% 12%, rgba(255, 129, 56, 0.18), transparent 22rem),
     radial-gradient(circle at 88% 10%, rgba(255, 196, 106, 0.12), transparent 20rem),
@@ -54,6 +55,11 @@ body::before {
 img {
   display: block;
   max-width: 100%;
+  height: auto;
+}
+
+figure {
+  margin: 0;
 }
 
 a {
@@ -192,6 +198,11 @@ main {
 .site-nav {
   color: var(--muted);
   font-size: 0.96rem;
+  scrollbar-width: none;
+}
+
+.site-nav::-webkit-scrollbar {
+  display: none;
 }
 
 .site-nav a,
@@ -199,6 +210,12 @@ main {
 .text-link,
 .inline-link {
   transition: color 180ms ease, opacity 180ms ease;
+}
+
+.site-nav a[aria-current="page"],
+.footer-links a[aria-current="page"] {
+  color: var(--accent-strong);
+  font-weight: 700;
 }
 
 .site-nav a:hover,
@@ -261,6 +278,11 @@ main {
   grid-template-columns: minmax(0, 0.9fr) minmax(320px, 1.1fr);
   gap: 2rem;
   align-items: center;
+}
+
+.hero-copy {
+  display: grid;
+  align-content: start;
 }
 
 .eyebrow,
@@ -349,6 +371,7 @@ main {
   --pointer-x: 0;
   --pointer-y: 0;
   position: relative;
+  width: 100%;
   min-height: 36rem;
   padding: 2rem 0;
 }
@@ -370,9 +393,12 @@ main {
   position: relative;
   width: min(100%, 48rem);
   margin: 0 auto;
+  aspect-ratio: 3 / 2;
   border-radius: 2.2rem;
   border: 1px solid rgba(255, 228, 194, 0.16);
   box-shadow: 0 36px 120px rgba(0, 0, 0, 0.45);
+  object-fit: cover;
+  object-position: center;
   transform:
     perspective(1200px)
     rotateX(calc(var(--pointer-y) * -3deg))
@@ -529,7 +555,12 @@ main {
 }
 
 .browser-shot {
+  width: 100%;
+  max-width: 39rem;
+  margin: 0;
+  justify-self: center;
   padding: 0.8rem;
+  overflow: hidden;
 }
 
 .browser-shot:hover {
@@ -540,18 +571,18 @@ main {
 .browser-shot img {
   width: 100%;
   border-radius: 1.35rem;
+  background: rgba(9, 3, 4, 0.65);
 }
 
 .browser-shot figcaption {
   padding: 0.95rem 0.2rem 0.15rem;
   color: rgba(255, 236, 209, 0.68);
   font-size: 0.94rem;
+  line-height: 1.55;
 }
 
-.browser-shot-tall img {
-  max-height: 44rem;
-  object-fit: cover;
-  object-position: top;
+.browser-shot-tall {
+  max-width: 30rem;
 }
 
 .browser-chrome {
@@ -735,7 +766,7 @@ main {
   transform: translateY(0);
 }
 
-.site-privacy .site-header {
+.site-policy .site-header {
   position: relative;
 }
 
@@ -756,6 +787,19 @@ main {
 
 .policy-hero h1 {
   max-width: 12ch;
+}
+
+.policy-breadcrumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: 0;
+  color: rgba(255, 236, 209, 0.72);
+  font-size: 0.93rem;
+}
+
+.policy-breadcrumbs span[aria-current="page"] {
+  color: var(--text);
 }
 
 .policy-actions {
@@ -795,6 +839,14 @@ main {
   font-weight: 600;
 }
 
+#showcase,
+#features,
+#how-it-works,
+#operators,
+#privacy {
+  scroll-margin-top: 7rem;
+}
+
 @media (max-width: 1120px) {
   .trust-strip,
   .flow-list,
@@ -825,6 +877,11 @@ main {
   .footer-meta {
     flex-direction: column;
   }
+
+  .trust-strip {
+    padding: 1rem 1.1rem;
+    border-radius: 1.7rem;
+  }
 }
 
 @media (max-width: 840px) {
@@ -833,36 +890,113 @@ main {
     width: 100%;
     justify-content: flex-start;
     overflow-x: auto;
-    padding-bottom: 0.2rem;
+    gap: 0.65rem;
+    padding-bottom: 0.3rem;
+    white-space: nowrap;
   }
 
   .header-inner {
     flex-wrap: wrap;
+    align-items: flex-start;
+    row-gap: 0.85rem;
     padding: 0.9rem 0;
   }
 
+  .site-nav a {
+    flex: 0 0 auto;
+    padding: 0.55rem 0.8rem;
+    border: 1px solid rgba(255, 220, 182, 0.1);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.04);
+  }
+
+  .header-actions {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .header-actions .button {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
   .hero {
-    padding-top: 2.4rem;
+    padding-top: 1.6rem;
+  }
+
+  .hero-layout {
+    gap: 1.35rem;
+  }
+
+  .hero-text {
+    max-width: none;
+    margin-top: 1rem;
+  }
+
+  .hero-actions {
+    margin: 1.4rem 0 1.15rem;
+  }
+
+  .hero-signals {
+    display: grid;
+    grid-template-columns: 1fr;
   }
 
   .hero-stage {
+    display: grid;
+    gap: 0.9rem;
+    max-width: 34rem;
     min-height: auto;
-    padding-bottom: 8rem;
+    margin: 0 auto;
+    padding-top: 0.35rem;
+    min-height: auto;
+    padding-bottom: 0;
   }
 
-  .hero-panel-top,
-  .hero-panel-bottom {
-    inset: auto auto 0 0;
+  .hero-stage-glow {
+    inset: 8% 4% auto;
+    height: 50%;
+    filter: blur(44px);
+  }
+
+  .hero-banner {
+    width: 100%;
+    border-radius: 1.7rem;
+    transform: none;
+  }
+
+  .hero-panel {
+    position: static;
     width: 100%;
     max-width: none;
+    padding: 1rem;
   }
 
-  .hero-panel-top {
-    bottom: 6.4rem;
+  .showcase-row {
+    gap: 1.15rem;
   }
 
-  .hero-panel-bottom {
-    bottom: 0;
+  .browser-shot {
+    max-width: 34rem;
+    padding: 0.72rem;
+  }
+
+  .browser-shot-tall {
+    max-width: 27rem;
+  }
+
+  .operator-aside {
+    max-width: 34rem;
+    width: 100%;
+    justify-self: center;
+  }
+
+  .policy-main {
+    padding-top: 2.5rem;
+  }
+
+  .policy-hero h1 {
+    max-width: 13ch;
   }
 
   .signature-grid,
@@ -884,38 +1018,142 @@ main {
     --shell: min(1200px, calc(100% - 1.2rem));
   }
 
+  .site-header {
+    background: rgba(12, 4, 5, 0.82);
+  }
+
+  .brand-lockup {
+    gap: 0.7rem;
+  }
+
+  .brand-lockup img {
+    width: 2.45rem;
+    height: 2.45rem;
+  }
+
   .brand-lockup span {
     font-size: 1.2rem;
   }
 
   .header-actions {
-    width: 100%;
-    justify-content: space-between;
+    gap: 0.7rem;
   }
 
   .header-actions .button {
     flex: 1 1 auto;
   }
 
+  .site-nav {
+    margin-inline: -0.05rem;
+    padding-bottom: 0.15rem;
+  }
+
+  .site-nav a {
+    padding: 0.5rem 0.72rem;
+    font-size: 0.9rem;
+  }
+
+  .hero {
+    padding: 1.15rem 0 1.6rem;
+  }
+
   .hero h1 {
-    max-width: 9.8ch;
-    font-size: clamp(2.8rem, 13vw, 4.2rem);
+    max-width: 10ch;
+    font-size: clamp(2.55rem, 12vw, 3.8rem);
+  }
+
+  .hero-actions,
+  .cta-actions,
+  .policy-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .hero-actions .button,
+  .cta-actions .button,
+  .policy-actions .button {
+    width: 100%;
+  }
+
+  .hero-signals li {
+    width: 100%;
+    text-align: center;
+  }
+
+  .hero-stage {
+    gap: 0.75rem;
+  }
+
+  .hero-panel,
+  .operator-aside,
+  .cta-panel,
+  .policy-hero,
+  .policy-card,
+  .privacy-grid article {
+    padding: 1.2rem;
   }
 
   .section,
   .section-cta,
   .policy-main {
-    padding-top: 4rem;
+    padding-top: 3.5rem;
+  }
+
+  .section-head {
+    margin-bottom: 1.3rem;
   }
 
   .showcase-row {
-    padding: 2.2rem 0;
+    padding: 1.9rem 0;
   }
 
-  .cta-actions,
-  .policy-actions {
-    flex-direction: column;
-    align-items: stretch;
+  .browser-shot {
+    padding: 0.65rem;
+    border-radius: 1.45rem;
+  }
+
+  .browser-chrome {
+    padding-bottom: 0.6rem;
+  }
+
+  .flow-list li {
+    padding: 1.2rem;
+  }
+
+  .operator-points {
+    margin-top: 1.4rem;
+  }
+
+  .cta-panel {
+    gap: 1rem;
+  }
+
+  .footer-grid {
+    padding: 1.7rem 0 1.2rem;
+    gap: 1.2rem;
+  }
+
+  .footer-meta {
+    font-size: 0.89rem;
+  }
+
+  .policy-copy {
+    max-width: none;
+  }
+}
+
+@media (max-width: 480px) {
+  :root {
+    --shell: min(1200px, calc(100% - 1rem));
+  }
+
+  .hero-signals li,
+  .trust-strip p {
+    font-size: 0.91rem;
+  }
+
+  .policy-breadcrumbs {
+    font-size: 0.88rem;
   }
 }
 

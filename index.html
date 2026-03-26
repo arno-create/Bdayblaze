@@ -3,16 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Bdayblaze | Premium Birthday Celebrations For Discord</title>
+    <title>Bdayblaze | Premium Birthday Bot for Discord Servers</title>
     <meta
       name="description"
-      content="Bdayblaze brings polished birthday posts, Birthday Capsules, Quests, Surprises, Timeline cards, and private admin tooling to Discord servers."
+      content="Bdayblaze is a premium, privacy-first Discord birthday bot for birthday reminders, polished celebration posts, and private admin control."
     />
+    <meta name="robots" content="index,follow,max-image-preview:large" />
     <meta name="theme-color" content="#1a0908" />
-    <meta property="og:title" content="Bdayblaze" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:site_name" content="Bdayblaze" />
+    <meta property="og:title" content="Bdayblaze | Premium Birthday Bot for Discord Servers" />
     <meta
       property="og:description"
-      content="Premium, privacy-first birthday celebrations for Discord with Capsules, Quests, Timeline cards, and restart-safe operator tooling."
+      content="Premium birthday reminders and celebration flows for Discord servers with privacy-first defaults, private admin tools, and restart-safe delivery."
     />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://arno-create.github.io/Bdayblaze/" />
@@ -20,15 +23,26 @@
       property="og:image"
       content="https://arno-create.github.io/Bdayblaze/assets/banner.png"
     />
+    <meta
+      property="og:image:alt"
+      content="Bdayblaze banner showing the Discord birthday bot mascot, party cake, gifts, balloons, and wordmark"
+    />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Bdayblaze" />
+    <meta
+      name="twitter:title"
+      content="Bdayblaze | Premium Birthday Bot for Discord Servers"
+    />
     <meta
       name="twitter:description"
-      content="Premium, privacy-first birthday celebrations for Discord with Capsules, Quests, Timeline cards, and restart-safe operator tooling."
+      content="Premium birthday reminders and celebration flows for Discord servers with privacy-first defaults, private admin tools, and restart-safe delivery."
     />
     <meta
       name="twitter:image"
       content="https://arno-create.github.io/Bdayblaze/assets/banner.png"
+    />
+    <meta
+      name="twitter:image:alt"
+      content="Bdayblaze banner showing the Discord birthday bot mascot, party cake, gifts, balloons, and wordmark"
     />
     <link rel="canonical" href="https://arno-create.github.io/Bdayblaze/" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -39,6 +53,60 @@
     />
     <link rel="stylesheet" href="./styles.css" />
     <script defer src="./site.js"></script>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebSite",
+            "@id": "https://arno-create.github.io/Bdayblaze/#website",
+            "url": "https://arno-create.github.io/Bdayblaze/",
+            "name": "Bdayblaze",
+            "description": "Premium birthday reminders and celebration flows for Discord servers.",
+            "inLanguage": "en",
+            "publisher": {
+              "@id": "https://arno-create.github.io/Bdayblaze/#organization"
+            }
+          },
+          {
+            "@type": "Organization",
+            "@id": "https://arno-create.github.io/Bdayblaze/#organization",
+            "name": "Arno Create",
+            "url": "https://arno-create.github.io/Bdayblaze/",
+            "logo": {
+              "@type": "ImageObject",
+              "url": "https://arno-create.github.io/Bdayblaze/assets/logo.jpg"
+            },
+            "sameAs": [
+              "https://github.com/arno-create/Bdayblaze",
+              "https://x.com/arno__if",
+              "https://instagram.com/arno.if"
+            ]
+          },
+          {
+            "@type": "SoftwareApplication",
+            "@id": "https://arno-create.github.io/Bdayblaze/#software",
+            "name": "Bdayblaze",
+            "applicationCategory": "UtilitiesApplication",
+            "operatingSystem": "Any",
+            "url": "https://arno-create.github.io/Bdayblaze/",
+            "image": "https://arno-create.github.io/Bdayblaze/assets/banner.png",
+            "screenshot": [
+              "https://arno-create.github.io/Bdayblaze/assets/celebration_studio_panel.jpg",
+              "https://arno-create.github.io/Bdayblaze/assets/setup_panel.jpg",
+              "https://arno-create.github.io/Bdayblaze/assets/media_tools_panel.png"
+            ],
+            "description": "A privacy-first Discord birthday bot for birthday reminders, celebration posts, Birthday Capsules, Quests, Surprises, and private admin tooling.",
+            "isPartOf": {
+              "@id": "https://arno-create.github.io/Bdayblaze/#website"
+            },
+            "creator": {
+              "@id": "https://arno-create.github.io/Bdayblaze/#organization"
+            }
+          }
+        ]
+      }
+    </script>
   </head>
   <body class="site-home">
     <a class="skip-link" href="#main-content">Skip to content</a>
@@ -52,7 +120,7 @@
         <a class="brand-lockup" href="./" aria-label="Bdayblaze home">
           <img
             src="./assets/logo.jpg"
-            alt="Bdayblaze logo"
+            alt="Bdayblaze Discord birthday bot logo"
             width="1024"
             height="1024"
             decoding="async"
@@ -63,8 +131,9 @@
         <nav class="site-nav" aria-label="Primary">
           <a href="#showcase">Showcase</a>
           <a href="#features">Features</a>
-          <a href="#operators">Operators</a>
+          <a href="#how-it-works">How it works</a>
           <a href="#privacy">Privacy</a>
+          <a href="./terms/">Terms</a>
         </nav>
 
         <div class="header-actions">
@@ -90,12 +159,13 @@
       <section class="hero">
         <div class="shell hero-layout">
           <div class="hero-copy" data-reveal>
-            <p class="eyebrow">Premium birthday celebrations for Discord servers</p>
-            <h1>Birthday energy that feels crafted, not automated.</h1>
+            <p class="eyebrow">Premium birthday bot for Discord servers</p>
+            <h1>Birthday reminders and celebrations that feel crafted, not automated.</h1>
             <p class="hero-text">
-              Bdayblaze turns a routine birthday bot into a polished celebration layer: Birthday
-              Capsules, Quests, Surprises, Timeline cards, and a private Studio that gives admins
-              real control without adding operational sprawl.
+              Bdayblaze is a privacy-first Discord birthday bot that turns routine birthday
+              reminders into polished server celebrations with Birthday Capsules, Quests,
+              Surprises, Timeline cards, and a private Studio that gives admins real control
+              without extra operational sprawl.
             </p>
 
             <div class="hero-actions">
@@ -124,7 +194,7 @@
 
             <ul class="hero-signals" aria-label="Key product highlights">
               <li>Server-scoped birthday data</li>
-              <li>No Message Content intent</li>
+              <li>Privacy-first admin flow</li>
               <li>Restart-safe scheduling</li>
             </ul>
           </div>
@@ -173,10 +243,11 @@
         <div class="shell">
           <div class="section-head" data-reveal>
             <p class="eyebrow">Visual product showcase</p>
-            <h2>The product already looks like something admins can trust on day one.</h2>
+            <h2>The Discord birthday bot already looks like something admins can trust on day one.</h2>
             <p class="section-copy">
-              Bdayblaze is strongest when its public moments and private controls feel equally
-              intentional. The core release surfaces are already there in Discord.
+              Bdayblaze is strongest when birthday reminders, live celebrations, and private
+              operator controls all feel equally intentional. The core release surfaces already
+              live where Discord admins need them.
             </p>
           </div>
 
@@ -292,7 +363,7 @@
         <div class="shell feature-layout">
           <div class="section-head" data-reveal>
             <p class="eyebrow">Signature features</p>
-            <h2>The bot is not just a reminder. It is a full celebration layer.</h2>
+            <h2>From birthday reminders to full celebration flows, the product stays deliberate.</h2>
             <p class="section-copy">
               Bdayblaze is designed around moments members actually notice and controls admins
               actually need.
@@ -462,7 +533,7 @@
         <div class="shell privacy-layout">
           <div class="section-head" data-reveal>
             <p class="eyebrow">Privacy and trust</p>
-            <h2>Careful data handling without burying the product in legal fog.</h2>
+            <h2>A privacy-first birthday bot without burying the product in legal fog.</h2>
             <p class="section-copy">
               Bdayblaze keeps birthdays scoped to the current server, avoids Message Content
               intent, stores only compact quest and timeline state, and keeps admin tooling
@@ -540,7 +611,7 @@
           <a class="brand-lockup footer-brand" href="./" aria-label="Bdayblaze home">
             <img
               src="./assets/logo.jpg"
-              alt="Bdayblaze logo"
+              alt="Bdayblaze Discord birthday bot logo"
               width="1024"
               height="1024"
               loading="lazy"
@@ -549,8 +620,8 @@
             <span>Bdayblaze</span>
           </a>
           <p class="footer-copy">
-            A polished Discord birthday bot for servers that care about operator clarity, privacy,
-            and celebration quality.
+            A polished Discord birthday bot for servers that care about birthday reminders,
+            privacy, operator clarity, and celebration quality.
           </p>
         </div>
 
@@ -597,7 +668,7 @@
       <div class="shell footer-meta">
         <p>Copyright <span data-year></span> Arno Create</p>
         <p>
-          Canonical public site: repo root GitHub Pages bundle. Render serves the bot runtime and
+          Canonical public site: GitHub Pages project root. Render serves the bot runtime and
           health endpoints only.
         </p>
       </div>

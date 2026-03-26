@@ -60,7 +60,9 @@
     }
   }
 
-  if (prefersReducedMotion) {
+  const coarsePointer = window.matchMedia("(pointer: coarse)").matches;
+
+  if (prefersReducedMotion || coarsePointer) {
     return;
   }
 
