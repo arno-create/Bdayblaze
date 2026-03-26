@@ -721,7 +721,7 @@ main {
   font-size: 0.93rem;
 }
 
-html.js [data-reveal] {
+[data-reveal].reveal-ready {
   opacity: 0;
   transform: translateY(26px);
   transition:

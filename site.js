@@ -1,6 +1,4 @@
 (() => {
-  document.documentElement.classList.add("js");
-
   const year = String(new Date().getFullYear());
   for (const node of document.querySelectorAll("[data-year]")) {
     node.textContent = year;
@@ -14,12 +12,15 @@
       node.classList.add("is-visible");
     }
   } else if ("IntersectionObserver" in window) {
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+    const revealableNodes = [];
     const observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
           if (!entry.isIntersecting) {
             continue;
           }
+          entry.target.classList.remove("reveal-ready");
           entry.target.classList.add("is-visible");
           observer.unobserve(entry.target);
         }
@@ -31,9 +32,28 @@
     );
 
     revealNodes.forEach((node, index) => {
+      const rect = node.getBoundingClientRect();
+      const belowFold = rect.top > viewportHeight * 0.85;
+      if (!belowFold) {
+        node.classList.add("is-visible");
+        return;
+      }
+
+      node.classList.add("reveal-ready");
       node.style.setProperty("--reveal-delay", `${Math.min(index * 70, 280)}ms`);
+      revealableNodes.push(node);
       observer.observe(node);
     });
+
+    window.setTimeout(() => {
+      for (const node of revealableNodes) {
+        if (node.classList.contains("is-visible")) {
+          continue;
+        }
+        node.classList.remove("reveal-ready");
+        node.classList.add("is-visible");
+      }
+    }, 1600);
   } else {
     for (const node of revealNodes) {
       node.classList.add("is-visible");
