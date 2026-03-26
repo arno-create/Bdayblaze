@@ -155,7 +155,7 @@ def _repository_url() -> str | None:
         package_metadata = metadata("bdayblaze")
     except PackageNotFoundError:
         return None
-    project_urls = cast(list[str], package_metadata.get_all("Project-URL", []))
+    project_urls = cast(list[str], package_metadata.get_all("Project-URL") or [])
     for value in project_urls:
         label, _, url = value.partition(",")
         if label.strip().lower() == "repository" and url.strip():

@@ -15,6 +15,7 @@ from bdayblaze.discord.cogs.birthday import (
 from bdayblaze.domain.media_validation import mark_validated_direct_media_url
 from bdayblaze.domain.models import (
     AnnouncementDeliveryReadiness,
+    AnnouncementSurfaceSettings,
     GuildSettings,
     MemberBirthday,
     RecurringCelebration,
@@ -149,6 +150,43 @@ class FakeGuild:
         raise AssertionError("fetch_member should not be used when the member is cached")
 
 
+def _surfaces(
+    *,
+    image_url: str | None = None,
+    thumbnail_url: str | None = None,
+) -> dict[str, AnnouncementSurfaceSettings]:
+    return {
+        "birthday_announcement": AnnouncementSurfaceSettings(
+            guild_id=1,
+            surface_kind="birthday_announcement",
+            channel_id=123,
+            image_url=image_url,
+            thumbnail_url=thumbnail_url,
+        ),
+        "anniversary": AnnouncementSurfaceSettings(
+            guild_id=1,
+            surface_kind="anniversary",
+            channel_id=456,
+            image_url=image_url,
+            thumbnail_url=thumbnail_url,
+        ),
+        "server_anniversary": AnnouncementSurfaceSettings(
+            guild_id=1,
+            surface_kind="server_anniversary",
+            channel_id=789,
+            image_url=image_url,
+            thumbnail_url=thumbnail_url,
+        ),
+        "recurring_event": AnnouncementSurfaceSettings(
+            guild_id=1,
+            surface_kind="recurring_event",
+            channel_id=321,
+            image_url=image_url,
+            thumbnail_url=thumbnail_url,
+        ),
+    }
+
+
 @pytest.mark.asyncio
 async def test_build_preview_embed_uses_selected_member_for_anniversary_preview() -> None:
     service = FakeBirthdayService()
@@ -163,6 +201,7 @@ async def test_build_preview_embed_uses_selected_member_for_anniversary_preview(
         FakeGuild(1),
         settings,
         service,  # type: ignore[arg-type]
+        announcement_surfaces=_surfaces(),
         kind="anniversary",
         member=member,  # type: ignore[arg-type]
         event_id=None,
@@ -186,6 +225,7 @@ async def test_build_preview_embed_uses_member_birthday_for_dm_preview() -> None
         FakeGuild(1),
         settings,
         service,  # type: ignore[arg-type]
+        announcement_surfaces=_surfaces(),
         kind="birthday_dm",
         member=member,  # type: ignore[arg-type]
         event_id=None,
@@ -202,14 +242,16 @@ async def test_build_preview_embed_ignores_shared_media_for_dm_preview() -> None
         GuildSettings.default(1),
         birthday_dm_template="Happy birthday {user.display_name}",
         birthday_dm_enabled=True,
-        announcement_image_url="https://cdn.example.com/not-image.pdf",
-        announcement_thumbnail_url="https://cdn.example.com/also-bad.zip",
     )
 
     embed = await _build_preview_embed(
         FakeGuild(1),
         settings,
         service,  # type: ignore[arg-type]
+        announcement_surfaces=_surfaces(
+            image_url="https://cdn.example.com/not-image.pdf",
+            thumbnail_url="https://cdn.example.com/also-bad.zip",
+        ),
         kind="birthday_dm",
         member=member,  # type: ignore[arg-type]
         event_id=None,
@@ -227,6 +269,7 @@ async def test_build_preview_embed_supports_server_anniversary_preview() -> None
         FakeGuild(1),  # type: ignore[arg-type]
         settings,
         service,  # type: ignore[arg-type]
+        announcement_surfaces=_surfaces(),
         kind="server_anniversary",
         member=None,
         event_id=None,
@@ -242,14 +285,14 @@ async def test_build_preview_embed_surfaces_invalid_saved_media() -> None:
     settings = replace(
         GuildSettings.default(1),
         announcements_enabled=True,
-        announcement_image_url="https://cdn.example.com/notes.pdf",
     )
 
-    with pytest.raises(ValueError, match="unsupported file type"):
+    with pytest.raises(ValueError, match="unsupported \\.pdf content"):
         await _build_preview_embed(
             FakeGuild(1),
             settings,
             service,  # type: ignore[arg-type]
+            announcement_surfaces=_surfaces(image_url="https://cdn.example.com/notes.pdf"),
             kind="birthday_announcement",
             member=None,
             event_id=None,
@@ -262,15 +305,17 @@ async def test_build_preview_embed_accepts_validated_extensionless_media() -> No
     settings = replace(
         GuildSettings.default(1),
         announcements_enabled=True,
-        announcement_image_url=mark_validated_direct_media_url(
-            "https://cdn.example.com/assets/banner?sig=abc123"
-        ),
     )
 
     embed = await _build_preview_embed(
         FakeGuild(1),
         settings,
         service,  # type: ignore[arg-type]
+        announcement_surfaces=_surfaces(
+            image_url=mark_validated_direct_media_url(
+                "https://cdn.example.com/assets/banner?sig=abc123"
+            )
+        ),
         kind="birthday_announcement",
         member=None,
         event_id=None,
@@ -293,6 +338,7 @@ async def test_build_preview_embed_blocks_unsafe_anniversary_copy() -> None:
             FakeGuild(1),
             settings,
             service,  # type: ignore[arg-type]
+            announcement_surfaces=_surfaces(),
             kind="anniversary",
             member=None,
             event_id=None,

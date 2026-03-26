@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 
 import asyncpg
 
+from bdayblaze.domain.announcement_surfaces import resolve_announcement_surface
 from bdayblaze.domain.announcement_template import (
     DEFAULT_ANNIVERSARY_TEMPLATE,
     DEFAULT_ANNOUNCEMENT_TEMPLATE,
@@ -20,6 +21,8 @@ from bdayblaze.domain.birthday_logic import (
 from bdayblaze.domain.models import (
     AnnouncementBatch,
     AnnouncementBatchClaim,
+    AnnouncementSurfaceKind,
+    AnnouncementSurfaceSettings,
     BirthdayCelebration,
     BirthdayPreview,
     BirthdayWish,
@@ -56,7 +59,6 @@ class PostgresRepository:
                 """
                 INSERT INTO guild_settings (
                     guild_id,
-                    announcement_channel_id,
                     default_timezone,
                     birthday_role_id,
                     announcements_enabled,
@@ -66,13 +68,10 @@ class PostgresRepository:
                     announcement_template,
                     announcement_title_override,
                     announcement_footer_text,
-                    announcement_image_url,
-                    announcement_thumbnail_url,
                     announcement_accent_color,
                     birthday_dm_enabled,
                     birthday_dm_template,
                     anniversary_enabled,
-                    anniversary_channel_id,
                     anniversary_template,
                     eligibility_role_id,
                     ignore_bots,
@@ -83,10 +82,9 @@ class PostgresRepository:
                 )
                 VALUES (
                     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-                    $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, NOW()
+                    $15, $16, $17, $18, $19, $20, NOW()
                 )
                 ON CONFLICT (guild_id) DO UPDATE SET
-                    announcement_channel_id = EXCLUDED.announcement_channel_id,
                     default_timezone = EXCLUDED.default_timezone,
                     birthday_role_id = EXCLUDED.birthday_role_id,
                     announcements_enabled = EXCLUDED.announcements_enabled,
@@ -96,13 +94,10 @@ class PostgresRepository:
                     announcement_template = EXCLUDED.announcement_template,
                     announcement_title_override = EXCLUDED.announcement_title_override,
                     announcement_footer_text = EXCLUDED.announcement_footer_text,
-                    announcement_image_url = EXCLUDED.announcement_image_url,
-                    announcement_thumbnail_url = EXCLUDED.announcement_thumbnail_url,
                     announcement_accent_color = EXCLUDED.announcement_accent_color,
                     birthday_dm_enabled = EXCLUDED.birthday_dm_enabled,
                     birthday_dm_template = EXCLUDED.birthday_dm_template,
                     anniversary_enabled = EXCLUDED.anniversary_enabled,
-                    anniversary_channel_id = EXCLUDED.anniversary_channel_id,
                     anniversary_template = EXCLUDED.anniversary_template,
                     eligibility_role_id = EXCLUDED.eligibility_role_id,
                     ignore_bots = EXCLUDED.ignore_bots,
@@ -113,7 +108,6 @@ class PostgresRepository:
                 RETURNING *
                 """,
                 settings.guild_id,
-                settings.announcement_channel_id,
                 settings.default_timezone,
                 settings.birthday_role_id,
                 settings.announcements_enabled,
@@ -123,13 +117,10 @@ class PostgresRepository:
                 settings.announcement_template,
                 settings.announcement_title_override,
                 settings.announcement_footer_text,
-                settings.announcement_image_url,
-                settings.announcement_thumbnail_url,
                 settings.announcement_accent_color,
                 settings.birthday_dm_enabled,
                 settings.birthday_dm_template,
                 settings.anniversary_enabled,
-                settings.anniversary_channel_id,
                 settings.anniversary_template,
                 settings.eligibility_role_id,
                 settings.ignore_bots,
@@ -138,6 +129,71 @@ class PostgresRepository:
                 settings.studio_audit_channel_id,
             )
         return self._map_guild_settings(row)
+
+    async def list_guild_announcement_surfaces(
+        self,
+        guild_id: int,
+    ) -> dict[AnnouncementSurfaceKind, AnnouncementSurfaceSettings]:
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(
+                """
+                SELECT *
+                FROM guild_announcement_surfaces
+                WHERE guild_id = $1
+                """,
+                guild_id,
+            )
+        return {
+            surface.surface_kind: surface
+            for surface in (self._map_announcement_surface(row) for row in rows)
+        }
+
+    async def upsert_guild_announcement_surface(
+        self,
+        surface: AnnouncementSurfaceSettings,
+    ) -> AnnouncementSurfaceSettings:
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(
+                """
+                INSERT INTO guild_announcement_surfaces (
+                    guild_id,
+                    surface_kind,
+                    channel_id,
+                    image_url,
+                    thumbnail_url,
+                    updated_at_utc
+                )
+                VALUES ($1, $2, $3, $4, $5, NOW())
+                ON CONFLICT (guild_id, surface_kind) DO UPDATE SET
+                    channel_id = EXCLUDED.channel_id,
+                    image_url = EXCLUDED.image_url,
+                    thumbnail_url = EXCLUDED.thumbnail_url,
+                    updated_at_utc = NOW()
+                RETURNING *
+                """,
+                surface.guild_id,
+                surface.surface_kind,
+                surface.channel_id,
+                surface.image_url,
+                surface.thumbnail_url,
+            )
+        return self._map_announcement_surface(row)
+
+    async def delete_guild_announcement_surface(
+        self,
+        guild_id: int,
+        surface_kind: AnnouncementSurfaceKind,
+    ) -> None:
+        async with self._pool.acquire() as connection:
+            await connection.execute(
+                """
+                DELETE FROM guild_announcement_surfaces
+                WHERE guild_id = $1
+                  AND surface_kind = $2
+                """,
+                guild_id,
+                surface_kind,
+            )
 
     async def fetch_guild_experience_settings(
         self,
@@ -1414,7 +1470,7 @@ class PostgresRepository:
                     SELECT
                         mb.*,
                         COALESCE(gs.default_timezone, 'UTC') AS effective_default_timezone,
-                        gs.announcement_channel_id,
+                        birthday_surface.channel_id AS birthday_surface_channel_id,
                         gs.birthday_role_id,
                         COALESCE(gs.announcements_enabled, FALSE) AS announcements_enabled,
                         COALESCE(gs.role_enabled, FALSE) AS role_enabled,
@@ -1423,8 +1479,8 @@ class PostgresRepository:
                         gs.announcement_template,
                         gs.announcement_title_override,
                         gs.announcement_footer_text,
-                        gs.announcement_image_url,
-                        gs.announcement_thumbnail_url,
+                        birthday_surface.image_url AS birthday_surface_image_url,
+                        birthday_surface.thumbnail_url AS birthday_surface_thumbnail_url,
                         gs.announcement_accent_color,
                         COALESCE(gs.birthday_dm_enabled, FALSE) AS birthday_dm_enabled,
                         gs.birthday_dm_template,
@@ -1444,6 +1500,9 @@ class PostgresRepository:
                     FROM member_birthdays AS mb
                     LEFT JOIN guild_settings AS gs
                         ON gs.guild_id = mb.guild_id
+                    LEFT JOIN guild_announcement_surfaces AS birthday_surface
+                        ON birthday_surface.guild_id = mb.guild_id
+                       AND birthday_surface.surface_kind = 'birthday_announcement'
                     LEFT JOIN guild_experience_settings AS ges
                         ON ges.guild_id = mb.guild_id
                     WHERE mb.next_occurrence_at_utc <= $1
@@ -1475,7 +1534,7 @@ class PostgresRepository:
 
                 batch_tokens: dict[tuple[int, datetime, int], str] = {}
                 for row in rows:
-                    channel_id = row["announcement_channel_id"]
+                    channel_id = row["birthday_surface_channel_id"]
                     if channel_id is None or not row["announcements_enabled"]:
                         continue
                     key = (row["guild_id"], row["next_occurrence_at_utc"], channel_id)
@@ -1537,7 +1596,7 @@ class PostgresRepository:
                             capsule_state = "no_wishes"
                         elif (
                             row["announcements_enabled"]
-                            and row["announcement_channel_id"] is not None
+                            and row["birthday_surface_channel_id"] is not None
                         ):
                             capsule_state = "pending_public"
                         else:
@@ -1545,7 +1604,8 @@ class PostgresRepository:
 
                     quest_enabled = bool(row["quests_enabled"])
                     has_public_announcement_route = bool(
-                        row["announcements_enabled"] and row["announcement_channel_id"] is not None
+                        row["announcements_enabled"]
+                        and row["birthday_surface_channel_id"] is not None
                     )
                     quest_wish_target = int(row["quest_wish_target"]) if quest_enabled else 0
                     quest_reaction_target = (
@@ -1616,9 +1676,16 @@ class PostgresRepository:
                         surprise_reward=surprise_reward,
                     )
 
-                    if row["announcements_enabled"] and row["announcement_channel_id"] is not None:
+                    if (
+                        row["announcements_enabled"]
+                        and row["birthday_surface_channel_id"] is not None
+                    ):
                         batch_token = batch_tokens[
-                            (row["guild_id"], current_occurrence, row["announcement_channel_id"])
+                            (
+                                row["guild_id"],
+                                current_occurrence,
+                                row["birthday_surface_channel_id"],
+                            )
                         ]
                         inserted += await self._insert_event(
                             connection,
@@ -1631,7 +1698,7 @@ class PostgresRepository:
                             event_kind="announcement",
                             scheduled_for_utc=current_occurrence,
                             payload={
-                                "channel_id": row["announcement_channel_id"],
+                                "channel_id": row["birthday_surface_channel_id"],
                                 "batch_token": batch_token,
                                 "celebration_mode": row["celebration_mode"],
                                 "announcement_theme": row["announcement_theme"],
@@ -1639,8 +1706,8 @@ class PostgresRepository:
                                 or DEFAULT_ANNOUNCEMENT_TEMPLATE,
                                 "title_override": row["announcement_title_override"],
                                 "footer_text": row["announcement_footer_text"],
-                                "image_url": row["announcement_image_url"],
-                                "thumbnail_url": row["announcement_thumbnail_url"],
+                                "image_url": row["birthday_surface_image_url"],
+                                "thumbnail_url": row["birthday_surface_thumbnail_url"],
                                 "accent_color": row["announcement_accent_color"],
                                 "birth_month": row["birth_month"],
                                 "birth_day": row["birth_day"],
@@ -1701,7 +1768,7 @@ class PostgresRepository:
                         row["capsules_enabled"]
                         and revealed_wish_count > 0
                         and row["announcements_enabled"]
-                        and row["announcement_channel_id"] is not None
+                        and row["birthday_surface_channel_id"] is not None
                     ):
                         inserted += await self._insert_event(
                             connection,
@@ -1714,7 +1781,7 @@ class PostgresRepository:
                             event_kind="capsule_reveal",
                             scheduled_for_utc=current_occurrence + timedelta(seconds=30),
                             payload={
-                                "channel_id": row["announcement_channel_id"],
+                                "channel_id": row["birthday_surface_channel_id"],
                                 "celebration_mode": row["celebration_mode"],
                                 "announcement_theme": row["announcement_theme"],
                                 "birth_month": row["birth_month"],
@@ -1737,12 +1804,14 @@ class PostgresRepository:
                         COALESCE(gs.announcement_theme, 'classic') AS announcement_theme,
                         gs.announcement_title_override,
                         gs.announcement_footer_text,
-                        gs.announcement_image_url,
-                        gs.announcement_thumbnail_url,
                         gs.announcement_accent_color,
                         gs.anniversary_template,
-                        gs.anniversary_channel_id,
-                        gs.announcement_channel_id,
+                        birthday_surface.channel_id AS birthday_surface_channel_id,
+                        birthday_surface.image_url AS birthday_surface_image_url,
+                        birthday_surface.thumbnail_url AS birthday_surface_thumbnail_url,
+                        anniversary_surface.channel_id AS anniversary_surface_channel_id,
+                        anniversary_surface.image_url AS anniversary_surface_image_url,
+                        anniversary_surface.thumbnail_url AS anniversary_surface_thumbnail_url,
                         COALESCE(gs.anniversary_enabled, FALSE) AS anniversary_enabled,
                         gs.eligibility_role_id,
                         COALESCE(gs.ignore_bots, TRUE) AS ignore_bots,
@@ -1754,6 +1823,12 @@ class PostgresRepository:
                     FROM tracked_member_anniversaries AS tma
                     LEFT JOIN guild_settings AS gs
                         ON gs.guild_id = tma.guild_id
+                    LEFT JOIN guild_announcement_surfaces AS birthday_surface
+                        ON birthday_surface.guild_id = tma.guild_id
+                       AND birthday_surface.surface_kind = 'birthday_announcement'
+                    LEFT JOIN guild_announcement_surfaces AS anniversary_surface
+                        ON anniversary_surface.guild_id = tma.guild_id
+                       AND anniversary_surface.surface_kind = 'anniversary'
                     WHERE tma.next_occurrence_at_utc <= $1
                     ORDER BY tma.next_occurrence_at_utc ASC
                     FOR UPDATE OF tma SKIP LOCKED
@@ -1767,7 +1842,16 @@ class PostgresRepository:
 
                 batch_tokens: dict[tuple[int, datetime, int], str] = {}
                 for row in rows:
-                    channel_id = row["anniversary_channel_id"] or row["announcement_channel_id"]
+                    resolved_surface = resolve_announcement_surface(
+                        row["guild_id"],
+                        "anniversary",
+                        self._announcement_surfaces_from_row(
+                            row,
+                            "birthday_announcement",
+                            "anniversary",
+                        ),
+                    )
+                    channel_id = resolved_surface.channel.effective_value
                     if channel_id is None or not row["anniversary_enabled"]:
                         continue
                     key = (row["guild_id"], row["next_occurrence_at_utc"], channel_id)
@@ -1805,7 +1889,16 @@ class PostgresRepository:
                         row["guild_id"],
                         row["user_id"],
                     )
-                    channel_id = row["anniversary_channel_id"] or row["announcement_channel_id"]
+                    resolved_surface = resolve_announcement_surface(
+                        row["guild_id"],
+                        "anniversary",
+                        self._announcement_surfaces_from_row(
+                            row,
+                            "birthday_announcement",
+                            "anniversary",
+                        ),
+                    )
+                    channel_id = resolved_surface.channel.effective_value
                     if channel_id is None or not row["anniversary_enabled"]:
                         continue
                     batch_token = batch_tokens[(row["guild_id"], current_occurrence, channel_id)]
@@ -1827,8 +1920,8 @@ class PostgresRepository:
                             "template": row["anniversary_template"] or DEFAULT_ANNIVERSARY_TEMPLATE,
                             "title_override": row["announcement_title_override"],
                             "footer_text": row["announcement_footer_text"],
-                            "image_url": row["announcement_image_url"],
-                            "thumbnail_url": row["announcement_thumbnail_url"],
+                            "image_url": resolved_surface.image.effective_value,
+                            "thumbnail_url": resolved_surface.thumbnail.effective_value,
                             "accent_color": row["announcement_accent_color"],
                             "joined_at_utc": row["joined_at_utc"].isoformat(),
                             "event_name": "Join anniversary",
@@ -1854,13 +1947,28 @@ class PostgresRepository:
                         COALESCE(gs.announcement_theme, 'classic') AS announcement_theme,
                         gs.announcement_title_override,
                         gs.announcement_footer_text,
-                        gs.announcement_image_url,
-                        gs.announcement_thumbnail_url,
                         gs.announcement_accent_color,
-                        gs.announcement_channel_id
+                        birthday_surface.channel_id AS birthday_surface_channel_id,
+                        birthday_surface.image_url AS birthday_surface_image_url,
+                        birthday_surface.thumbnail_url AS birthday_surface_thumbnail_url,
+                        recurring_surface.channel_id AS recurring_surface_channel_id,
+                        recurring_surface.image_url AS recurring_surface_image_url,
+                        recurring_surface.thumbnail_url AS recurring_surface_thumbnail_url,
+                        server_surface.channel_id AS server_surface_channel_id,
+                        server_surface.image_url AS server_surface_image_url,
+                        server_surface.thumbnail_url AS server_surface_thumbnail_url
                     FROM recurring_celebrations AS rc
                     LEFT JOIN guild_settings AS gs
                         ON gs.guild_id = rc.guild_id
+                    LEFT JOIN guild_announcement_surfaces AS birthday_surface
+                        ON birthday_surface.guild_id = rc.guild_id
+                       AND birthday_surface.surface_kind = 'birthday_announcement'
+                    LEFT JOIN guild_announcement_surfaces AS recurring_surface
+                        ON recurring_surface.guild_id = rc.guild_id
+                       AND recurring_surface.surface_kind = 'recurring_event'
+                    LEFT JOIN guild_announcement_surfaces AS server_surface
+                        ON server_surface.guild_id = rc.guild_id
+                       AND server_surface.surface_kind = 'server_anniversary'
                     WHERE rc.enabled = TRUE
                       AND rc.next_occurrence_at_utc <= $1
                     ORDER BY rc.next_occurrence_at_utc ASC
@@ -1891,7 +1999,23 @@ class PostgresRepository:
                         next_occurrence,
                         row["id"],
                     )
-                    channel_id = row["channel_id"] or row["announcement_channel_id"]
+                    surface_kind: AnnouncementSurfaceKind = (
+                        "server_anniversary"
+                        if row["celebration_kind"] == "server_anniversary"
+                        else "recurring_event"
+                    )
+                    resolved_surface = resolve_announcement_surface(
+                        row["guild_id"],
+                        surface_kind,
+                        self._announcement_surfaces_from_row(
+                            row,
+                            "birthday_announcement",
+                            "recurring_event",
+                            "server_anniversary",
+                        ),
+                        event_channel_id=row["channel_id"],
+                    )
+                    channel_id = resolved_surface.channel.effective_value
                     if channel_id is None:
                         continue
                     inserted += await self._insert_event(
@@ -1909,8 +2033,8 @@ class PostgresRepository:
                             "template": row["template"],
                             "title_override": row["announcement_title_override"],
                             "footer_text": row["announcement_footer_text"],
-                            "image_url": row["announcement_image_url"],
-                            "thumbnail_url": row["announcement_thumbnail_url"],
+                            "image_url": resolved_surface.image.effective_value,
+                            "thumbnail_url": resolved_surface.thumbnail.effective_value,
                             "accent_color": row["announcement_accent_color"],
                             "event_name": row["name"],
                             "event_month": row["event_month"],
@@ -2977,10 +3101,31 @@ class PostgresRepository:
         return eligible[-1]
 
     @staticmethod
+    def _announcement_surfaces_from_row(
+        row: asyncpg.Record,
+        *surface_kinds: AnnouncementSurfaceKind,
+    ) -> dict[AnnouncementSurfaceKind, AnnouncementSurfaceSettings]:
+        prefixes: dict[AnnouncementSurfaceKind, str] = {
+            "birthday_announcement": "birthday_surface",
+            "anniversary": "anniversary_surface",
+            "server_anniversary": "server_surface",
+            "recurring_event": "recurring_surface",
+        }
+        return {
+            surface_kind: AnnouncementSurfaceSettings(
+                guild_id=row["guild_id"],
+                surface_kind=surface_kind,
+                channel_id=row[f"{prefixes[surface_kind]}_channel_id"],
+                image_url=row[f"{prefixes[surface_kind]}_image_url"],
+                thumbnail_url=row[f"{prefixes[surface_kind]}_thumbnail_url"],
+            )
+            for surface_kind in surface_kinds
+        }
+
+    @staticmethod
     def _map_guild_settings(row: asyncpg.Record) -> GuildSettings:
         return GuildSettings(
             guild_id=row["guild_id"],
-            announcement_channel_id=row["announcement_channel_id"],
             default_timezone=row["default_timezone"],
             birthday_role_id=row["birthday_role_id"],
             announcements_enabled=row["announcements_enabled"],
@@ -2990,19 +3135,28 @@ class PostgresRepository:
             announcement_template=row["announcement_template"],
             announcement_title_override=row["announcement_title_override"],
             announcement_footer_text=row["announcement_footer_text"],
-            announcement_image_url=row["announcement_image_url"],
-            announcement_thumbnail_url=row["announcement_thumbnail_url"],
             announcement_accent_color=row["announcement_accent_color"],
             birthday_dm_enabled=row["birthday_dm_enabled"],
             birthday_dm_template=row["birthday_dm_template"],
             anniversary_enabled=row["anniversary_enabled"],
-            anniversary_channel_id=row["anniversary_channel_id"],
             anniversary_template=row["anniversary_template"],
             eligibility_role_id=row["eligibility_role_id"],
             ignore_bots=row["ignore_bots"],
             minimum_membership_days=row["minimum_membership_days"],
             mention_suppression_threshold=row["mention_suppression_threshold"],
             studio_audit_channel_id=row["studio_audit_channel_id"],
+            created_at_utc=row["created_at_utc"],
+            updated_at_utc=row["updated_at_utc"],
+        )
+
+    @staticmethod
+    def _map_announcement_surface(row: asyncpg.Record) -> AnnouncementSurfaceSettings:
+        return AnnouncementSurfaceSettings(
+            guild_id=row["guild_id"],
+            surface_kind=row["surface_kind"],
+            channel_id=row["channel_id"],
+            image_url=row["image_url"],
+            thumbnail_url=row["thumbnail_url"],
             created_at_utc=row["created_at_utc"],
             updated_at_utc=row["updated_at_utc"],
         )

@@ -18,7 +18,7 @@ Bdayblaze is a production-minded Discord birthday bot built for polished celebra
 
 ![Celebration Studio](assets/celebration_studio_panel.jpg)
 
-Celebration Studio is the main private admin surface for announcements, anniversaries, shared visuals, capsules, quests, surprises, and previews.
+Celebration Studio is the main private admin surface for announcements, anniversaries, per-surface routing and media, global look controls, capsules, quests, surprises, and previews.
 
 ![Birthday Setup](assets/setup_panel.jpg)
 

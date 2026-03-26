@@ -4,17 +4,42 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import pytest
+
 from bdayblaze.discord.ui.setup import (
     MessageTemplateView,
     ServerAnniversaryChannelSelect,
     ServerAnniversaryControlView,
     ServerAnniversaryDateSourceSelect,
     SetupView,
+    _build_studio_preview_pair,
     build_media_tools_embed,
     build_message_template_embed,
+    build_setup_embed,
 )
-from bdayblaze.domain.models import GuildExperienceSettings, GuildSettings, RecurringCelebration
+from bdayblaze.domain.models import (
+    AnnouncementSurfaceSettings,
+    GuildExperienceSettings,
+    GuildSettings,
+    RecurringCelebration,
+)
 from bdayblaze.services.media_validation_service import MediaProbeResult
+
+
+class FakeSettingsService:
+    async def describe_delivery(
+        self,
+        guild: object,
+        *,
+        kind: str,
+        channel_id: int | None = None,
+    ) -> object:
+        from bdayblaze.domain.models import AnnouncementDeliveryReadiness
+
+        return AnnouncementDeliveryReadiness(
+            status="ready",
+            summary=f"{kind} ready",
+        )
 
 
 def _guild() -> SimpleNamespace:
@@ -41,10 +66,29 @@ def _server_anniversary() -> RecurringCelebration:
     )
 
 
-def test_message_template_view_configures_server_anniversary_buttons() -> None:
+def _surfaces() -> dict[str, AnnouncementSurfaceSettings]:
+    return {
+        "birthday_announcement": AnnouncementSurfaceSettings(
+            guild_id=1,
+            surface_kind="birthday_announcement",
+            channel_id=123,
+            image_url="https://cdn.example.com/current-banner.gif",
+            thumbnail_url="https://cdn.example.com/current-thumb.webp",
+        ),
+        "anniversary": AnnouncementSurfaceSettings(
+            guild_id=1,
+            surface_kind="anniversary",
+            channel_id=456,
+        ),
+    }
+
+
+@pytest.mark.asyncio
+async def test_message_template_view_configures_server_anniversary_buttons() -> None:
     view = MessageTemplateView(
         settings_service=object(),  # type: ignore[arg-type]
-        settings=replace(GuildSettings.default(1), announcement_channel_id=123),
+        settings=GuildSettings.default(1),
+        announcement_surfaces=_surfaces(),
         owner_id=42,
         guild=_guild(),  # type: ignore[arg-type]
         birthday_service=object(),  # type: ignore[arg-type]
@@ -55,15 +99,17 @@ def test_message_template_view_configures_server_anniversary_buttons() -> None:
 
     assert view.edit_primary.label == "Schedule controls"
     assert view.edit_secondary.label == "Edit event copy"
-    assert view.preview_current.label == "Preview server anniversary"
+    assert view.preview_current.label == "Preview selected surface"
     assert view.reset_current.label == "Reset to guild date"
-    assert view.reset_media.label == "Media tools"
+    assert view.reset_media.label == "Server route/media"
 
 
-def test_setup_view_removes_refresh_and_ignore_bots_buttons() -> None:
+@pytest.mark.asyncio
+async def test_setup_view_removes_refresh_and_ignore_bots_buttons() -> None:
     view = SetupView(
         settings_service=object(),  # type: ignore[arg-type]
         settings=GuildSettings.default(1),
+        announcement_surfaces=_surfaces(),
         owner_id=42,
         guild=_guild(),  # type: ignore[arg-type]
         birthday_service=object(),  # type: ignore[arg-type]
@@ -123,11 +169,12 @@ def test_message_template_embed_home_summarizes_reaction_target() -> None:
     assert "Reaction target: 7" in quest_field.value
 
 
-def test_server_anniversary_control_view_uses_native_controls() -> None:
+@pytest.mark.asyncio
+async def test_server_anniversary_control_view_uses_native_controls() -> None:
     view = ServerAnniversaryControlView(
         settings_service=object(),  # type: ignore[arg-type]
         birthday_service=object(),  # type: ignore[arg-type]
-        settings=replace(GuildSettings.default(1), announcement_channel_id=123),
+        settings=GuildSettings.default(1),
         owner_id=42,
         guild=_guild(),  # type: ignore[arg-type]
         celebration=_server_anniversary(),
@@ -139,14 +186,12 @@ def test_server_anniversary_control_view_uses_native_controls() -> None:
     assert view.toggle_enabled.label == "Disable live"
 
 
-def test_birthday_dm_section_calls_out_theme_only_visuals() -> None:
+@pytest.mark.asyncio
+async def test_birthday_dm_section_calls_out_theme_only_visuals() -> None:
     view = MessageTemplateView(
         settings_service=object(),  # type: ignore[arg-type]
-        settings=replace(
-            GuildSettings.default(1),
-            birthday_dm_enabled=True,
-            announcement_channel_id=123,
-        ),
+        settings=replace(GuildSettings.default(1), birthday_dm_enabled=True),
+        announcement_surfaces=_surfaces(),
         owner_id=42,
         guild=_guild(),  # type: ignore[arg-type]
         birthday_service=object(),  # type: ignore[arg-type]
@@ -155,27 +200,21 @@ def test_birthday_dm_section_calls_out_theme_only_visuals() -> None:
         recurring_events=(),
     )
     embed = build_message_template_embed(
-        replace(
-            GuildSettings.default(1),
-            birthday_dm_enabled=True,
-            announcement_channel_id=123,
-        ),
+        replace(GuildSettings.default(1), birthday_dm_enabled=True),
+        announcement_surfaces=_surfaces(),
         section="birthday_dm",
         guild=_guild(),  # type: ignore[arg-type]
     )
 
     values = "\n".join(field.value for field in embed.fields)
-    assert view.edit_secondary.label == "Edit announcement visuals"
+    assert view.edit_secondary.label == "Edit global look"
     assert "public announcement surfaces" in values
 
 
 def test_media_tools_embed_explains_probe_results() -> None:
     embed = build_media_tools_embed(
-        replace(
-            GuildSettings.default(1),
-            announcement_image_url="https://cdn.example.com/current-banner.gif",
-            announcement_thumbnail_url="https://cdn.example.com/current-thumb.webp",
-        ),
+        GuildSettings.default(1),
+        announcement_surfaces=_surfaces(),
         note="No changes were saved. Your current saved media is unchanged.",
         image_probe=MediaProbeResult(
             label="Announcement image",
@@ -210,6 +249,7 @@ def test_media_tools_embed_explains_probe_results() -> None:
             "https://www.google.com/imgres?imgurl=https%3A%2F%2Fcdn.example.com%2Fparty.gif"
             "&imgrefurl=https%3A%2F%2Fexample.com%2Fpost"
         ),
+        surface_kind="birthday_announcement",
     )
 
     fields = {field.name: field.value for field in embed.fields}
@@ -217,10 +257,10 @@ def test_media_tools_embed_explains_probe_results() -> None:
 
     assert fields["Updated"] == "No changes were saved. Your current saved media is unchanged."
     assert "Blocked saves never clear the currently saved media." in fields["Save protection"]
-    assert "https://cdn.example.com/current-banner.gif" in fields["Current saved media"]
+    assert "https://cdn.example.com/current-banner.gif" in fields["Configured surface media"]
     assert (
         "https://tenor.com/view/funny-cat-happy-birthday-123456"
-        not in fields["Current saved media"]
+        not in fields["Configured surface media"]
     )
     assert "https://tenor.com/view/funny-cat-happy-birthday-123456" in fields["Latest validation"]
     assert "Webpage link rejected" in values
@@ -228,3 +268,69 @@ def test_media_tools_embed_explains_probe_results() -> None:
     assert "current saved media remains live" in fields["Validation flow"]
     assert "For Tenor, use the direct media file URL, not the page link." in values
     assert "Google image results: wrapper links are webpages, not direct media files." in values
+
+
+@pytest.mark.asyncio
+async def test_message_template_view_shows_global_behavior_toggle() -> None:
+    view = MessageTemplateView(
+        settings_service=object(),  # type: ignore[arg-type]
+        settings=GuildSettings.default(1),
+        announcement_surfaces=_surfaces(),
+        owner_id=42,
+        guild=_guild(),  # type: ignore[arg-type]
+        birthday_service=object(),  # type: ignore[arg-type]
+        section="birthday",
+        server_anniversary=_server_anniversary(),
+        recurring_events=(),
+    )
+
+    labels = [getattr(child, "label", "") for child in view.children]
+
+    assert "Behavior: Quiet" in labels
+
+
+def test_setup_embed_shows_effective_source_for_inherited_surfaces() -> None:
+    surfaces = _surfaces()
+    surfaces.pop("anniversary")
+    embed = build_setup_embed(
+        GuildSettings.default(1),
+        surfaces,
+    )
+
+    anniversary_field = next(
+        field for field in embed.fields if field.name == "\U0001F389 Anniversary routing"
+    )
+    server_field = next(
+        field for field in embed.fields if field.name == "\U0001F3F0 Server anniversary defaults"
+    )
+
+    assert "Inherited from Birthday announcement" in anniversary_field.value
+    assert "Event-level channel overrides still win" in server_field.value
+
+
+@pytest.mark.asyncio
+async def test_studio_preview_uses_explicit_surface_selection() -> None:
+    settings = replace(
+        GuildSettings.default(1),
+        announcements_enabled=True,
+        anniversary_enabled=True,
+        announcement_template="Happy birthday {birthday.mentions}",
+        anniversary_template="Happy anniversary {members.names}",
+        birthday_dm_enabled=True,
+    )
+
+    status_embed, preview_embed = await _build_studio_preview_pair(
+        guild=_guild(),  # type: ignore[arg-type]
+        settings=settings,
+        settings_service=FakeSettingsService(),  # type: ignore[arg-type]
+        section="birthday",
+        announcement_surfaces=_surfaces(),
+        preview_kind="anniversary",
+        server_anniversary=_server_anniversary(),
+        recurring_events=(),
+    )
+
+    status_fields = {field.name: field.value for field in status_embed.fields}
+
+    assert status_fields["Preview surface"] == "Member anniversary"
+    assert "Happy anniversary" in (preview_embed.description or "")

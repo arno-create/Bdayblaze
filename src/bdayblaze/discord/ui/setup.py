@@ -3,12 +3,18 @@
 import asyncio
 from calendar import month_name
 from dataclasses import dataclass
-from typing import Final, Literal
+from typing import Final, Literal, cast
 
 import discord
 
 from bdayblaze.discord.announcements import build_announcement_message
 from bdayblaze.discord.embed_budget import BudgetedEmbed, code_block_snippet, truncate_text
+from bdayblaze.domain.announcement_surfaces import (
+    normalize_announcement_surfaces,
+    resolve_announcement_surface,
+    surface_label,
+    surface_source_label,
+)
 from bdayblaze.domain.announcement_template import (
     DEFAULT_ANNIVERSARY_TEMPLATE,
     DEFAULT_ANNOUNCEMENT_TEMPLATE,
@@ -28,11 +34,15 @@ from bdayblaze.domain.media_validation import (
     strip_validated_direct_media_marker,
 )
 from bdayblaze.domain.models import (
+    AnnouncementKind,
     AnnouncementStudioPresentation,
+    AnnouncementSurfaceKind,
+    AnnouncementSurfaceSettings,
     GuildExperienceSettings,
     GuildSettings,
     GuildSurpriseReward,
     RecurringCelebration,
+    ResolvedAnnouncementSurface,
 )
 from bdayblaze.domain.timezones import timezone_guidance
 from bdayblaze.logging import get_logger, redact_identifier
@@ -75,6 +85,25 @@ _SECTION_LABELS: Final[dict[SectionName, str]] = {
     "events": "\U0001F4C5 Custom annual events",
     "help": "\U0001F9ED Studio help",
 }
+_SECTION_SURFACE_KIND: Final[dict[SectionName, AnnouncementSurfaceKind | None]] = {
+    "home": "birthday_announcement",
+    "birthday": "birthday_announcement",
+    "birthday_dm": None,
+    "anniversary": "anniversary",
+    "server_anniversary": "server_anniversary",
+    "capsules": None,
+    "quests": None,
+    "surprises": None,
+    "events": "recurring_event",
+    "help": None,
+}
+_PREVIEW_SURFACES: Final[tuple[AnnouncementKind, ...]] = (
+    "birthday_announcement",
+    "birthday_dm",
+    "anniversary",
+    "server_anniversary",
+    "recurring_event",
+)
 
 @dataclass(slots=True, frozen=True)
 class ServerAnniversaryState:
@@ -86,6 +115,139 @@ class ServerAnniversaryState:
     template: str | None
     use_guild_created_date: bool
     exists: bool
+
+
+def _normalized_surfaces(
+    settings: GuildSettings,
+    announcement_surfaces: dict[AnnouncementSurfaceKind, AnnouncementSurfaceSettings] | None,
+) -> dict[AnnouncementSurfaceKind, AnnouncementSurfaceSettings]:
+    return normalize_announcement_surfaces(settings.guild_id, announcement_surfaces or {})
+
+
+def _resolve_surface(
+    settings: GuildSettings,
+    announcement_surfaces: dict[AnnouncementSurfaceKind, AnnouncementSurfaceSettings] | None,
+    surface_kind: AnnouncementSurfaceKind,
+    *,
+    event_channel_id: int | None = None,
+) -> ResolvedAnnouncementSurface:
+    return resolve_announcement_surface(
+        settings.guild_id,
+        surface_kind,
+        _normalized_surfaces(settings, announcement_surfaces),
+        event_channel_id=event_channel_id,
+    )
+
+
+def _surface_route_lines(surface: ResolvedAnnouncementSurface) -> tuple[str, str]:
+    configured = (
+        f"<#{surface.channel.configured_value}>"
+        if surface.channel.configured_value is not None
+        else "Inherited / not set"
+    )
+    if surface.channel.override_value is not None:
+        configured = (
+            f"Surface default {configured}; event override <#{surface.channel.override_value}>"
+        )
+    effective = (
+        f"<#{surface.channel.effective_value}>"
+        if surface.channel.effective_value is not None
+        else "Not configured"
+    )
+    return (
+        f"Configured route: {configured}",
+        (
+            "Effective route: "
+            f"{effective} "
+            f"({surface_source_label(surface.channel.source, surface_kind=surface.surface_kind)})"
+        ),
+    )
+
+
+def _surface_media_lines(surface: ResolvedAnnouncementSurface) -> tuple[str, ...]:
+    return (
+        _configured_media_line(surface.image.configured_value, label="Configured image"),
+        (
+            "Effective image: "
+            f"{_media_effective_label(surface.image.effective_value)} "
+            f"({surface_source_label(surface.image.source, surface_kind=surface.surface_kind)})"
+        ),
+        _configured_media_line(
+            surface.thumbnail.configured_value,
+            label="Configured thumbnail",
+        ),
+        (
+            "Effective thumbnail: "
+            f"{_media_effective_label(surface.thumbnail.effective_value)} "
+            f"({surface_source_label(surface.thumbnail.source, surface_kind=surface.surface_kind)})"
+        ),
+    )
+
+
+def _configured_media_line(value: str | None, *, label: str) -> str:
+    return f"{label}: {'Custom' if value is not None else 'Inherited / not set'}"
+
+
+def _media_effective_label(value: str | None) -> str:
+    assessment = assess_media_url(value, label="Media")
+    if assessment is None:
+        return "Not set"
+    return assessment.status_label()
+
+
+def _celebration_mode_label(mode: str) -> str:
+    return {
+        "quiet": "Quiet: polished, restrained celebration visuals",
+        "party": "Party: brighter, more playful celebration visuals",
+    }.get(mode, mode.title())
+
+
+def _default_preview_kind_for_section(section: SectionName) -> AnnouncementKind:
+    preview_kinds: dict[SectionName, AnnouncementKind] = {
+        "home": "birthday_announcement",
+        "birthday": "birthday_announcement",
+        "birthday_dm": "birthday_dm",
+        "anniversary": "anniversary",
+        "server_anniversary": "server_anniversary",
+        "capsules": "birthday_announcement",
+        "quests": "birthday_announcement",
+        "surprises": "birthday_announcement",
+        "events": "recurring_event",
+        "help": "birthday_announcement",
+    }
+    return preview_kinds[section]
+
+
+def _supports_preview_surface_selection(section: SectionName) -> bool:
+    return section in {
+        "home",
+        "birthday",
+        "birthday_dm",
+        "anniversary",
+        "server_anniversary",
+        "events",
+    }
+
+
+def _surface_media_button_label(section: SectionName) -> str:
+    return {
+        "home": "Birthday route/media",
+        "birthday": "Birthday route/media",
+        "anniversary": "Anniversary route/media",
+        "server_anniversary": "Server route/media",
+        "events": "Events route/media",
+    }.get(section, "Surface route/media")
+
+
+def _global_look_lines(settings: GuildSettings) -> tuple[str, ...]:
+    return (
+        f"Theme: {announcement_theme_label(settings.announcement_theme)}",
+        f"Theme note: {announcement_theme_description(settings.announcement_theme)}",
+        f"Title override: {settings.announcement_title_override or 'Default'}",
+        f"Footer text: {settings.announcement_footer_text or 'Default'}",
+        f"Global celebration behavior: {_celebration_mode_label(settings.celebration_mode)}",
+        f"Accent color: {_format_accent_color(settings.announcement_accent_color)}",
+    )
 
 
 async def _send_safe_ui_error(
@@ -190,8 +352,31 @@ class AdminPanelModal(discord.ui.Modal):
         await _send_safe_ui_error(interaction, error, surface="modal")
 
 
-def build_setup_embed(settings: GuildSettings, note: str | None = None) -> discord.Embed:
-    anniversary_channel = settings.anniversary_channel_id or settings.announcement_channel_id
+def build_setup_embed(
+    settings: GuildSettings,
+    announcement_surfaces: dict[AnnouncementSurfaceKind, AnnouncementSurfaceSettings] | None = None,
+    note: str | None = None,
+) -> discord.Embed:
+    birthday_surface = _resolve_surface(
+        settings,
+        announcement_surfaces,
+        "birthday_announcement",
+    )
+    anniversary_surface = _resolve_surface(
+        settings,
+        announcement_surfaces,
+        "anniversary",
+    )
+    server_surface = _resolve_surface(
+        settings,
+        announcement_surfaces,
+        "server_anniversary",
+    )
+    recurring_surface = _resolve_surface(
+        settings,
+        announcement_surfaces,
+        "recurring_event",
+    )
     budget = BudgetedEmbed.create(
         title=_SETUP_TITLE,
         description=(
@@ -204,9 +389,20 @@ def build_setup_embed(settings: GuildSettings, note: str | None = None) -> disco
         name="\U0001F382 Birthday announcement",
         value=(
             f"Status: {_format_enabled(settings.announcements_enabled)}\n"
-            f"Birthday channel: {_format_channel(settings.announcement_channel_id)}\n"
-            f"Theme: {announcement_theme_label(settings.announcement_theme)}\n"
-            f"Celebration style: {settings.celebration_mode.title()}"
+            f"{_surface_route_lines(birthday_surface)[0]}\n"
+            f"{_surface_route_lines(birthday_surface)[1]}\n"
+            f"{_surface_media_lines(birthday_surface)[0]}\n"
+            f"{_surface_media_lines(birthday_surface)[1]}"
+        ),
+        inline=False,
+    )
+    budget.add_field(
+        name="\U0001F48C Birthday DM",
+        value=(
+            f"Status: {_format_enabled(settings.birthday_dm_enabled)}\n"
+            "Route: private DM only\n"
+            "Media: not used for birthday DMs\n"
+            f"Global celebration behavior: {_celebration_mode_label(settings.celebration_mode)}"
         ),
         inline=False,
     )
@@ -235,8 +431,30 @@ def build_setup_embed(settings: GuildSettings, note: str | None = None) -> disco
         name="\U0001F389 Anniversary routing",
         value=(
             f"Member anniversaries: {_format_enabled(settings.anniversary_enabled)}\n"
-            f"Anniversary channel: {_format_channel(anniversary_channel)}\n"
+            f"{_surface_route_lines(anniversary_surface)[0]}\n"
+            f"{_surface_route_lines(anniversary_surface)[1]}\n"
+            f"{_surface_media_lines(anniversary_surface)[1]}\n"
             "Model: tracked members only"
+        ),
+        inline=False,
+    )
+    budget.add_field(
+        name="\U0001F3F0 Server anniversary defaults",
+        value=(
+            f"{_surface_route_lines(server_surface)[0]}\n"
+            f"{_surface_route_lines(server_surface)[1]}\n"
+            f"{_surface_media_lines(server_surface)[1]}\n"
+            "Event-level channel overrides still win when one is saved."
+        ),
+        inline=False,
+    )
+    budget.add_field(
+        name="\U0001F4C5 Recurring annual events defaults",
+        value=(
+            f"{_surface_route_lines(recurring_surface)[0]}\n"
+            f"{_surface_route_lines(recurring_surface)[1]}\n"
+            f"{_surface_media_lines(recurring_surface)[1]}\n"
+            "Individual yearly events can keep their own channel override or inherit this default."
         ),
         inline=False,
     )
@@ -250,6 +468,7 @@ def build_setup_embed(settings: GuildSettings, note: str | None = None) -> disco
     )
     if note:
         budget.add_field(name="\u2728 Updated", value=note, inline=False)
+    budget.add_line_fields("\U0001F3A8 Global look", _global_look_lines(settings), inline=False)
     budget.add_field(
         name="Studio safety",
         value=(
@@ -324,31 +543,54 @@ def build_studio_safety_embed(
 def build_media_tools_embed(
     settings: GuildSettings,
     *,
+    announcement_surfaces: dict[AnnouncementSurfaceKind, AnnouncementSurfaceSettings] | None = None,
+    surface_kind: AnnouncementSurfaceKind = "birthday_announcement",
     note: str | None = None,
     image_probe: MediaProbeResult | None = None,
     thumbnail_probe: MediaProbeResult | None = None,
     checked_image_url: str | None = None,
     checked_thumbnail_url: str | None = None,
 ) -> discord.Embed:
+    resolved_surface = _resolve_surface(
+        settings,
+        announcement_surfaces,
+        surface_kind,
+    )
+    current_surface = _normalized_surfaces(settings, announcement_surfaces)[surface_kind]
+    surface_title = surface_label(surface_kind)
     budget = BudgetedEmbed.create(
-        title="Media Tools",
+        title="Surface Route and Media",
         description=(
-            "Save only direct HTTPS image, GIF, or WebP file URLs here. Saved media stays in "
-            "place until a replacement passes validation. Webpage wrappers, unsupported files, "
-            "and unsafe links are called out explicitly instead of disappearing."
+            f"Manage route and media for {surface_title}. Save only direct HTTPS image, GIF, or "
+            "WebP file URLs here. Saved media stays in place until a replacement passes "
+            "validation. Webpage wrappers, unsupported files, and unsafe links are called out "
+            "explicitly instead of disappearing."
         ),
         color=discord.Color.blurple(),
     )
     if note:
         budget.add_field(name="Updated", value=note, inline=False)
     budget.add_line_fields(
-        "Current saved media",
+        "Route state",
+        _surface_route_lines(resolved_surface),
+        inline=False,
+    )
+    budget.add_line_fields(
+        "Configured surface media",
         (
-            _media_state_line(settings.announcement_image_url, label="Announcement image"),
+            _media_state_line(current_surface.image_url, label=f"{surface_title} image"),
             _media_state_line(
-                settings.announcement_thumbnail_url,
-                label="Announcement thumbnail",
+                current_surface.thumbnail_url,
+                label=f"{surface_title} thumbnail",
             ),
+        ),
+        inline=False,
+    )
+    budget.add_line_fields(
+        "Effective live media",
+        (
+            _surface_media_lines(resolved_surface)[1],
+            _surface_media_lines(resolved_surface)[3],
         ),
         inline=False,
     )
@@ -363,12 +605,12 @@ def build_media_tools_embed(
             (
                 _media_validation_line(
                     checked_image_url,
-                    label="Announcement image",
+                    label=f"{surface_title} image",
                     probe=image_probe,
                 ),
                 _media_validation_line(
                     checked_thumbnail_url,
-                    label="Announcement thumbnail",
+                    label=f"{surface_title} thumbnail",
                     probe=thumbnail_probe,
                 ),
             ),
@@ -402,7 +644,10 @@ def build_media_tools_embed(
     )
     budget.add_field(
         name="Reset behavior",
-        value="Reset media clears only the saved shared image and thumbnail fields.",
+        value=(
+            "Clear image or Clear thumbnail removes only that override. Reset surface to "
+            "inherited clears this surface route, image, and thumbnail together."
+        ),
         inline=False,
     )
     budget.add_field(
@@ -423,6 +668,7 @@ def build_media_tools_embed(
 def build_message_template_embed(
     settings: GuildSettings,
     *,
+    announcement_surfaces: dict[AnnouncementSurfaceKind, AnnouncementSurfaceSettings] | None = None,
     note: str | None = None,
     section: SectionName = "home",
     guild: discord.Guild | None = None,
@@ -433,6 +679,27 @@ def build_message_template_embed(
 ) -> discord.Embed:
     experience_state = experience_settings or GuildExperienceSettings.default(settings.guild_id)
     state = _server_anniversary_state(guild=guild, celebration=server_anniversary)
+    birthday_surface = _resolve_surface(
+        settings,
+        announcement_surfaces,
+        "birthday_announcement",
+    )
+    anniversary_surface = _resolve_surface(
+        settings,
+        announcement_surfaces,
+        "anniversary",
+    )
+    recurring_surface = _resolve_surface(
+        settings,
+        announcement_surfaces,
+        "recurring_event",
+    )
+    server_surface = _resolve_surface(
+        settings,
+        announcement_surfaces,
+        "server_anniversary",
+        event_channel_id=state.channel_id,
+    )
     budget = BudgetedEmbed.create(
         title=(
             _STUDIO_TITLE
@@ -455,7 +722,8 @@ def build_message_template_embed(
             name="\U0001F382 Birthday announcement",
             value=(
                 f"Status: {_format_enabled(settings.announcements_enabled)}\n"
-                f"Channel: {_format_channel(settings.announcement_channel_id)}\n"
+                f"{_surface_route_lines(birthday_surface)[0]}\n"
+                f"{_surface_route_lines(birthday_surface)[1]}\n"
                 "Copy length: "
                 f"{len(settings.announcement_template or DEFAULT_ANNOUNCEMENT_TEMPLATE)} chars"
             ),
@@ -474,8 +742,8 @@ def build_message_template_embed(
             name="\U0001F389 Member anniversary",
             value=(
                 f"Status: {_format_enabled(settings.anniversary_enabled)}\n"
-                "Channel: "
-                f"{_format_channel(_effective_anniversary_channel(settings))}\n"
+                f"{_surface_route_lines(anniversary_surface)[0]}\n"
+                f"{_surface_route_lines(anniversary_surface)[1]}\n"
                 "Model: tracked members only"
             ),
             inline=False,
@@ -485,14 +753,15 @@ def build_message_template_embed(
             value=(
                 f"Status: {_format_enabled(state.enabled)}\n"
                 f"Date: {_format_month_day(state.month, state.day)}\n"
+                f"{_surface_route_lines(server_surface)[1]}\n"
                 "Source: "
                 f"{'Guild creation date' if state.use_guild_created_date else 'Custom date'}"
             ),
             inline=False,
         )
         budget.add_line_fields(
-            "\U0001F3A8 Shared visuals",
-            _presentation_lines(settings),
+            "\U0001F3A8 Global look",
+            _global_look_lines(settings),
             inline=False,
         )
         budget.add_field(
@@ -523,6 +792,14 @@ def build_message_template_embed(
             inline=False,
         )
         if recurring_events:
+            budget.add_line_fields(
+                "\U0001F4C5 Recurring annual events defaults",
+                (
+                    _surface_route_lines(recurring_surface)[1],
+                    _surface_media_lines(recurring_surface)[1],
+                ),
+                inline=False,
+            )
             budget.add_line_fields(
                 "\U0001F4C5 Custom annual events",
                 [_format_event_line(celebration) for celebration in recurring_events[:4]],
@@ -558,8 +835,9 @@ def build_message_template_embed(
                 "Signed, query-string, and extensionless URLs can work when validation proves "
                 "they are direct media assets.\n"
                 "Full preview is still the final Discord render check. It never pings members.\n"
-                "Reset copy restores the default template. Reset media clears only image and "
-                "thumbnail fields. Shared visuals now cover title, footer, and accent color."
+                "Reset copy restores the default template. Surface reset returns the current "
+                "route and media to inheritance. Global look covers theme, title, footer, "
+                "accent, and global celebration behavior."
             ),
             inline=False,
         )
@@ -578,11 +856,14 @@ def build_message_template_embed(
             template=settings.announcement_template or DEFAULT_ANNOUNCEMENT_TEMPLATE,
             routing_lines=(
                 f"Live status: {_format_enabled(settings.announcements_enabled)}",
-                f"Announcement channel: {_format_channel(settings.announcement_channel_id)}",
+                _surface_route_lines(birthday_surface)[0],
+                _surface_route_lines(birthday_surface)[1],
                 f"Theme: {announcement_theme_label(settings.announcement_theme)}",
-                f"Celebration style: {settings.celebration_mode.title()}",
+                "Global celebration behavior: "
+                f"{_celebration_mode_label(settings.celebration_mode)}",
             ),
             field_label="\U0001F382 Birthday announcement copy",
+            surface=birthday_surface,
         )
     elif section == "birthday_dm":
         budget.add_field(
@@ -611,11 +892,12 @@ def build_message_template_embed(
             template=settings.anniversary_template or DEFAULT_ANNIVERSARY_TEMPLATE,
             routing_lines=(
                 f"Live status: {_format_enabled(settings.anniversary_enabled)}",
-                "Channel: "
-                f"{_format_channel(_effective_anniversary_channel(settings))}",
+                _surface_route_lines(anniversary_surface)[0],
+                _surface_route_lines(anniversary_surface)[1],
                 "Model: tracked members only",
             ),
             field_label="\U0001F389 Member anniversary copy",
+            surface=anniversary_surface,
         )
     elif section == "server_anniversary":
         budget.add_line_fields(
@@ -625,7 +907,8 @@ def build_message_template_embed(
                 f"Date: {_format_month_day(state.month, state.day)}",
                 "Date source: "
                 f"{'Guild creation date' if state.use_guild_created_date else 'Custom date'}",
-                f"Channel: {_format_channel(state.channel_id or settings.announcement_channel_id)}",
+                _surface_route_lines(server_surface)[0],
+                _surface_route_lines(server_surface)[1],
             ),
             inline=False,
         )
@@ -637,8 +920,8 @@ def build_message_template_embed(
             inline=False,
         )
         budget.add_line_fields(
-            "\U0001F3A8 Shared visuals",
-            _presentation_lines(settings),
+            "\U0001F3A8 Global look",
+            _presentation_lines(settings, surface=server_surface),
             inline=False,
         )
     elif section == "capsules":
@@ -701,6 +984,15 @@ def build_message_template_embed(
             inline=False,
         )
     else:
+        budget.add_line_fields(
+            "\U0001F4C5 Recurring-event defaults",
+            (
+                _surface_route_lines(recurring_surface)[0],
+                _surface_route_lines(recurring_surface)[1],
+                _surface_media_lines(recurring_surface)[1],
+            ),
+            inline=False,
+        )
         if recurring_events:
             budget.add_line_fields(
                 "\U0001F4C5 Configured events",
@@ -718,7 +1010,8 @@ def build_message_template_embed(
             value=(
                 "Use `/birthday event add`, `/birthday event edit`, and "
                 "`/birthday event list` for direct event management.\n"
-                "Use `/birthday test-message kind:recurring_event` with an event id to dry-run one."
+                "Use `/birthday test-message surface:recurring_event` with an event id "
+                "to dry-run one."
             ),
             inline=False,
         )
@@ -736,20 +1029,24 @@ def _add_delivery_section(
     template: str,
     routing_lines: tuple[str, ...],
     field_label: str,
+    surface: ResolvedAnnouncementSurface,
 ) -> None:
     budget.add_field(name=field_label, value=code_block_snippet(template), inline=False)
     budget.add_line_fields("Routing and behavior", routing_lines, inline=False)
-    budget.add_line_fields("\U0001F3A8 Shared visuals", _presentation_lines(settings), inline=False)
+    budget.add_line_fields(
+        "\U0001F3A8 Global look",
+        _presentation_lines(settings, surface=surface),
+        inline=False,
+    )
 
-def _presentation_lines(settings: GuildSettings) -> tuple[str, ...]:
+def _presentation_lines(
+    settings: GuildSettings,
+    *,
+    surface: ResolvedAnnouncementSurface,
+) -> tuple[str, ...]:
     return (
-        f"Theme: {announcement_theme_label(settings.announcement_theme)}",
-        f"Theme note: {announcement_theme_description(settings.announcement_theme)}",
-        f"Title override: {settings.announcement_title_override or 'Default'}",
-        f"Footer text: {settings.announcement_footer_text or 'Default'}",
-        _media_state_line(settings.announcement_image_url, label="Announcement image"),
-        _media_state_line(settings.announcement_thumbnail_url, label="Announcement thumbnail"),
-        f"Accent color: {_format_accent_color(settings.announcement_accent_color)}",
+        *_global_look_lines(settings),
+        *_surface_media_lines(surface),
     )
 
 
@@ -832,9 +1129,9 @@ def _birthday_dm_presentation_lines(settings: GuildSettings) -> tuple[str, ...]:
     return (
         f"Theme: {announcement_theme_label(settings.announcement_theme)}",
         f"Theme note: {announcement_theme_description(settings.announcement_theme)}",
-        f"Style: {settings.celebration_mode.title()}",
-        "Shared title, footer, image, thumbnail, and accent overrides stay on public "
-        "announcement surfaces.",
+        f"Global celebration behavior: {_celebration_mode_label(settings.celebration_mode)}",
+        "Global look controls stay on public announcement surfaces. Birthday DMs reuse the "
+        "theme and global celebration behavior only.",
     )
 
 
@@ -887,7 +1184,7 @@ def _server_anniversary_state(
 def _section_description(section: SectionName) -> str:
     descriptions: dict[SectionName, str] = {
         "home": (
-            "Everything that shapes live celebrations lives here: copy, shared visuals, routing "
+            "Everything that shapes live celebrations lives here: copy, global look, routing "
             "awareness, and operator previews."
         ),
         "birthday": (
@@ -899,7 +1196,7 @@ def _section_description(section: SectionName) -> str:
             "saved theme."
         ),
         "anniversary": (
-            "Tracked join anniversaries reuse shared visuals, but keep separate copy and routing."
+            "Tracked join anniversaries reuse the global look, but keep separate copy and routing."
         ),
         "server_anniversary": (
             "Treat the server birthday as a first-class annual celebration with explicit "
@@ -961,18 +1258,21 @@ def _format_event_line(celebration: RecurringCelebration) -> str:
         f"{_format_channel(celebration.channel_id)}"
     )
 
-def _effective_anniversary_channel(settings: GuildSettings) -> int | None:
-    return settings.anniversary_channel_id or settings.announcement_channel_id
-
-
 def build_server_anniversary_control_embed(
     settings: GuildSettings,
     *,
+    announcement_surfaces: dict[AnnouncementSurfaceKind, AnnouncementSurfaceSettings] | None = None,
     guild: discord.Guild,
     celebration: RecurringCelebration | None,
     note: str | None = None,
 ) -> discord.Embed:
     state = _server_anniversary_state(guild=guild, celebration=celebration)
+    resolved_surface = _resolve_surface(
+        settings,
+        announcement_surfaces,
+        "server_anniversary",
+        event_channel_id=state.channel_id,
+    )
     budget = BudgetedEmbed.create(
         title="\U0001F3F0 Server Anniversary Controls",
         description=(
@@ -996,8 +1296,8 @@ def build_server_anniversary_control_embed(
         "Routing",
         (
             f"Channel override: {_format_channel(state.channel_id)}",
-            "Live route: "
-            f"{_format_channel(state.channel_id or settings.announcement_channel_id)}",
+            _surface_route_lines(resolved_surface)[0],
+            _surface_route_lines(resolved_surface)[1],
         ),
         inline=False,
     )
@@ -1009,7 +1309,11 @@ def build_server_anniversary_control_embed(
         ),
         inline=False,
     )
-    budget.add_line_fields("\U0001F3A8 Shared visuals", _presentation_lines(settings), inline=False)
+    budget.add_line_fields(
+        "\U0001F3A8 Global look",
+        _presentation_lines(settings, surface=resolved_surface),
+        inline=False,
+    )
     budget.set_footer("Use the controls below, then return to Celebration Studio.")
     return budget.build()
 
@@ -1019,6 +1323,9 @@ class SetupView(AdminPanelView):
         *,
         settings_service: SettingsService,
         settings: GuildSettings,
+        announcement_surfaces: (
+            dict[AnnouncementSurfaceKind, AnnouncementSurfaceSettings] | None
+        ) = None,
         owner_id: int,
         guild: discord.Guild | None = None,
         birthday_service: BirthdayService | None = None,
@@ -1026,6 +1333,7 @@ class SetupView(AdminPanelView):
         super().__init__(timeout=900)
         self.settings_service = settings_service
         self.settings = settings
+        self.announcement_surfaces = _normalized_surfaces(settings, announcement_surfaces)
         self.owner_id = owner_id
         self.guild = guild
         self.birthday_service = birthday_service
@@ -1059,11 +1367,15 @@ class SetupView(AdminPanelView):
     async def refresh(self, interaction: discord.Interaction, *, note: str | None = None) -> None:
         assert interaction.guild is not None
         latest = await self.settings_service.get_settings(interaction.guild.id)
+        latest_surfaces = await self.settings_service.get_announcement_surfaces(
+            interaction.guild.id
+        )
         await interaction.response.edit_message(
-            embed=build_setup_embed(latest, note),
+            embed=build_setup_embed(latest, latest_surfaces, note),
             view=SetupView(
                 settings_service=self.settings_service,
                 settings=latest,
+                announcement_surfaces=latest_surfaces,
                 owner_id=self.owner_id,
                 guild=interaction.guild,
                 birthday_service=self.birthday_service,
@@ -1209,6 +1521,9 @@ class SetupView(AdminPanelView):
     ) -> None:
         assert interaction.guild is not None
         latest = await self.settings_service.get_settings(interaction.guild.id)
+        latest_surfaces = await self.settings_service.get_announcement_surfaces(
+            interaction.guild.id
+        )
         experience_service, experience_settings, surprise_rewards = await _load_experience_context(
             interaction.client,
             interaction.guild.id,
@@ -1220,6 +1535,7 @@ class SetupView(AdminPanelView):
         await interaction.response.edit_message(
             embed=build_message_template_embed(
                 latest,
+                announcement_surfaces=latest_surfaces,
                 section="home",
                 guild=interaction.guild,
                 experience_settings=experience_settings,
@@ -1231,6 +1547,7 @@ class SetupView(AdminPanelView):
                 settings_service=self.settings_service,
                 experience_service=experience_service,
                 settings=latest,
+                announcement_surfaces=latest_surfaces,
                 owner_id=self.owner_id,
                 guild=interaction.guild,
                 birthday_service=self.birthday_service,
@@ -1264,9 +1581,10 @@ class AnnouncementChannelSelect(discord.ui.ChannelSelect["SetupView"]):
         assert interaction.guild is not None
         channel_id = self.values[0].id if self.values else None
         try:
-            await self.setup_view.settings_service.update_settings(
+            await self.setup_view.settings_service.update_announcement_surface(
                 interaction.guild,
-                announcement_channel_id=channel_id,
+                surface_kind="birthday_announcement",
+                channel_id=channel_id,
             )
         except ValidationError as exc:
             await interaction.response.send_message(str(exc), ephemeral=True)
@@ -1329,10 +1647,14 @@ class MessageTemplateView(AdminPanelView):
         settings_service: SettingsService,
         experience_service: ExperienceService | None = None,
         settings: GuildSettings,
+        announcement_surfaces: (
+            dict[AnnouncementSurfaceKind, AnnouncementSurfaceSettings] | None
+        ) = None,
         owner_id: int,
         guild: discord.Guild | None = None,
         birthday_service: BirthdayService | None = None,
         section: SectionName = "home",
+        preview_kind: AnnouncementKind | None = None,
         server_anniversary: RecurringCelebration | None = None,
         recurring_events: tuple[RecurringCelebration, ...] = (),
     ) -> None:
@@ -1340,10 +1662,12 @@ class MessageTemplateView(AdminPanelView):
         self.settings_service = settings_service
         self.experience_service = experience_service
         self.settings = settings
+        self.announcement_surfaces = _normalized_surfaces(settings, announcement_surfaces)
         self.owner_id = owner_id
         self.guild = guild
         self.birthday_service = birthday_service
         self.section = section
+        self.preview_kind = preview_kind or _default_preview_kind_for_section(section)
         self.server_anniversary = server_anniversary
         self.recurring_events = recurring_events
         self.add_item(StudioSectionSelect(self))
@@ -1364,12 +1688,14 @@ class MessageTemplateView(AdminPanelView):
         guild: discord.Guild,
     ) -> tuple[
         GuildSettings,
+        dict[AnnouncementSurfaceKind, AnnouncementSurfaceSettings],
         GuildExperienceSettings,
         tuple[GuildSurpriseReward, ...],
         RecurringCelebration | None,
         tuple[RecurringCelebration, ...],
     ]:
         latest = await self.settings_service.get_settings(guild.id)
+        latest_surfaces = await self.settings_service.get_announcement_surfaces(guild.id)
         experience_settings = (
             await self.experience_service.get_settings(guild.id)
             if self.experience_service is not None
@@ -1386,6 +1712,7 @@ class MessageTemplateView(AdminPanelView):
         )
         return (
             latest,
+            latest_surfaces,
             experience_settings,
             surprise_rewards,
             server_anniversary,
@@ -1397,11 +1724,13 @@ class MessageTemplateView(AdminPanelView):
         interaction: discord.Interaction,
         *,
         section: SectionName | None = None,
+        preview_kind: AnnouncementKind | None = None,
         note: str | None = None,
     ) -> None:
         assert interaction.guild is not None
         (
             latest,
+            latest_surfaces,
             experience_settings,
             surprise_rewards,
             server_anniversary,
@@ -1410,9 +1739,16 @@ class MessageTemplateView(AdminPanelView):
             interaction.guild
         )
         next_section = section or self.section
+        next_preview_kind = (
+            preview_kind
+            or self.preview_kind
+            if next_section == self.section
+            else _default_preview_kind_for_section(next_section)
+        )
         await interaction.response.edit_message(
             embed=build_message_template_embed(
                 latest,
+                announcement_surfaces=latest_surfaces,
                 note=note,
                 section=next_section,
                 guild=interaction.guild,
@@ -1425,10 +1761,12 @@ class MessageTemplateView(AdminPanelView):
                 settings_service=self.settings_service,
                 experience_service=self.experience_service,
                 settings=latest,
+                announcement_surfaces=latest_surfaces,
                 owner_id=self.owner_id,
                 guild=interaction.guild,
                 birthday_service=self.birthday_service,
                 section=next_section,
+                preview_kind=next_preview_kind,
                 server_anniversary=server_anniversary,
                 recurring_events=recurring_events,
             ),
@@ -1437,23 +1775,24 @@ class MessageTemplateView(AdminPanelView):
     def _configure_buttons(self) -> None:
         if self.section == "birthday":
             self.edit_primary.label = "Edit birthday copy"
-            self.edit_secondary.label = "Edit shared visuals"
-            self.preview_current.label = "Preview birthday"
+            self.edit_secondary.label = "Edit global look"
+            self.preview_current.label = "Preview selected surface"
             self.reset_current.label = "Reset birthday copy"
         elif self.section == "birthday_dm":
             self.edit_primary.label = "Edit DM copy"
-            self.edit_secondary.label = "Edit announcement visuals"
-            self.preview_current.label = "Preview DM"
+            self.edit_secondary.label = "Edit global look"
+            self.preview_current.label = "Preview selected surface"
             self.reset_current.label = "Reset DM copy"
+            self.reset_media.disabled = True
         elif self.section == "anniversary":
             self.edit_primary.label = "Edit anniversary copy"
-            self.edit_secondary.label = "Edit shared visuals"
-            self.preview_current.label = "Preview anniversary"
+            self.edit_secondary.label = "Edit global look"
+            self.preview_current.label = "Preview selected surface"
             self.reset_current.label = "Reset anniversary copy"
         elif self.section == "server_anniversary":
             self.edit_primary.label = "Schedule controls"
             self.edit_secondary.label = "Edit event copy"
-            self.preview_current.label = "Preview server anniversary"
+            self.preview_current.label = "Preview selected surface"
             self.reset_current.label = "Reset to guild date"
         elif self.section == "capsules":
             self.edit_primary.label = "Capsule settings"
@@ -1475,21 +1814,26 @@ class MessageTemplateView(AdminPanelView):
             self.reset_media.disabled = True
         elif self.section == "events":
             self.edit_primary.label = "Event commands"
-            self.edit_secondary.label = "Edit shared visuals"
-            self.preview_current.label = "Preview first event"
-            self.reset_current.label = "Reset shared visuals"
-            self.preview_current.disabled = len(self.recurring_events) == 0
+            self.edit_secondary.label = "Edit global look"
+            self.preview_current.label = "Preview selected surface"
+            self.reset_current.label = "Reset global look"
         elif self.section == "help":
             self.edit_primary.disabled = True
             self.edit_secondary.disabled = True
             self.preview_current.disabled = True
             self.reset_current.disabled = True
             self.reset_media.disabled = True
+            self.toggle_celebration_behavior.disabled = True
         else:
             self.edit_primary.label = "Open birthday copy"
-            self.edit_secondary.label = "Edit shared visuals"
-            self.preview_current.label = "Preview birthday"
-            self.reset_current.label = "Reset shared visuals"
+            self.edit_secondary.label = "Edit global look"
+            self.preview_current.label = "Preview selected surface"
+            self.reset_current.label = "Reset global look"
+        if not self.reset_media.disabled:
+            self.reset_media.label = _surface_media_button_label(self.section)
+        self.toggle_celebration_behavior.label = (
+            f"Behavior: {self.settings.celebration_mode.title()}"
+        )
 
     @discord.ui.button(label="Edit", style=discord.ButtonStyle.primary, row=2)
     async def edit_primary(
@@ -1505,6 +1849,7 @@ class MessageTemplateView(AdminPanelView):
             return
         (
             latest,
+            latest_surfaces,
             _experience_settings,
             _surprise_rewards,
             server_anniversary,
@@ -1514,6 +1859,7 @@ class MessageTemplateView(AdminPanelView):
             await interaction.response.send_message(
                 embed=build_server_anniversary_control_embed(
                     latest,
+                    announcement_surfaces=latest_surfaces,
                     guild=interaction.guild,
                     celebration=server_anniversary,
                 ),
@@ -1533,7 +1879,7 @@ class MessageTemplateView(AdminPanelView):
             await interaction.response.send_message(
                 "Manage custom annual events with `/birthday event add`, "
                 "`/birthday event edit`, and `/birthday event list`.\n"
-                "Use `/birthday test-message` with `kind: recurring_event` and an event id "
+                "Use `/birthday test-message` with `surface: recurring_event` and an event id "
                 "to dry-run one.",
                 ephemeral=True,
             )
@@ -1614,6 +1960,7 @@ class MessageTemplateView(AdminPanelView):
             return
         (
             latest,
+            latest_surfaces,
             _experience_settings,
             _surprise_rewards,
             server_anniversary,
@@ -1671,6 +2018,7 @@ class MessageTemplateView(AdminPanelView):
             return
         (
             latest,
+            latest_surfaces,
             _experience_settings,
             _surprise_rewards,
             server_anniversary,
@@ -1680,6 +2028,7 @@ class MessageTemplateView(AdminPanelView):
             await interaction.response.send_message(
                 embed=build_message_template_embed(
                     latest,
+                    announcement_surfaces=latest_surfaces,
                     section=self.section,
                     guild=interaction.guild,
                     experience_settings=_experience_settings,
@@ -1698,12 +2047,26 @@ class MessageTemplateView(AdminPanelView):
                 section=self.section,
                 server_anniversary=server_anniversary,
                 recurring_events=recurring_events,
+                announcement_surfaces=latest_surfaces,
+                preview_kind=self.preview_kind,
             )
         except ValidationError as exc:
             await interaction.response.send_message(str(exc), ephemeral=True)
             return
         await interaction.response.send_message(
             embeds=[status_embed, preview_embed],
+            view=StudioPreviewView(
+                settings_service=self.settings_service,
+                settings=latest,
+                announcement_surfaces=latest_surfaces,
+                owner_id=self.owner_id,
+                guild=interaction.guild,
+                birthday_service=self.birthday_service,
+                section=self.section,
+                preview_kind=self.preview_kind,
+                server_anniversary=server_anniversary,
+                recurring_events=recurring_events,
+            ),
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
@@ -1722,6 +2085,7 @@ class MessageTemplateView(AdminPanelView):
             return
         (
             latest,
+            _latest_surfaces,
             _experience_settings,
             _surprise_rewards,
             server_anniversary,
@@ -1737,6 +2101,7 @@ class MessageTemplateView(AdminPanelView):
             return
         (
             latest,
+            _latest_surfaces,
             _experience_settings,
             _surprise_rewards,
             server_anniversary,
@@ -1751,6 +2116,7 @@ class MessageTemplateView(AdminPanelView):
                 owner_id=self.owner_id,
                 guild=interaction.guild,
                 section=self.section,
+                preview_kind=self.preview_kind,
                 server_anniversary=server_anniversary,
                 recurring_events=recurring_events,
             ),
@@ -1769,17 +2135,31 @@ class MessageTemplateView(AdminPanelView):
                 ephemeral=True,
             )
             return
+        if _SECTION_SURFACE_KIND[self.section] is None:
+            await interaction.response.send_message(
+                "This section does not have its own route or media settings.",
+                ephemeral=True,
+            )
+            return
+        latest = await self.settings_service.get_settings(interaction.guild.id)
+        latest_surfaces = await self.settings_service.get_announcement_surfaces(
+            interaction.guild.id
+        )
         await interaction.response.send_message(
             embed=build_media_tools_embed(
-                await self.settings_service.get_settings(interaction.guild.id),
+                latest,
+                announcement_surfaces=latest_surfaces,
+                surface_kind=_SECTION_SURFACE_KIND[self.section] or "birthday_announcement",
             ),
             view=StudioMediaView(
                 settings_service=self.settings_service,
                 birthday_service=self.birthday_service,
-                settings=await self.settings_service.get_settings(interaction.guild.id),
+                settings=latest,
+                announcement_surfaces=latest_surfaces,
                 owner_id=self.owner_id,
                 guild=interaction.guild,
                 section=self.section,
+                preview_kind=self.preview_kind,
             ),
             ephemeral=True,
         )
@@ -1792,15 +2172,38 @@ class MessageTemplateView(AdminPanelView):
     ) -> None:
         assert interaction.guild is not None
         latest = await self.settings_service.get_settings(interaction.guild.id)
+        latest_surfaces = await self.settings_service.get_announcement_surfaces(
+            interaction.guild.id
+        )
         await interaction.response.edit_message(
-            embed=build_setup_embed(latest),
+            embed=build_setup_embed(latest, latest_surfaces),
             view=SetupView(
                 settings_service=self.settings_service,
                 settings=latest,
+                announcement_surfaces=latest_surfaces,
                 owner_id=self.owner_id,
                 guild=interaction.guild,
                 birthday_service=self.birthday_service,
             ),
+        )
+
+    @discord.ui.button(label="Behavior", style=discord.ButtonStyle.secondary, row=2)
+    async def toggle_celebration_behavior(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button[MessageTemplateView],
+    ) -> None:
+        assert interaction.guild is not None
+        target_mode: Literal["quiet", "party"] = (
+            "party" if self.settings.celebration_mode == "quiet" else "quiet"
+        )
+        await self.settings_service.update_settings(
+            interaction.guild,
+            celebration_mode=target_mode,
+        )
+        await self.refresh(
+            interaction,
+            note=f"Global celebration behavior saved as {target_mode.title()}.",
         )
 
     async def _reset_section(
@@ -1831,11 +2234,9 @@ class MessageTemplateView(AdminPanelView):
             guild,
             announcement_title_override=None,
             announcement_footer_text=None,
-            announcement_image_url=None,
-            announcement_thumbnail_url=None,
             announcement_accent_color=None,
         )
-        return "Shared visual presentation reset to the current theme preset."
+        return "Global look reset to the current theme preset."
 
 
 class StudioSectionSelect(discord.ui.Select["MessageTemplateView"]):
@@ -1897,6 +2298,121 @@ class AnnouncementThemeSelect(discord.ui.Select["MessageTemplateView"]):
         await self.message_view.refresh(interaction, note="Announcement theme saved.")
 
 
+class StudioPreviewSurfaceSelect(discord.ui.Select["StudioPreviewView"]):
+    def __init__(self, preview_view: StudioPreviewView) -> None:
+        options = [
+            discord.SelectOption(
+                label=surface_label(kind),
+                value=kind,
+                description={
+                    "birthday_announcement": "Preview the public birthday announcement surface.",
+                    "birthday_dm": "Preview the private birthday DM surface.",
+                    "anniversary": "Preview the member-anniversary announcement surface.",
+                    "server_anniversary": "Preview the server-anniversary announcement surface.",
+                    "recurring_event": "Preview the recurring annual event announcement surface.",
+                }[kind],
+                default=kind == preview_view.preview_kind,
+            )
+            for kind in _PREVIEW_SURFACES
+        ]
+        super().__init__(
+            placeholder=f"Preview surface: {surface_label(preview_view.preview_kind)}",
+            min_values=1,
+            max_values=1,
+            options=options,
+            row=0,
+        )
+        self.preview_view = preview_view
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        preview_kind = cast(AnnouncementKind, self.values[0])
+        await self.preview_view.refresh(
+            interaction,
+            preview_kind=preview_kind,
+            note=f"Preview target set to {surface_label(preview_kind)}.",
+        )
+
+
+class StudioPreviewView(AdminPanelView):
+    def __init__(
+        self,
+        *,
+        settings_service: SettingsService,
+        settings: GuildSettings,
+        announcement_surfaces: dict[AnnouncementSurfaceKind, AnnouncementSurfaceSettings],
+        owner_id: int,
+        guild: discord.Guild,
+        birthday_service: BirthdayService | None,
+        section: SectionName,
+        preview_kind: AnnouncementKind,
+        server_anniversary: RecurringCelebration | None,
+        recurring_events: tuple[RecurringCelebration, ...],
+    ) -> None:
+        super().__init__(timeout=600)
+        self.settings_service = settings_service
+        self.settings = settings
+        self.announcement_surfaces = announcement_surfaces
+        self.owner_id = owner_id
+        self.guild = guild
+        self.birthday_service = birthday_service
+        self.section = section
+        self.preview_kind = preview_kind
+        self.server_anniversary = server_anniversary
+        self.recurring_events = recurring_events
+        self.add_item(StudioPreviewSurfaceSelect(self))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(
+                "This preview belongs to a different admin.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def refresh(
+        self,
+        interaction: discord.Interaction,
+        *,
+        preview_kind: AnnouncementKind,
+        note: str | None = None,
+    ) -> None:
+        latest = await self.settings_service.get_settings(self.guild.id)
+        latest_surfaces = await self.settings_service.get_announcement_surfaces(self.guild.id)
+        server_anniversary, recurring_events = await _load_studio_context(
+            self.guild,
+            self.birthday_service,
+        )
+        status_embed, preview_embed = await _build_studio_preview_pair(
+            guild=self.guild,
+            settings=latest,
+            settings_service=self.settings_service,
+            section=self.section,
+            announcement_surfaces=latest_surfaces,
+            preview_kind=preview_kind,
+            server_anniversary=server_anniversary,
+            recurring_events=recurring_events,
+        )
+        if note is not None:
+            status_embed.insert_field_at(0, name="Updated", value=note, inline=False)
+        await interaction.response.edit_message(
+            embeds=[status_embed, preview_embed],
+            view=StudioPreviewView(
+                settings_service=self.settings_service,
+                settings=latest,
+                announcement_surfaces=latest_surfaces,
+                owner_id=self.owner_id,
+                guild=self.guild,
+                birthday_service=self.birthday_service,
+                section=self.section,
+                preview_kind=preview_kind,
+                server_anniversary=server_anniversary,
+                recurring_events=recurring_events,
+            ),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+
 class StudioReturnView(AdminPanelView):
     def __init__(
         self,
@@ -1907,8 +2423,9 @@ class StudioReturnView(AdminPanelView):
         owner_id: int,
         guild: discord.Guild,
         section: SectionName,
-        server_anniversary: RecurringCelebration | None,
-        recurring_events: tuple[RecurringCelebration, ...],
+        preview_kind: AnnouncementKind | None = None,
+        server_anniversary: RecurringCelebration | None = None,
+        recurring_events: tuple[RecurringCelebration, ...] = (),
     ) -> None:
         super().__init__(timeout=600)
         self.settings_service = settings_service
@@ -1917,6 +2434,7 @@ class StudioReturnView(AdminPanelView):
         self.owner_id = owner_id
         self.guild = guild
         self.section = section
+        self.preview_kind = preview_kind or _default_preview_kind_for_section(section)
         self.server_anniversary = server_anniversary
         self.recurring_events = recurring_events
 
@@ -1936,6 +2454,7 @@ class StudioReturnView(AdminPanelView):
         _: discord.ui.Button[StudioReturnView],
     ) -> None:
         latest = await self.settings_service.get_settings(self.guild.id)
+        latest_surfaces = await self.settings_service.get_announcement_surfaces(self.guild.id)
         experience_service, experience_settings, surprise_rewards = await _load_experience_context(
             interaction.client,
             self.guild.id,
@@ -1947,6 +2466,7 @@ class StudioReturnView(AdminPanelView):
         await interaction.response.edit_message(
             embed=build_message_template_embed(
                 latest,
+                announcement_surfaces=latest_surfaces,
                 section=self.section,
                 guild=self.guild,
                 experience_settings=experience_settings,
@@ -1958,10 +2478,12 @@ class StudioReturnView(AdminPanelView):
                 settings_service=self.settings_service,
                 experience_service=experience_service,
                 settings=latest,
+                announcement_surfaces=latest_surfaces,
                 owner_id=self.owner_id,
                 guild=self.guild,
                 birthday_service=self.birthday_service,
                 section=self.section,
+                preview_kind=self.preview_kind,
                 server_anniversary=server_anniversary,
                 recurring_events=recurring_events,
             ),
@@ -2001,11 +2523,13 @@ class SetupReturnView(AdminPanelView):
         _: discord.ui.Button[SetupReturnView],
     ) -> None:
         latest = await self.settings_service.get_settings(self.guild.id)
+        latest_surfaces = await self.settings_service.get_announcement_surfaces(self.guild.id)
         await interaction.response.edit_message(
-            embed=build_setup_embed(latest),
+            embed=build_setup_embed(latest, latest_surfaces),
             view=SetupView(
                 settings_service=self.settings_service,
                 settings=latest,
+                announcement_surfaces=latest_surfaces,
                 owner_id=self.owner_id,
                 guild=self.guild,
                 birthday_service=self.birthday_service,
@@ -2089,11 +2613,13 @@ class StudioSafetyView(AdminPanelView):
         _: discord.ui.Button[StudioSafetyView],
     ) -> None:
         latest = await self.settings_service.get_settings(self.guild.id)
+        latest_surfaces = await self.settings_service.get_announcement_surfaces(self.guild.id)
         await interaction.response.edit_message(
-            embed=build_setup_embed(latest),
+            embed=build_setup_embed(latest, latest_surfaces),
             view=SetupView(
                 settings_service=self.settings_service,
                 settings=latest,
+                announcement_surfaces=latest_surfaces,
                 owner_id=self.owner_id,
                 guild=self.guild,
                 birthday_service=self.birthday_service,
@@ -2647,7 +3173,7 @@ class TemplateEditModal(AdminPanelModal):
         )
 
 
-class StudioPresentationModal(AdminPanelModal, title="Celebration visuals"):
+class StudioPresentationModal(AdminPanelModal, title="Edit global look"):
     title_override: discord.ui.TextInput[StudioPresentationModal] = discord.ui.TextInput(
         label="Title override",
         required=False,
@@ -2715,8 +3241,8 @@ class StudioPresentationModal(AdminPanelModal, title="Celebration visuals"):
         )
         await interaction.response.send_message(
             embed=_build_return_embed(
-                "Celebration visuals saved",
-                "Shared title, footer, and accent color were updated.",
+                "Global look saved",
+                "Global title, footer, and accent color were updated.",
             ),
             view=StudioReturnView(
                 settings_service=self.settings_service,
@@ -2732,7 +3258,7 @@ class StudioPresentationModal(AdminPanelModal, title="Celebration visuals"):
         )
 
 
-class MediaEditModal(AdminPanelModal, title="Update shared media"):
+class MediaEditModal(AdminPanelModal, title="Update surface media"):
     image_url: discord.ui.TextInput[MediaEditModal] = discord.ui.TextInput(
         label="Image or GIF URL",
         required=False,
@@ -2749,10 +3275,14 @@ class MediaEditModal(AdminPanelModal, title="Update shared media"):
         *,
         settings_service: SettingsService,
         settings: GuildSettings,
+        announcement_surfaces: (
+            dict[AnnouncementSurfaceKind, AnnouncementSurfaceSettings] | None
+        ) = None,
         owner_id: int,
         birthday_service: BirthdayService | None,
         guild: discord.Guild,
         section: SectionName,
+        preview_kind: AnnouncementKind | None = None,
     ) -> None:
         super().__init__()
         self.settings_service = settings_service
@@ -2761,11 +3291,14 @@ class MediaEditModal(AdminPanelModal, title="Update shared media"):
         self.birthday_service = birthday_service
         self.guild = guild
         self.section = section
+        self.preview_kind = preview_kind or _default_preview_kind_for_section(section)
+        self.surface_kind = _SECTION_SURFACE_KIND[section] or "birthday_announcement"
+        current_surface = _normalized_surfaces(settings, announcement_surfaces)[self.surface_kind]
         self.image_url.default = strip_validated_direct_media_marker(
-            settings.announcement_image_url
+            current_surface.image_url
         ) or ""
         self.thumbnail_url.default = strip_validated_direct_media_marker(
-            settings.announcement_thumbnail_url
+            current_surface.thumbnail_url
         ) or ""
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
@@ -2777,9 +3310,10 @@ class MediaEditModal(AdminPanelModal, title="Update shared media"):
             return
         image_value = self.image_url.value.strip() or None
         thumbnail_value = self.thumbnail_url.value.strip() or None
+        surface_title = surface_label(self.surface_kind)
         image_result, thumbnail_result = await asyncio.gather(
-            probe_media_url(image_value, label="Announcement image"),
-            probe_media_url(thumbnail_value, label="Announcement thumbnail"),
+            probe_media_url(image_value, label=f"{surface_title} image"),
+            probe_media_url(thumbnail_value, label=f"{surface_title} thumbnail"),
         )
         unsafe_results = tuple(
             result
@@ -2797,9 +3331,14 @@ class MediaEditModal(AdminPanelModal, title="Update shared media"):
             for result in (image_result, thumbnail_result)
         ):
             latest = await self.settings_service.get_settings(interaction.guild.id)
+            latest_surfaces = await self.settings_service.get_announcement_surfaces(
+                interaction.guild.id
+            )
             await interaction.response.send_message(
                 embed=build_media_tools_embed(
                     latest,
+                    announcement_surfaces=latest_surfaces,
+                    surface_kind=self.surface_kind,
                     note="No changes were saved. Your current saved media is unchanged.",
                     image_probe=image_result,
                     thumbnail_probe=thumbnail_result,
@@ -2810,9 +3349,11 @@ class MediaEditModal(AdminPanelModal, title="Update shared media"):
                     settings_service=self.settings_service,
                     birthday_service=self.birthday_service,
                     settings=latest,
+                    announcement_surfaces=latest_surfaces,
                     owner_id=self.owner_id,
                     guild=self.guild,
                     section=self.section,
+                    preview_kind=self.preview_kind,
                 ),
                 ephemeral=True,
             )
@@ -2824,14 +3365,20 @@ class MediaEditModal(AdminPanelModal, title="Update shared media"):
         )
         await self.settings_service.update_validated_media(
             interaction.guild,
+            surface_kind=self.surface_kind,
             announcement_image_url=saved_image_value,
             announcement_thumbnail_url=saved_thumbnail_value,
         )
         latest = await self.settings_service.get_settings(interaction.guild.id)
+        latest_surfaces = await self.settings_service.get_announcement_surfaces(
+            interaction.guild.id
+        )
         await interaction.response.send_message(
             embed=build_media_tools_embed(
                 latest,
-                note="Shared media saved.",
+                announcement_surfaces=latest_surfaces,
+                surface_kind=self.surface_kind,
+                note=f"{surface_title} media saved.",
                 image_probe=image_result,
                 thumbnail_probe=thumbnail_result,
                 checked_image_url=image_value,
@@ -2841,12 +3388,49 @@ class MediaEditModal(AdminPanelModal, title="Update shared media"):
                 settings_service=self.settings_service,
                 birthday_service=self.birthday_service,
                 settings=latest,
+                announcement_surfaces=latest_surfaces,
                 owner_id=self.owner_id,
                 guild=self.guild,
                 section=self.section,
+                preview_kind=self.preview_kind,
             ),
             ephemeral=True,
         )
+
+
+class SurfaceRouteSelect(discord.ui.ChannelSelect["StudioMediaView"]):
+    def __init__(self, media_view: StudioMediaView) -> None:
+        super().__init__(
+            channel_types=[discord.ChannelType.text, discord.ChannelType.news],
+            placeholder=f"Default route for {surface_label(media_view.surface_kind)}",
+            min_values=0,
+            max_values=1,
+            row=1,
+        )
+        self.media_view = media_view
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+        channel_id = self.values[0].id if self.values else None
+        try:
+            await self.media_view.settings_service.update_announcement_surface(
+                interaction.guild,
+                surface_kind=self.media_view.surface_kind,
+                channel_id=channel_id,
+            )
+        except ValidationError as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
+        note = (
+            f"{surface_label(self.media_view.surface_kind)} default route saved."
+            if channel_id is not None
+            else (
+                f"{surface_label(self.media_view.surface_kind)} route override cleared."
+                if self.media_view.surface_kind == "birthday_announcement"
+                else f"{surface_label(self.media_view.surface_kind)} now inherits its route."
+            )
+        )
+        await self.media_view.refresh(interaction, note=note)
 
 
 class StudioMediaView(AdminPanelView):
@@ -2856,17 +3440,25 @@ class StudioMediaView(AdminPanelView):
         settings_service: SettingsService,
         birthday_service: BirthdayService | None,
         settings: GuildSettings,
+        announcement_surfaces: (
+            dict[AnnouncementSurfaceKind, AnnouncementSurfaceSettings] | None
+        ) = None,
         owner_id: int,
         guild: discord.Guild,
         section: SectionName,
+        preview_kind: AnnouncementKind | None = None,
     ) -> None:
         super().__init__(timeout=600)
         self.settings_service = settings_service
         self.birthday_service = birthday_service
         self.settings = settings
+        self.announcement_surfaces = _normalized_surfaces(settings, announcement_surfaces)
         self.owner_id = owner_id
         self.guild = guild
         self.section = section
+        self.preview_kind = preview_kind or _default_preview_kind_for_section(section)
+        self.surface_kind = _SECTION_SURFACE_KIND[section] or "birthday_announcement"
+        self.add_item(SurfaceRouteSelect(self))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.owner_id:
@@ -2877,6 +3469,41 @@ class StudioMediaView(AdminPanelView):
             return False
         return True
 
+    async def refresh(
+        self,
+        interaction: discord.Interaction,
+        *,
+        note: str | None = None,
+        image_probe: MediaProbeResult | None = None,
+        thumbnail_probe: MediaProbeResult | None = None,
+        checked_image_url: str | None = None,
+        checked_thumbnail_url: str | None = None,
+    ) -> None:
+        latest = await self.settings_service.get_settings(self.guild.id)
+        latest_surfaces = await self.settings_service.get_announcement_surfaces(self.guild.id)
+        await interaction.response.edit_message(
+            embed=build_media_tools_embed(
+                latest,
+                announcement_surfaces=latest_surfaces,
+                surface_kind=self.surface_kind,
+                note=note,
+                image_probe=image_probe,
+                thumbnail_probe=thumbnail_probe,
+                checked_image_url=checked_image_url,
+                checked_thumbnail_url=checked_thumbnail_url,
+            ),
+            view=StudioMediaView(
+                settings_service=self.settings_service,
+                birthday_service=self.birthday_service,
+                settings=latest,
+                announcement_surfaces=latest_surfaces,
+                owner_id=self.owner_id,
+                guild=self.guild,
+                section=self.section,
+                preview_kind=self.preview_kind,
+            ),
+        )
+
     @discord.ui.button(label="Edit media", style=discord.ButtonStyle.primary, row=0)
     async def edit_media(
         self,
@@ -2884,14 +3511,17 @@ class StudioMediaView(AdminPanelView):
         _: discord.ui.Button[StudioMediaView],
     ) -> None:
         latest = await self.settings_service.get_settings(self.guild.id)
+        latest_surfaces = await self.settings_service.get_announcement_surfaces(self.guild.id)
         await interaction.response.send_modal(
             MediaEditModal(
                 settings_service=self.settings_service,
                 settings=latest,
+                announcement_surfaces=latest_surfaces,
                 owner_id=self.owner_id,
                 birthday_service=self.birthday_service,
                 guild=self.guild,
                 section=self.section,
+                preview_kind=self.preview_kind,
             )
         )
 
@@ -2901,68 +3531,103 @@ class StudioMediaView(AdminPanelView):
         interaction: discord.Interaction,
         _: discord.ui.Button[StudioMediaView],
     ) -> None:
-        latest = await self.settings_service.get_settings(self.guild.id)
-        checked_image_url = strip_validated_direct_media_marker(latest.announcement_image_url)
-        checked_thumbnail_url = strip_validated_direct_media_marker(
-            latest.announcement_thumbnail_url
-        )
+        latest_surfaces = await self.settings_service.get_announcement_surfaces(self.guild.id)
+        latest_surface = latest_surfaces[self.surface_kind]
+        checked_image_url = strip_validated_direct_media_marker(latest_surface.image_url)
+        checked_thumbnail_url = strip_validated_direct_media_marker(latest_surface.thumbnail_url)
         image_result, thumbnail_result = await asyncio.gather(
             probe_media_url(
                 checked_image_url,
-                label="Announcement image",
+                label=f"{surface_label(self.surface_kind)} image",
             ),
             probe_media_url(
                 checked_thumbnail_url,
-                label="Announcement thumbnail",
+                label=f"{surface_label(self.surface_kind)} thumbnail",
             ),
         )
-        await interaction.response.edit_message(
-            embed=build_media_tools_embed(
-                latest,
-                note="Current shared media was validated.",
-                image_probe=image_result,
-                thumbnail_probe=thumbnail_result,
-                checked_image_url=checked_image_url,
-                checked_thumbnail_url=checked_thumbnail_url,
-            ),
-            view=StudioMediaView(
-                settings_service=self.settings_service,
-                birthday_service=self.birthday_service,
-                settings=latest,
-                owner_id=self.owner_id,
-                guild=self.guild,
-                section=self.section,
-            ),
+        await self.refresh(
+            interaction,
+            note=f"Current {surface_label(self.surface_kind)} media was validated.",
+            image_probe=image_result,
+            thumbnail_probe=thumbnail_result,
+            checked_image_url=checked_image_url,
+            checked_thumbnail_url=checked_thumbnail_url,
         )
 
-    @discord.ui.button(label="Reset media", style=discord.ButtonStyle.danger, row=0)
-    async def reset_media(
+    @discord.ui.button(label="Clear route", style=discord.ButtonStyle.secondary, row=2)
+    async def clear_route(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button[StudioMediaView],
+    ) -> None:
+        await self.settings_service.update_announcement_surface(
+            self.guild,
+            surface_kind=self.surface_kind,
+            channel_id=None,
+        )
+        note = (
+            f"{surface_label(self.surface_kind)} route cleared."
+            if self.surface_kind == "birthday_announcement"
+            else (
+                f"{surface_label(self.surface_kind)} route now inherits "
+                "from Birthday announcement."
+            )
+        )
+        await self.refresh(interaction, note=note)
+
+    @discord.ui.button(label="Clear image", style=discord.ButtonStyle.secondary, row=2)
+    async def clear_image(
         self,
         interaction: discord.Interaction,
         _: discord.ui.Button[StudioMediaView],
     ) -> None:
         await self.settings_service.update_validated_media(
             self.guild,
+            surface_kind=self.surface_kind,
             announcement_image_url=None,
-            announcement_thumbnail_url=None,
         )
-        latest = await self.settings_service.get_settings(self.guild.id)
-        await interaction.response.edit_message(
-            embed=build_media_tools_embed(
-                latest,
-                note="Shared image and thumbnail media were cleared.",
-            ),
-            view=StudioMediaView(
-                settings_service=self.settings_service,
-                birthday_service=self.birthday_service,
-                settings=latest,
-                owner_id=self.owner_id,
-                guild=self.guild,
-                section=self.section,
-            ),
+        await self.refresh(
+            interaction,
+            note=f"{surface_label(self.surface_kind)} image override cleared.",
         )
 
-    @discord.ui.button(label="Back to studio", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Clear thumbnail", style=discord.ButtonStyle.secondary, row=2)
+    async def clear_thumbnail(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button[StudioMediaView],
+    ) -> None:
+        await self.settings_service.update_validated_media(
+            self.guild,
+            surface_kind=self.surface_kind,
+            announcement_thumbnail_url=None,
+        )
+        await self.refresh(
+            interaction,
+            note=f"{surface_label(self.surface_kind)} thumbnail override cleared.",
+        )
+
+    @discord.ui.button(label="Reset to inherited", style=discord.ButtonStyle.danger, row=3)
+    async def reset_surface(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button[StudioMediaView],
+    ) -> None:
+        await self.settings_service.update_announcement_surface(
+            self.guild,
+            surface_kind=self.surface_kind,
+            channel_id=None,
+            image_url=None,
+            thumbnail_url=None,
+        )
+        note = (
+            "Birthday announcement route and media cleared."
+            if self.surface_kind == "birthday_announcement"
+            else f"{surface_label(self.surface_kind)} now inherits route and media where available."
+        )
+        await self.refresh(interaction, note=note)
+
+    @discord.ui.button(label="Back to studio", style=discord.ButtonStyle.secondary, row=3)
     async def back_to_studio(
         self,
         interaction: discord.Interaction,
@@ -2977,9 +3642,11 @@ class StudioMediaView(AdminPanelView):
             self.guild.id,
         )
         latest = await self.settings_service.get_settings(self.guild.id)
+        latest_surfaces = await self.settings_service.get_announcement_surfaces(self.guild.id)
         await interaction.response.edit_message(
             embed=build_message_template_embed(
                 latest,
+                announcement_surfaces=latest_surfaces,
                 section=self.section,
                 guild=self.guild,
                 experience_settings=experience_settings,
@@ -2991,10 +3658,12 @@ class StudioMediaView(AdminPanelView):
                 settings_service=self.settings_service,
                 experience_service=experience_service,
                 settings=latest,
+                announcement_surfaces=latest_surfaces,
                 owner_id=self.owner_id,
                 guild=self.guild,
                 birthday_service=self.birthday_service,
                 section=self.section,
+                preview_kind=self.preview_kind,
                 server_anniversary=server_anniversary,
                 recurring_events=recurring_events,
             ),
@@ -3037,13 +3706,19 @@ class ServerAnniversaryControlView(AdminPanelView):
 
     async def _latest_context(
         self,
-    ) -> tuple[GuildSettings, RecurringCelebration | None, tuple[RecurringCelebration, ...]]:
+    ) -> tuple[
+        GuildSettings,
+        dict[AnnouncementSurfaceKind, AnnouncementSurfaceSettings],
+        RecurringCelebration | None,
+        tuple[RecurringCelebration, ...],
+    ]:
         latest = await self.settings_service.get_settings(self.guild.id)
+        latest_surfaces = await self.settings_service.get_announcement_surfaces(self.guild.id)
         server_anniversary, recurring_events = await _load_studio_context(
             self.guild,
             self.birthday_service,
         )
-        return latest, server_anniversary, recurring_events
+        return latest, latest_surfaces, server_anniversary, recurring_events
 
     async def refresh(
         self,
@@ -3051,10 +3726,11 @@ class ServerAnniversaryControlView(AdminPanelView):
         *,
         note: str | None = None,
     ) -> None:
-        latest, server_anniversary, recurring_events = await self._latest_context()
+        latest, latest_surfaces, server_anniversary, recurring_events = await self._latest_context()
         await interaction.response.edit_message(
             embed=build_server_anniversary_control_embed(
                 latest,
+                announcement_surfaces=latest_surfaces,
                 guild=self.guild,
                 celebration=server_anniversary,
                 note=note,
@@ -3092,6 +3768,9 @@ class ServerAnniversaryControlView(AdminPanelView):
         target_channel_id = state.channel_id if channel_id is _UI_UNSET else channel_id
         target_month = state.month if override_month is _UI_UNSET else override_month
         target_day = state.day if override_day is _UI_UNSET else override_day
+        assert target_channel_id is None or isinstance(target_channel_id, int)
+        assert target_month is None or isinstance(target_month, int)
+        assert target_day is None or isinstance(target_day, int)
         await self.birthday_service.upsert_server_anniversary(
             guild_id=self.guild.id,
             guild_created_at_utc=self.guild.created_at,
@@ -3105,7 +3784,7 @@ class ServerAnniversaryControlView(AdminPanelView):
                 if target_use_guild_created_date
                 else int(target_day) if target_day is not None else None
             ),
-            channel_id=target_channel_id,  # type: ignore[arg-type]
+            channel_id=target_channel_id,
             template=current.template if current is not None else None,
             enabled=target_enabled,
             use_guild_created_date=target_use_guild_created_date,
@@ -3139,7 +3818,9 @@ class ServerAnniversaryControlView(AdminPanelView):
         interaction: discord.Interaction,
         _: discord.ui.Button[ServerAnniversaryControlView],
     ) -> None:
-        latest, server_anniversary, _ = await self._latest_context()
+        latest, _latest_surfaces, server_anniversary, _recurring_events = (
+            await self._latest_context()
+        )
         await interaction.response.send_modal(
             ServerAnniversaryDateModal(
                 settings_service=self.settings_service,
@@ -3169,12 +3850,13 @@ class ServerAnniversaryControlView(AdminPanelView):
         interaction: discord.Interaction,
         _: discord.ui.Button[ServerAnniversaryControlView],
     ) -> None:
-        latest, server_anniversary, recurring_events = await self._latest_context()
+        latest, latest_surfaces, server_anniversary, recurring_events = await self._latest_context()
         status_embed, preview_embed = await _build_studio_preview_pair(
             guild=self.guild,
             settings=latest,
             settings_service=self.settings_service,
             section="server_anniversary",
+            announcement_surfaces=latest_surfaces,
             server_anniversary=server_anniversary,
             recurring_events=recurring_events,
         )
@@ -3211,7 +3893,7 @@ class ServerAnniversaryControlView(AdminPanelView):
         interaction: discord.Interaction,
         _: discord.ui.Button[ServerAnniversaryControlView],
     ) -> None:
-        latest, server_anniversary, recurring_events = await self._latest_context()
+        latest, latest_surfaces, server_anniversary, recurring_events = await self._latest_context()
         experience_service, experience_settings, surprise_rewards = await _load_experience_context(
             interaction.client,
             self.guild.id,
@@ -3219,6 +3901,7 @@ class ServerAnniversaryControlView(AdminPanelView):
         await interaction.response.edit_message(
             embed=build_message_template_embed(
                 latest,
+                announcement_surfaces=latest_surfaces,
                 section="server_anniversary",
                 guild=self.guild,
                 experience_settings=experience_settings,
@@ -3230,6 +3913,7 @@ class ServerAnniversaryControlView(AdminPanelView):
                 settings_service=self.settings_service,
                 experience_service=experience_service,
                 settings=latest,
+                announcement_surfaces=latest_surfaces,
                 owner_id=self.owner_id,
                 guild=self.guild,
                 birthday_service=self.birthday_service,
@@ -3342,6 +4026,7 @@ class ServerAnniversaryReturnView(AdminPanelView):
         _: discord.ui.Button[ServerAnniversaryReturnView],
     ) -> None:
         latest = await self.settings_service.get_settings(self.guild.id)
+        latest_surfaces = await self.settings_service.get_announcement_surfaces(self.guild.id)
         server_anniversary, recurring_events = await _load_studio_context(
             self.guild,
             self.birthday_service,
@@ -3349,6 +4034,7 @@ class ServerAnniversaryReturnView(AdminPanelView):
         await interaction.response.edit_message(
             embed=build_server_anniversary_control_embed(
                 latest,
+                announcement_surfaces=latest_surfaces,
                 guild=self.guild,
                 celebration=server_anniversary,
             ),
@@ -3447,12 +4133,22 @@ async def _build_studio_preview_pair(
     section: SectionName,
     server_anniversary: RecurringCelebration | None,
     recurring_events: tuple[RecurringCelebration, ...],
+    announcement_surfaces: (
+        dict[AnnouncementSurfaceKind, AnnouncementSurfaceSettings] | None
+    ) = None,
+    preview_kind: AnnouncementKind | None = None,
 ) -> tuple[discord.Embed, discord.Embed]:
     if section == "help":
         raise ValidationError("Select a delivery section before previewing.")
-    if section in {"home", "birthday"}:
+    selected_kind: AnnouncementKind = preview_kind or _default_preview_kind_for_section(section)
+    resolved_surface: ResolvedAnnouncementSurface | None = None
+    if selected_kind == "birthday_announcement":
         preview = preview_context_for_kind("birthday_announcement")
-        route = _format_channel(settings.announcement_channel_id)
+        resolved_surface = _resolve_surface(
+            settings,
+            announcement_surfaces,
+            "birthday_announcement",
+        )
         readiness = await settings_service.describe_delivery(
             guild,
             kind="birthday_announcement",
@@ -3470,7 +4166,7 @@ async def _build_studio_preview_pair(
                 recipients=preview.recipients,
                 celebration_mode=settings.celebration_mode,
                 announcement_theme=settings.announcement_theme,
-                presentation=settings.presentation(),
+                presentation=resolved_surface.presentation(settings),
                 template=settings.announcement_template,
                 preview_label="Preview only - birthday announcement",
             ).embed
@@ -3479,8 +4175,8 @@ async def _build_studio_preview_pair(
                 _build_preview_status_embed(
                     settings,
                     readiness,
-                    section=section,
-                    route=route,
+                    kind=selected_kind,
+                    resolved_surface=resolved_surface,
                     mention_suppressed=(
                         len(preview.recipients) >= settings.mention_suppression_threshold
                     ),
@@ -3488,9 +4184,8 @@ async def _build_studio_preview_pair(
                 ),
                 _build_preview_unavailable_embed(_SECTION_LABELS[section], str(exc)),
             )
-    elif section == "birthday_dm":
+    elif selected_kind == "birthday_dm":
         preview = preview_context_for_kind("birthday_dm")
-        route = "Private DM"
         readiness = await settings_service.describe_delivery(guild, kind="birthday_dm")
         try:
             ensure_safe_announcement_inputs(
@@ -3514,17 +4209,21 @@ async def _build_studio_preview_pair(
                 _build_preview_status_embed(
                     settings,
                     readiness,
-                    section=section,
-                    route=route,
+                    kind=selected_kind,
+                    resolved_surface=None,
                     mention_suppressed=False,
                     preview_error=str(exc),
                 ),
                 _build_preview_unavailable_embed(_SECTION_LABELS[section], str(exc)),
             )
-    elif section == "anniversary":
+    elif selected_kind == "anniversary":
         preview = preview_context_for_kind("anniversary")
+        resolved_surface = _resolve_surface(
+            settings,
+            announcement_surfaces,
+            "anniversary",
+        )
         readiness = await settings_service.describe_delivery(guild, kind="anniversary")
-        route = _format_channel(_effective_anniversary_channel(settings))
         try:
             ensure_safe_announcement_inputs(
                 template=settings.anniversary_template,
@@ -3540,7 +4239,7 @@ async def _build_studio_preview_pair(
                 recipients=preview.recipients,
                 celebration_mode=settings.celebration_mode,
                 announcement_theme=settings.announcement_theme,
-                presentation=settings.presentation(),
+                presentation=resolved_surface.presentation(settings),
                 template=settings.anniversary_template,
                 preview_label="Preview only - member anniversary",
                 event_name=preview.event_name,
@@ -3552,8 +4251,8 @@ async def _build_studio_preview_pair(
                 _build_preview_status_embed(
                     settings,
                     readiness,
-                    section=section,
-                    route=route,
+                    kind=selected_kind,
+                    resolved_surface=resolved_surface,
                     mention_suppressed=(
                         len(preview.recipients) >= settings.mention_suppression_threshold
                     ),
@@ -3561,19 +4260,24 @@ async def _build_studio_preview_pair(
                 ),
                 _build_preview_unavailable_embed(_SECTION_LABELS[section], str(exc)),
             )
-    elif section == "server_anniversary":
+    elif selected_kind == "server_anniversary":
         state = _server_anniversary_state(guild=guild, celebration=server_anniversary)
         if state.month is None or state.day is None:
             raise ValidationError(
                 "Discord did not provide the guild creation date. "
                 "Save a custom server-anniversary date first."
             )
+        resolved_surface = _resolve_surface(
+            settings,
+            announcement_surfaces,
+            "server_anniversary",
+            event_channel_id=state.channel_id,
+        )
         readiness = await settings_service.describe_delivery(
             guild,
             kind="server_anniversary",
             channel_id=state.channel_id,
         )
-        route = _format_channel(state.channel_id or settings.announcement_channel_id)
         try:
             ensure_safe_announcement_inputs(
                 template=state.template,
@@ -3589,7 +4293,7 @@ async def _build_studio_preview_pair(
                 recipients=[],
                 celebration_mode=settings.celebration_mode,
                 announcement_theme=settings.announcement_theme,
-                presentation=settings.presentation(),
+                presentation=resolved_surface.presentation(settings),
                 template=state.template,
                 preview_label="Preview only - server anniversary",
                 event_name=state.name,
@@ -3601,8 +4305,8 @@ async def _build_studio_preview_pair(
                 _build_preview_status_embed(
                     settings,
                     readiness,
-                    section=section,
-                    route=route,
+                    kind=selected_kind,
+                    resolved_surface=resolved_surface,
                     mention_suppressed=False,
                     preview_error=str(exc),
                 ),
@@ -3612,12 +4316,17 @@ async def _build_studio_preview_pair(
         if not recurring_events:
             raise ValidationError("Create a recurring annual event before previewing one here.")
         celebration = recurring_events[0]
+        resolved_surface = _resolve_surface(
+            settings,
+            announcement_surfaces,
+            "recurring_event",
+            event_channel_id=celebration.channel_id,
+        )
         readiness = await settings_service.describe_delivery(
             guild,
             kind="recurring_event",
             channel_id=celebration.channel_id,
         )
-        route = _format_channel(celebration.channel_id or settings.announcement_channel_id)
         try:
             ensure_safe_announcement_inputs(
                 template=celebration.template,
@@ -3632,7 +4341,7 @@ async def _build_studio_preview_pair(
                 recipients=[],
                 celebration_mode=settings.celebration_mode,
                 announcement_theme=settings.announcement_theme,
-                presentation=settings.presentation(),
+                presentation=resolved_surface.presentation(settings),
                 template=celebration.template,
                 preview_label=f"Preview only - {celebration.name}",
                 event_name=celebration.name,
@@ -3644,8 +4353,8 @@ async def _build_studio_preview_pair(
                 _build_preview_status_embed(
                     settings,
                     readiness,
-                    section=section,
-                    route=route,
+                    kind=selected_kind,
+                    resolved_surface=resolved_surface,
                     mention_suppressed=False,
                     preview_error=str(exc),
                 ),
@@ -3655,11 +4364,11 @@ async def _build_studio_preview_pair(
         _build_preview_status_embed(
             settings,
             readiness,
-            section=section,
-            route=route,
+            kind=selected_kind,
+            resolved_surface=resolved_surface,
             mention_suppressed=(
                 len(preview.recipients) >= settings.mention_suppression_threshold
-                if section in {"home", "birthday", "anniversary"}
+                if selected_kind in {"birthday_announcement", "anniversary"}
                 else False
             ),
         ),
@@ -3671,30 +4380,43 @@ def _build_preview_status_embed(
     settings: GuildSettings,
     readiness: object,
     *,
-    section: SectionName,
-    route: str,
+    kind: AnnouncementKind,
+    resolved_surface: ResolvedAnnouncementSurface | None,
     mention_suppressed: bool,
     preview_error: str | None = None,
 ) -> discord.Embed:
     from bdayblaze.domain.models import AnnouncementDeliveryReadiness
 
     assert isinstance(readiness, AnnouncementDeliveryReadiness)
-    presentation = _preview_presentation_for_section(settings, section=section)
+    presentation = _preview_presentation_for_kind(
+        settings,
+        kind=kind,
+        resolved_surface=resolved_surface,
+    )
     media_diagnostics = build_presentation_diagnostics(presentation)
     budget = BudgetedEmbed.create(
         title="\U0001F9EA Dry-Run Preview",
         description="Preview only. No live celebration was sent.",
         color=discord.Color.green() if readiness.status == "ready" else discord.Color.orange(),
     )
-    budget.add_field(name="Preview surface", value=_SECTION_LABELS[section], inline=False)
+    budget.add_field(name="Preview surface", value=surface_label(kind), inline=False)
     budget.add_field(name="Live delivery readiness", value=readiness.summary, inline=False)
     if readiness.details:
         budget.add_line_fields("Details", readiness.details, inline=False)
+    route_lines = (
+        ("Configured route: n/a", "Effective route: Private DM")
+        if kind == "birthday_dm"
+        else _surface_route_lines(
+            resolved_surface
+            if resolved_surface is not None
+            else raise_preview_surface_error()
+        )
+    )
     budget.add_line_fields(
         "Routing and mentions",
         (
-            f"Live route: {route}",
-            _preview_mention_status(section=section, mention_suppressed=mention_suppressed),
+            *route_lines,
+            _preview_mention_status(kind=kind, mention_suppressed=mention_suppressed),
         ),
         inline=False,
     )
@@ -3702,7 +4424,8 @@ def _build_preview_status_embed(
         "Media and visuals",
         _preview_visual_lines(
             settings,
-            section=section,
+            kind=kind,
+            resolved_surface=resolved_surface,
             media_diagnostics=media_diagnostics,
         ),
         inline=False,
@@ -3736,57 +4459,60 @@ def _build_preview_unavailable_embed(section_label: str, reason: str) -> discord
 
 def _preview_mention_status(
     *,
-    section: SectionName,
+    kind: AnnouncementKind,
     mention_suppressed: bool,
 ) -> str:
-    if section == "birthday_dm":
+    if kind == "birthday_dm":
         return "Mentions: not used in private DMs."
-    if section in {"server_anniversary", "events"}:
+    if kind in {"server_anniversary", "recurring_event"}:
         return "Mentions: not used for this celebration type."
     if mention_suppressed:
         return "Mentions: would be suppressed for a batch this size."
     return "Mentions: would be allowed for a small live batch."
 
 
-def _preview_presentation_for_section(
+def _preview_presentation_for_kind(
     settings: GuildSettings,
     *,
-    section: SectionName,
+    kind: AnnouncementKind,
+    resolved_surface: ResolvedAnnouncementSurface | None,
 ) -> AnnouncementStudioPresentation:
-    kind = {
-        "home": "birthday_announcement",
-        "birthday": "birthday_announcement",
-        "birthday_dm": "birthday_dm",
-        "anniversary": "anniversary",
-        "server_anniversary": "server_anniversary",
-        "events": "recurring_event",
-        "help": "birthday_announcement",
-    }[section]
-    return settings.presentation_for_kind(kind)
+    if kind == "birthday_dm":
+        return settings.presentation_for_kind(kind)
+    if resolved_surface is None:
+        raise ValidationError("Preview surface resolution is unavailable.")
+    return resolved_surface.presentation(settings)
 
 
 def _preview_visual_lines(
     settings: GuildSettings,
     *,
-    section: SectionName,
+    kind: AnnouncementKind,
+    resolved_surface: ResolvedAnnouncementSurface | None,
     media_diagnostics: tuple[object, ...],
 ) -> tuple[str, ...]:
-    if section == "birthday_dm":
+    if kind == "birthday_dm":
         return (
             "Media status: Not used for live birthday DMs",
             f"Theme: {announcement_theme_label(settings.announcement_theme)}",
-            f"Style: {settings.celebration_mode.title()}",
-            "Shared title, footer, image, thumbnail, and accent overrides stay on public "
-            "announcement surfaces.",
+            "Global celebration behavior: "
+            f"{_celebration_mode_label(settings.celebration_mode)}",
+            "Global look controls stay on public announcement surfaces.",
         )
+    if resolved_surface is None:
+        raise ValidationError("Preview surface resolution is unavailable.")
     return (
         f"Media status: {'Ready' if not media_diagnostics else 'Needs attention'}",
         f"Theme: {announcement_theme_label(settings.announcement_theme)}",
-        f"Style: {settings.celebration_mode.title()}",
+        "Global celebration behavior: "
+        f"{_celebration_mode_label(settings.celebration_mode)}",
         f"Title override: {settings.announcement_title_override or 'Default'}",
-        _media_state_line(settings.announcement_image_url, label="Image"),
-        _media_state_line(settings.announcement_thumbnail_url, label="Thumbnail"),
+        *_surface_media_lines(resolved_surface),
     )
+
+
+def raise_preview_surface_error() -> ResolvedAnnouncementSurface:
+    raise ValidationError("Preview surface resolution is unavailable.")
 
 
 async def _load_studio_context(

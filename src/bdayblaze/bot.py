@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from time import monotonic
+from typing import Protocol, TypeGuard
 
 import discord
 from discord import app_commands
@@ -13,6 +14,15 @@ from bdayblaze.discord.cogs.info import InfoCog
 from bdayblaze.logging import get_logger, redact_identifier
 from bdayblaze.services.diagnostics import classify_discord_http_failure
 from bdayblaze.services.errors import BdayblazeError
+
+
+class _FetchMessageChannel(Protocol):
+    async def fetch_message(self, message_id: int) -> discord.Message:
+        ...
+
+
+def _supports_fetch_message(channel: object) -> TypeGuard[_FetchMessageChannel]:
+    return hasattr(channel, "fetch_message")
 
 
 class BdayblazeBot(commands.Bot):
@@ -89,10 +99,8 @@ class BdayblazeBot(commands.Bot):
             redact_identifier(interaction.guild_id) if interaction.guild_id is not None else None
         )
         user_hash = redact_identifier(interaction.user.id)
-        is_admin_flow = bool(
-            isinstance(interaction.user, discord.Member)
-            and interaction.user.guild_permissions.manage_guild
-        )
+        permissions = getattr(interaction.user, "guild_permissions", None)
+        is_admin_flow = bool(getattr(permissions, "manage_guild", False))
 
         if isinstance(original, app_commands.errors.MissingPermissions):
             message = "You need Manage Server to use that command."
@@ -305,7 +313,7 @@ class BdayblazeBot(commands.Bot):
                     message_id=redact_identifier(message_id),
                 )
                 return
-        if not hasattr(channel, "fetch_message"):
+        if not _supports_fetch_message(channel):
             return
         try:
             message = await channel.fetch_message(message_id)

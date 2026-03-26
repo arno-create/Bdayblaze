@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Generic, Literal, TypeVar
 
 CelebrationMode = Literal["quiet", "party"]
 AnnouncementTheme = Literal["classic", "festive", "minimal", "cute", "elegant", "gaming"]
@@ -25,6 +25,12 @@ AnnouncementKind = Literal[
     "server_anniversary",
     "recurring_event",
 ]
+AnnouncementSurfaceKind = Literal[
+    "birthday_announcement",
+    "anniversary",
+    "server_anniversary",
+    "recurring_event",
+]
 EventKind = Literal[
     "announcement",
     "birthday_dm",
@@ -40,6 +46,7 @@ AnnouncementBatchState = Literal["pending", "sending", "sent"]
 AnnouncementBatchClaimStatus = Literal["missing", "claimed", "already_sent", "in_flight"]
 AnnouncementDeliveryStatus = Literal["ready", "blocked"]
 DiagnosticSeverity = Literal["info", "warning", "error"]
+T = TypeVar("T")
 
 
 @dataclass(slots=True, frozen=True)
@@ -53,9 +60,50 @@ class AnnouncementStudioPresentation:
 
 
 @dataclass(slots=True, frozen=True)
+class AnnouncementSurfaceSettings:
+    guild_id: int
+    surface_kind: AnnouncementSurfaceKind
+    channel_id: int | None = None
+    image_url: str | None = None
+    thumbnail_url: str | None = None
+    created_at_utc: datetime | None = None
+    updated_at_utc: datetime | None = None
+
+    @classmethod
+    def empty(
+        cls,
+        guild_id: int,
+        surface_kind: AnnouncementSurfaceKind,
+    ) -> AnnouncementSurfaceSettings:
+        return cls(guild_id=guild_id, surface_kind=surface_kind)
+
+
+@dataclass(slots=True, frozen=True)
+class ResolvedSurfaceField(Generic[T]):
+    configured_value: T | None
+    effective_value: T | None
+    source: str
+    override_value: T | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class ResolvedAnnouncementSurface:
+    surface_kind: AnnouncementSurfaceKind
+    channel: ResolvedSurfaceField[int]
+    image: ResolvedSurfaceField[str]
+    thumbnail: ResolvedSurfaceField[str]
+
+    def presentation(self, settings: GuildSettings) -> AnnouncementStudioPresentation:
+        return settings.presentation_for_kind(
+            self.surface_kind,
+            image_url=self.image.effective_value,
+            thumbnail_url=self.thumbnail.effective_value,
+        )
+
+
+@dataclass(slots=True, frozen=True)
 class GuildSettings:
     guild_id: int
-    announcement_channel_id: int | None
     default_timezone: str
     birthday_role_id: int | None
     announcements_enabled: bool
@@ -65,13 +113,10 @@ class GuildSettings:
     announcement_template: str | None
     announcement_title_override: str | None
     announcement_footer_text: str | None
-    announcement_image_url: str | None
-    announcement_thumbnail_url: str | None
     announcement_accent_color: int | None
     birthday_dm_enabled: bool
     birthday_dm_template: str | None
     anniversary_enabled: bool
-    anniversary_channel_id: int | None
     anniversary_template: str | None
     eligibility_role_id: int | None
     ignore_bots: bool
@@ -85,7 +130,6 @@ class GuildSettings:
     def default(cls, guild_id: int) -> GuildSettings:
         return cls(
             guild_id=guild_id,
-            announcement_channel_id=None,
             default_timezone="UTC",
             birthday_role_id=None,
             announcements_enabled=False,
@@ -95,13 +139,10 @@ class GuildSettings:
             announcement_template=None,
             announcement_title_override=None,
             announcement_footer_text=None,
-            announcement_image_url=None,
-            announcement_thumbnail_url=None,
             announcement_accent_color=None,
             birthday_dm_enabled=False,
             birthday_dm_template=None,
             anniversary_enabled=False,
-            anniversary_channel_id=None,
             anniversary_template=None,
             eligibility_role_id=None,
             ignore_bots=True,
@@ -110,18 +151,32 @@ class GuildSettings:
             studio_audit_channel_id=None,
         )
 
-    def presentation(self) -> AnnouncementStudioPresentation:
+    def presentation(
+        self,
+        *,
+        image_url: str | None = None,
+        thumbnail_url: str | None = None,
+    ) -> AnnouncementStudioPresentation:
         return AnnouncementStudioPresentation(
             theme=self.announcement_theme,
             title_override=self.announcement_title_override,
             footer_text=self.announcement_footer_text,
-            image_url=self.announcement_image_url,
-            thumbnail_url=self.announcement_thumbnail_url,
+            image_url=image_url,
+            thumbnail_url=thumbnail_url,
             accent_color=self.announcement_accent_color,
         )
 
-    def presentation_for_kind(self, kind: AnnouncementKind) -> AnnouncementStudioPresentation:
-        presentation = self.presentation()
+    def presentation_for_kind(
+        self,
+        kind: AnnouncementKind,
+        *,
+        image_url: str | None = None,
+        thumbnail_url: str | None = None,
+    ) -> AnnouncementStudioPresentation:
+        presentation = self.presentation(
+            image_url=image_url,
+            thumbnail_url=thumbnail_url,
+        )
         if kind != "birthday_dm":
             return presentation
         return AnnouncementStudioPresentation(

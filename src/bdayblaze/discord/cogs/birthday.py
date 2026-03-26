@@ -20,6 +20,10 @@ from bdayblaze.discord.ui.setup import (
     build_message_template_embed,
     build_setup_embed,
 )
+from bdayblaze.domain.announcement_surfaces import (
+    resolve_announcement_surface,
+    surface_source_label,
+)
 from bdayblaze.domain.announcement_template import (
     AnnouncementRenderRecipient,
     anniversary_years,
@@ -29,6 +33,8 @@ from bdayblaze.domain.announcement_theme import announcement_theme_label
 from bdayblaze.domain.birthday_logic import LATE_CELEBRATION_NOTE, is_birthday_active_now
 from bdayblaze.domain.media_validation import assess_media_url
 from bdayblaze.domain.models import (
+    AnnouncementSurfaceKind,
+    AnnouncementSurfaceSettings,
     BirthdayCelebration,
     BirthdayPreview,
     BirthdayQuestStatus,
@@ -38,6 +44,7 @@ from bdayblaze.domain.models import (
     GuildSettings,
     MemberBirthday,
     NitroConciergeEntry,
+    ResolvedAnnouncementSurface,
 )
 from bdayblaze.domain.timezones import autocomplete_timezones
 from bdayblaze.services.birthday_service import BirthdayService
@@ -741,11 +748,15 @@ class BirthdayGroup(
     async def setup(self, interaction: discord.Interaction) -> None:
         assert interaction.guild is not None
         settings = await self._settings_service.get_settings(interaction.guild.id)
+        announcement_surfaces = await self._settings_service.get_announcement_surfaces(
+            interaction.guild.id
+        )
         await interaction.response.send_message(
-            embed=build_setup_embed(settings),
+            embed=build_setup_embed(settings, announcement_surfaces),
             view=SetupView(
                 settings_service=self._settings_service,
                 settings=settings,
+                announcement_surfaces=announcement_surfaces,
                 owner_id=interaction.user.id,
                 guild=interaction.guild,
                 birthday_service=self._birthday_service,
@@ -759,6 +770,9 @@ class BirthdayGroup(
     async def studio(self, interaction: discord.Interaction) -> None:
         assert interaction.guild is not None
         settings = await self._settings_service.get_settings(interaction.guild.id)
+        announcement_surfaces = await self._settings_service.get_announcement_surfaces(
+            interaction.guild.id
+        )
         experience_settings = await self._experience_service.get_settings(interaction.guild.id)
         surprise_rewards = tuple(
             await self._experience_service.list_surprise_rewards(interaction.guild.id)
@@ -775,6 +789,7 @@ class BirthdayGroup(
         await interaction.response.send_message(
             embed=build_message_template_embed(
                 settings,
+                announcement_surfaces=announcement_surfaces,
                 section="home",
                 guild=interaction.guild,
                 experience_settings=experience_settings,
@@ -786,6 +801,7 @@ class BirthdayGroup(
                 settings_service=self._settings_service,
                 experience_service=self._experience_service,
                 settings=settings,
+                announcement_surfaces=announcement_surfaces,
                 owner_id=interaction.user.id,
                 guild=interaction.guild,
                 birthday_service=self._birthday_service,
@@ -801,7 +817,7 @@ class BirthdayGroup(
         description="Send a private dry-run preview for any supported celebration type.",
     )
     @app_commands.describe(
-        kind="Which delivery type to preview",
+        surface="Which celebration surface to preview",
         member="Optional member to preview with for birthday or anniversary tests",
         event_id="Recurring event id for recurring-event previews",
     )
@@ -810,7 +826,7 @@ class BirthdayGroup(
     async def test_message(
         self,
         interaction: discord.Interaction,
-        kind: Literal[
+        surface: Literal[
             "birthday_announcement",
             "birthday_dm",
             "anniversary",
@@ -823,8 +839,11 @@ class BirthdayGroup(
         assert interaction.guild is not None
         await interaction.response.defer(ephemeral=True)
         settings = await self._settings_service.get_settings(interaction.guild.id)
+        announcement_surfaces = await self._settings_service.get_announcement_surfaces(
+            interaction.guild.id
+        )
         recurring_channel_id: int | None = None
-        if kind == "recurring_event" and event_id is not None:
+        if surface == "recurring_event" and event_id is not None:
             try:
                 recurring_channel_id = (
                     await self._birthday_service.get_recurring_celebration(
@@ -835,14 +854,14 @@ class BirthdayGroup(
             except NotFoundError as exc:
                 await interaction.followup.send(str(exc), ephemeral=True)
                 return
-        if kind == "server_anniversary":
+        if surface == "server_anniversary":
             anniversary = await self._birthday_service.get_server_anniversary(
                 interaction.guild.id
             )
             recurring_channel_id = anniversary.channel_id if anniversary is not None else None
         readiness = await self._settings_service.describe_delivery(
             interaction.guild,
-            kind=kind,
+            kind=surface,
             channel_id=recurring_channel_id,
         )
         preview_error: str | None = None
@@ -851,14 +870,15 @@ class BirthdayGroup(
                 interaction.guild,
                 settings,
                 self._birthday_service,
-                kind=kind,
+                announcement_surfaces=announcement_surfaces,
+                kind=surface,
                 member=member,
                 event_id=event_id,
             )
         except (ValidationError, NotFoundError, ValueError) as exc:
             preview_error = str(exc)
             preview_embed = _build_preview_unavailable_embed(
-                _preview_kind_label(kind),
+                _preview_kind_label(surface),
                 preview_error,
             )
         await interaction.followup.send(
@@ -866,9 +886,10 @@ class BirthdayGroup(
                 _build_dry_run_status_embed(
                     readiness,
                     settings,
-                    kind=kind,
+                    announcement_surfaces=announcement_surfaces,
+                    kind=surface,
                     channel_id=recurring_channel_id,
-                    preview_member_count=_preview_member_count(kind=kind, member=member),
+                    preview_member_count=_preview_member_count(kind=surface, member=member),
                     preview_error=preview_error,
                 ),
                 preview_embed,
@@ -1174,29 +1195,17 @@ class BirthdayGroup(
             )
             return
         try:
-            if enabled is None and use_announcement_channel:
-                await self._settings_service.update_settings(
+            if channel is not None or use_announcement_channel:
+                await self._settings_service.update_announcement_surface(
                     interaction.guild,
-                    anniversary_channel_id=None,
+                    surface_kind="anniversary",
+                    channel_id=(
+                        None
+                        if use_announcement_channel
+                        else channel.id if channel is not None else None
+                    ),
                 )
-            elif enabled is None and channel is not None:
-                await self._settings_service.update_settings(
-                    interaction.guild,
-                    anniversary_channel_id=channel.id,
-                )
-            elif enabled is not None and use_announcement_channel:
-                await self._settings_service.update_settings(
-                    interaction.guild,
-                    anniversary_enabled=enabled,
-                    anniversary_channel_id=None,
-                )
-            elif enabled is not None and channel is not None:
-                await self._settings_service.update_settings(
-                    interaction.guild,
-                    anniversary_enabled=enabled,
-                    anniversary_channel_id=channel.id,
-                )
-            elif enabled is not None:
+            if enabled is not None:
                 await self._settings_service.update_settings(
                     interaction.guild,
                     anniversary_enabled=enabled,
@@ -1205,6 +1214,9 @@ class BirthdayGroup(
             await interaction.followup.send(str(exc), ephemeral=True)
             return
         latest = await self._settings_service.get_settings(interaction.guild.id)
+        latest_surfaces = await self._settings_service.get_announcement_surfaces(
+            interaction.guild.id
+        )
         server_anniversary = await self._birthday_service.get_server_anniversary(
             interaction.guild.id
         )
@@ -1217,6 +1229,7 @@ class BirthdayGroup(
         await interaction.followup.send(
             embed=build_message_template_embed(
                 latest,
+                announcement_surfaces=latest_surfaces,
                 note="Member anniversary routing updated.",
                 section="anniversary",
                 guild=interaction.guild,
@@ -1226,6 +1239,7 @@ class BirthdayGroup(
             view=MessageTemplateView(
                 settings_service=self._settings_service,
                 settings=latest,
+                announcement_surfaces=latest_surfaces,
                 owner_id=interaction.user.id,
                 guild=interaction.guild,
                 birthday_service=self._birthday_service,
@@ -1338,6 +1352,12 @@ class BirthdayGroup(
         )
 
     @event.command(name="edit", description="Edit a recurring annual celebration.")
+    @app_commands.describe(
+        use_default_route=(
+            "Clear any event-specific channel override and inherit the recurring-events "
+            "default route."
+        ),
+    )
     @app_commands.checks.has_permissions(manage_guild=True)
     @app_commands.guild_only()
     async def event_edit(
@@ -1348,17 +1368,28 @@ class BirthdayGroup(
         month: app_commands.Range[int, 1, 12] | None = None,
         day: app_commands.Range[int, 1, 31] | None = None,
         channel: discord.TextChannel | None = None,
+        use_default_route: bool = False,
         template: str | None = None,
         enabled: bool | None = None,
     ) -> None:
         assert interaction.guild is not None
         await interaction.response.defer(ephemeral=True)
+        if channel is not None and use_default_route:
+            await interaction.followup.send(
+                "Choose a channel override or use the recurring-event default route, not both.",
+                ephemeral=True,
+            )
+            return
         try:
             current = await self._birthday_service.get_recurring_celebration(
                 interaction.guild.id, event_id
             )
             target_enabled = current.enabled if enabled is None else enabled
-            target_channel_id = channel.id if channel is not None else current.channel_id
+            target_channel_id = (
+                None
+                if use_default_route
+                else channel.id if channel is not None else current.channel_id
+            )
             if target_enabled:
                 await _require_ready_delivery(
                     self._settings_service,
@@ -1372,7 +1403,7 @@ class BirthdayGroup(
                 name=name or current.name,
                 month=month or current.event_month,
                 day=day or current.event_day,
-                channel_id=channel.id if channel is not None else current.channel_id,
+                channel_id=target_channel_id,
                 template=template if template is not None else current.template,
                 enabled=current.enabled if enabled is None else enabled,
             )
@@ -1531,6 +1562,7 @@ def _build_dry_run_status_embed(
     readiness: object,
     settings: GuildSettings,
     *,
+    announcement_surfaces: dict[AnnouncementSurfaceKind, AnnouncementSurfaceSettings],
     kind: Literal[
         "birthday_announcement",
         "birthday_dm",
@@ -1545,7 +1577,18 @@ def _build_dry_run_status_embed(
     from bdayblaze.domain.models import AnnouncementDeliveryReadiness
 
     assert isinstance(readiness, AnnouncementDeliveryReadiness)
-    media_diagnostics = build_presentation_diagnostics(settings.presentation_for_kind(kind))
+    resolved_surface = _resolved_preview_surface(
+        settings,
+        announcement_surfaces=announcement_surfaces,
+        kind=kind,
+        channel_id=channel_id,
+    )
+    if kind == "birthday_dm":
+        presentation = settings.presentation_for_kind(kind)
+    else:
+        assert resolved_surface is not None
+        presentation = resolved_surface.presentation(settings)
+    media_diagnostics = build_presentation_diagnostics(presentation)
     embed = BudgetedEmbed.create(
         title="🧪 Dry-Run Preview",
         description="Preview only. No live celebration was sent.",
@@ -1566,7 +1609,7 @@ def _build_dry_run_status_embed(
     embed.add_line_fields(
         "Routing and mentions",
         (
-            f"Live route: {_preview_route_for_kind(settings, kind=kind, channel_id=channel_id)}",
+            *_preview_route_lines(resolved_surface),
             _preview_mention_status(
                 kind=kind,
                 preview_member_count=preview_member_count,
@@ -1579,6 +1622,7 @@ def _build_dry_run_status_embed(
         "Media and visuals",
         _preview_visual_lines(
             settings,
+            resolved_surface=resolved_surface,
             kind=kind,
             media_diagnostics=media_diagnostics,
         ),
@@ -1645,10 +1689,10 @@ def _build_recurring_event_list_embed(
                 f"`{celebration.id}` {celebration.name} • "
                 f"{celebration.event_month:02d}/{celebration.event_day:02d} • "
                 f"{'Enabled' if celebration.enabled else 'Disabled'} • "
-                (
+                + (
                     f"<#{celebration.channel_id}>"
                     if celebration.channel_id is not None
-                    else "Main announcement channel"
+                    else "Uses recurring-event default route"
                 )
             )
             for celebration in typed_celebrations
@@ -1658,7 +1702,7 @@ def _build_recurring_event_list_embed(
     embed.add_field(
         name="Preview path",
         value=(
-            "Use `/birthday test-message` with `kind: recurring_event` and the event id "
+            "Use `/birthday test-message` with `surface: recurring_event` and the event id "
             "to dry-run the current saved render."
         ),
         inline=False,
@@ -1788,6 +1832,7 @@ async def _build_preview_embed(
     settings: GuildSettings,
     birthday_service: BirthdayService,
     *,
+    announcement_surfaces: dict[AnnouncementSurfaceKind, AnnouncementSurfaceSettings] | None = None,
     kind: Literal[
         "birthday_announcement",
         "birthday_dm",
@@ -1798,10 +1843,17 @@ async def _build_preview_embed(
     member: discord.Member | None,
     event_id: int | None,
 ) -> discord.Embed:
+    normalized_surfaces = announcement_surfaces or {}
     if kind == "recurring_event":
         if event_id is None:
             raise ValidationError("Recurring-event previews need an event id.")
         celebration = await birthday_service.get_recurring_celebration(guild.id, event_id)
+        resolved_surface = resolve_announcement_surface(
+            guild.id,
+            "recurring_event",
+            normalized_surfaces,
+            event_channel_id=celebration.channel_id,
+        )
         ensure_safe_announcement_inputs(
             template=celebration.template,
             template_label="Recurring event template",
@@ -1815,7 +1867,7 @@ async def _build_preview_embed(
             recipients=[],
             celebration_mode=settings.celebration_mode,
             announcement_theme=settings.announcement_theme,
-            presentation=settings.presentation_for_kind("recurring_event"),
+            presentation=resolved_surface.presentation(settings),
             template=celebration.template,
             preview_label="Preview only - recurring event",
             event_name=celebration.name,
@@ -1824,6 +1876,13 @@ async def _build_preview_embed(
         ).embed
     if kind == "server_anniversary":
         server_anniversary = await birthday_service.get_server_anniversary(guild.id)
+        override_channel_id = None if server_anniversary is None else server_anniversary.channel_id
+        resolved_surface = resolve_announcement_surface(
+            guild.id,
+            "server_anniversary",
+            normalized_surfaces,
+            event_channel_id=override_channel_id,
+        )
         if server_anniversary is None:
             if guild.created_at is None:
                 raise ValidationError(
@@ -1850,7 +1909,7 @@ async def _build_preview_embed(
             recipients=[],
             celebration_mode=settings.celebration_mode,
             announcement_theme=settings.announcement_theme,
-            presentation=settings.presentation_for_kind("server_anniversary"),
+            presentation=resolved_surface.presentation(settings),
             template=template,
             preview_label="Preview only - server anniversary",
             event_name="Server anniversary",
@@ -1881,6 +1940,11 @@ async def _build_preview_embed(
 
     if kind == "anniversary":
         preview = preview_context_for_kind("anniversary")
+        resolved_surface = resolve_announcement_surface(
+            guild.id,
+            "anniversary",
+            normalized_surfaces,
+        )
         preview_recipients = preview.recipients
         if member is not None and member.joined_at is not None:
             preview_recipients = [
@@ -1908,7 +1972,7 @@ async def _build_preview_embed(
             recipients=preview_recipients,
             celebration_mode=settings.celebration_mode,
             announcement_theme=settings.announcement_theme,
-            presentation=settings.presentation_for_kind("anniversary"),
+            presentation=resolved_surface.presentation(settings),
             template=settings.anniversary_template,
             preview_label="Preview only - anniversary",
             event_name=preview.event_name,
@@ -1940,7 +2004,15 @@ async def _build_preview_embed(
         recipients=recipients,
         celebration_mode=settings.celebration_mode,
         announcement_theme=settings.announcement_theme,
-        presentation=settings.presentation_for_kind(kind),
+        presentation=(
+            settings.presentation_for_kind(kind)
+            if kind == "birthday_dm"
+            else resolve_announcement_surface(
+                guild.id,
+                "birthday_announcement",
+                normalized_surfaces,
+            ).presentation(settings)
+        ),
         template=(
             settings.announcement_template
             if kind == "birthday_announcement"
@@ -1989,9 +2061,17 @@ def _preview_kind_label(
     }[kind]
 
 
-def _preview_route_for_kind(
+def _celebration_mode_label(mode: str) -> str:
+    return {
+        "quiet": "Quiet: polished, restrained celebration visuals",
+        "party": "Party: brighter, more playful celebration visuals",
+    }.get(mode, mode.title())
+
+
+def _resolved_preview_surface(
     settings: GuildSettings,
     *,
+    announcement_surfaces: dict[AnnouncementSurfaceKind, AnnouncementSurfaceSettings],
     kind: Literal[
         "birthday_announcement",
         "birthday_dm",
@@ -2000,18 +2080,44 @@ def _preview_route_for_kind(
         "recurring_event",
     ],
     channel_id: int | None,
-) -> str:
+) -> ResolvedAnnouncementSurface | None:
     if kind == "birthday_dm":
-        return "Private DM"
-    if kind == "anniversary":
-        target_channel_id = (
-            channel_id
-            or settings.anniversary_channel_id
-            or settings.announcement_channel_id
+        return None
+    return resolve_announcement_surface(
+        settings.guild_id,
+        kind,
+        announcement_surfaces,
+        event_channel_id=(
+            channel_id if kind in {"server_anniversary", "recurring_event"} else None
+        ),
+    )
+
+
+def _preview_route_lines(surface: ResolvedAnnouncementSurface | None) -> tuple[str, str]:
+    if surface is None:
+        return ("Configured route: n/a", "Effective route: Private DM")
+    configured = (
+        f"<#{surface.channel.configured_value}>"
+        if surface.channel.configured_value is not None
+        else "Inherited / not set"
+    )
+    if surface.channel.override_value is not None:
+        configured = (
+            f"Surface default {configured}; event override <#{surface.channel.override_value}>"
         )
-    else:
-        target_channel_id = channel_id or settings.announcement_channel_id
-    return f"<#{target_channel_id}>" if target_channel_id is not None else "Not configured"
+    effective = (
+        f"<#{surface.channel.effective_value}>"
+        if surface.channel.effective_value is not None
+        else "Not configured"
+    )
+    return (
+        f"Configured route: {configured}",
+        (
+            "Effective route: "
+            f"{effective} "
+            f"({surface_source_label(surface.channel.source, surface_kind=surface.surface_kind)})"
+        ),
+    )
 
 
 def _preview_member_count(
@@ -2056,6 +2162,7 @@ def _preview_mention_status(
 def _preview_visual_lines(
     settings: GuildSettings,
     *,
+    resolved_surface: ResolvedAnnouncementSurface | None,
     kind: Literal[
         "birthday_announcement",
         "birthday_dm",
@@ -2069,16 +2176,41 @@ def _preview_visual_lines(
         return (
             "Media status: Not used for live birthday DMs",
             f"Theme: {announcement_theme_label(settings.announcement_theme)}",
-            f"Style: {settings.celebration_mode.title()}",
-            "Shared title, footer, image, thumbnail, and accent overrides stay on public "
-            "announcement surfaces.",
+            "Global celebration behavior: "
+            f"{_celebration_mode_label(settings.celebration_mode)}",
+            "Global look stays on public announcement surfaces.",
         )
+    assert resolved_surface is not None
     return (
         f"Media status: {'Ready' if not media_diagnostics else 'Needs attention'}",
         f"Theme: {announcement_theme_label(settings.announcement_theme)}",
-        f"Style: {settings.celebration_mode.title()}",
-        _preview_media_state_line(settings.announcement_image_url, label="Image"),
-        _preview_media_state_line(settings.announcement_thumbnail_url, label="Thumbnail"),
+        "Global celebration behavior: "
+        f"{_celebration_mode_label(settings.celebration_mode)}",
+        f"Title override: {settings.announcement_title_override or 'Default'}",
+        _preview_media_state_line(
+            resolved_surface.image.effective_value,
+            label=(
+                "Image "
+                "("
+                f"{surface_source_label(
+                    resolved_surface.image.source,
+                    surface_kind=resolved_surface.surface_kind,
+                )}"
+                ")"
+            ),
+        ),
+        _preview_media_state_line(
+            resolved_surface.thumbnail.effective_value,
+            label=(
+                "Thumbnail "
+                "("
+                f"{surface_source_label(
+                    resolved_surface.thumbnail.source,
+                    surface_kind=resolved_surface.surface_kind,
+                )}"
+                ")"
+            ),
+        ),
     )
 
 

@@ -7,12 +7,15 @@ from typing import Literal
 
 import discord
 
+from bdayblaze.domain.announcement_surfaces import resolve_announcement_surface
 from bdayblaze.domain.birthday_logic import membership_age_days
 from bdayblaze.domain.media_validation import assess_media_url
 from bdayblaze.domain.models import (
     AnnouncementDeliveryReadiness,
     AnnouncementDeliveryStatus,
     AnnouncementStudioPresentation,
+    AnnouncementSurfaceKind,
+    AnnouncementSurfaceSettings,
     DeliveryDiagnostic,
     EventKind,
     GuildSettings,
@@ -177,6 +180,8 @@ def build_role_diagnostics(
 def describe_birthday_announcement_readiness(
     guild: discord.Guild,
     settings: GuildSettings,
+    *,
+    announcement_surfaces: dict[AnnouncementSurfaceKind, AnnouncementSurfaceSettings],
 ) -> AnnouncementDeliveryReadiness:
     if not settings.announcements_enabled:
         disabled_diagnostics: tuple[DeliveryDiagnostic, ...] = (
@@ -193,13 +198,18 @@ def describe_birthday_announcement_readiness(
             details=tuple(item.detail_line() for item in disabled_diagnostics),
             diagnostics=disabled_diagnostics,
         )
+    resolved_surface = resolve_announcement_surface(
+        guild.id,
+        "birthday_announcement",
+        announcement_surfaces,
+    )
     diagnostics = (
         *build_channel_diagnostics(
             guild,
-            channel_id=settings.announcement_channel_id,
+            channel_id=resolved_surface.channel.effective_value,
             label="announcement",
         ),
-        *build_presentation_diagnostics(settings.presentation()),
+        *build_presentation_diagnostics(resolved_surface.presentation(settings)),
     )
     return _readiness_from_diagnostics(
         tuple(diagnostics),
@@ -211,6 +221,8 @@ def describe_birthday_announcement_readiness(
 def describe_anniversary_readiness(
     guild: discord.Guild,
     settings: GuildSettings,
+    *,
+    announcement_surfaces: dict[AnnouncementSurfaceKind, AnnouncementSurfaceSettings],
 ) -> AnnouncementDeliveryReadiness:
     if not settings.anniversary_enabled:
         disabled_diagnostics: tuple[DeliveryDiagnostic, ...] = (
@@ -227,14 +239,18 @@ def describe_anniversary_readiness(
             details=tuple(item.detail_line() for item in disabled_diagnostics),
             diagnostics=disabled_diagnostics,
         )
-    effective_channel_id = settings.anniversary_channel_id or settings.announcement_channel_id
+    resolved_surface = resolve_announcement_surface(
+        guild.id,
+        "anniversary",
+        announcement_surfaces,
+    )
     diagnostics = (
         *build_channel_diagnostics(
             guild,
-            channel_id=effective_channel_id,
+            channel_id=resolved_surface.channel.effective_value,
             label="anniversary",
         ),
-        *build_presentation_diagnostics(settings.presentation()),
+        *build_presentation_diagnostics(resolved_surface.presentation(settings)),
     )
     return _readiness_from_diagnostics(
         tuple(diagnostics),

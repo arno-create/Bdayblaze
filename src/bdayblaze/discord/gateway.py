@@ -773,7 +773,6 @@ def _eligibility_settings(
     defaults = GuildSettings.default(guild_id)
     return GuildSettings(
         guild_id=defaults.guild_id,
-        announcement_channel_id=defaults.announcement_channel_id,
         default_timezone=defaults.default_timezone,
         birthday_role_id=defaults.birthday_role_id,
         announcements_enabled=defaults.announcements_enabled,
@@ -783,13 +782,10 @@ def _eligibility_settings(
         announcement_template=defaults.announcement_template,
         announcement_title_override=defaults.announcement_title_override,
         announcement_footer_text=defaults.announcement_footer_text,
-        announcement_image_url=defaults.announcement_image_url,
-        announcement_thumbnail_url=defaults.announcement_thumbnail_url,
         announcement_accent_color=defaults.announcement_accent_color,
         birthday_dm_enabled=defaults.birthday_dm_enabled,
         birthday_dm_template=defaults.birthday_dm_template,
         anniversary_enabled=defaults.anniversary_enabled,
-        anniversary_channel_id=defaults.anniversary_channel_id,
         anniversary_template=defaults.anniversary_template,
         eligibility_role_id=eligibility_role_id,
         ignore_bots=ignore_bots,

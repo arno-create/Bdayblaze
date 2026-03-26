@@ -167,23 +167,21 @@ def test_evaluate_member_eligibility_reports_minimum_membership_age() -> None:
 
 
 def test_build_presentation_diagnostics_reports_invalid_media() -> None:
-    settings = replace(
-        GuildSettings.default(1),
-        announcement_image_url="https://example.com/manual.pdf",
-    )
+    settings = GuildSettings.default(1)
 
-    diagnostics_result = diagnostics.build_presentation_diagnostics(settings.presentation())
+    diagnostics_result = diagnostics.build_presentation_diagnostics(
+        settings.presentation(image_url="https://example.com/manual.pdf")
+    )
 
     assert [item.code for item in diagnostics_result] == ["announcement_image_invalid"]
 
 
 def test_build_presentation_diagnostics_reports_needs_validation_for_ambiguous_media() -> None:
-    settings = replace(
-        GuildSettings.default(1),
-        announcement_image_url="https://cdn.example.com/assets/banner?sig=abc123",
-    )
+    settings = GuildSettings.default(1)
 
-    diagnostics_result = diagnostics.build_presentation_diagnostics(settings.presentation())
+    diagnostics_result = diagnostics.build_presentation_diagnostics(
+        settings.presentation(image_url="https://cdn.example.com/assets/banner?sig=abc123")
+    )
 
     assert [item.code for item in diagnostics_result] == [
         "announcement_image_invalid_needs_validation"

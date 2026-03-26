@@ -33,6 +33,7 @@ from bdayblaze.discord.ui.setup import (
 )
 from bdayblaze.domain.models import (
     AnnouncementDeliveryReadiness,
+    AnnouncementSurfaceSettings,
     BirthdayImportError,
     BirthdayImportPreview,
     GuildSettings,
@@ -60,15 +61,11 @@ def _settings() -> GuildSettings:
         announcements_enabled=True,
         birthday_dm_enabled=True,
         anniversary_enabled=True,
-        announcement_channel_id=123,
-        anniversary_channel_id=456,
         announcement_template="A" * 1200,
         birthday_dm_template="B" * 1200,
         anniversary_template="C" * 1200,
         announcement_title_override="T" * 256,
         announcement_footer_text="F" * 512,
-        announcement_image_url=_long_url(".gif"),
-        announcement_thumbnail_url=_long_url(".png"),
         announcement_accent_color=0xABCDEF,
     )
 
@@ -95,6 +92,33 @@ def _server_anniversary() -> RecurringCelebration:
     )
 
 
+def _surfaces() -> dict[str, AnnouncementSurfaceSettings]:
+    return {
+        "birthday_announcement": AnnouncementSurfaceSettings(
+            guild_id=1,
+            surface_kind="birthday_announcement",
+            channel_id=123,
+            image_url=_long_url(".gif"),
+            thumbnail_url=_long_url(".png"),
+        ),
+        "anniversary": AnnouncementSurfaceSettings(
+            guild_id=1,
+            surface_kind="anniversary",
+            channel_id=456,
+        ),
+        "server_anniversary": AnnouncementSurfaceSettings(
+            guild_id=1,
+            surface_kind="server_anniversary",
+            channel_id=999,
+        ),
+        "recurring_event": AnnouncementSurfaceSettings(
+            guild_id=1,
+            surface_kind="recurring_event",
+            channel_id=777,
+        ),
+    }
+
+
 def _recurring_events() -> tuple[RecurringCelebration, ...]:
     return tuple(
         RecurringCelebration(
@@ -114,16 +138,27 @@ def _recurring_events() -> tuple[RecurringCelebration, ...]:
 
 def test_studio_and_setup_embeds_stay_within_discord_limits() -> None:
     settings = _settings()
+    announcement_surfaces = _surfaces()
     guild = SimpleNamespace(created_at=datetime(2020, 3, 25, tzinfo=UTC))
     server_anniversary = _server_anniversary()
     recurring_events = _recurring_events()
 
     embeds = [
-        build_setup_embed(settings, note="Saved."),
-        build_media_tools_embed(settings, note="Validated."),
-        build_message_template_embed(settings, section="home", guild=guild),
+        build_setup_embed(settings, announcement_surfaces, note="Saved."),
+        build_media_tools_embed(
+            settings,
+            announcement_surfaces=announcement_surfaces,
+            note="Validated.",
+        ),
         build_message_template_embed(
             settings,
+            announcement_surfaces=announcement_surfaces,
+            section="home",
+            guild=guild,
+        ),
+        build_message_template_embed(
+            settings,
+            announcement_surfaces=announcement_surfaces,
             section="birthday",
             guild=guild,
             server_anniversary=server_anniversary,
@@ -131,6 +166,7 @@ def test_studio_and_setup_embeds_stay_within_discord_limits() -> None:
         ),
         build_message_template_embed(
             settings,
+            announcement_surfaces=announcement_surfaces,
             section="birthday_dm",
             guild=guild,
             server_anniversary=server_anniversary,
@@ -138,6 +174,7 @@ def test_studio_and_setup_embeds_stay_within_discord_limits() -> None:
         ),
         build_message_template_embed(
             settings,
+            announcement_surfaces=announcement_surfaces,
             section="anniversary",
             guild=guild,
             server_anniversary=server_anniversary,
@@ -145,6 +182,7 @@ def test_studio_and_setup_embeds_stay_within_discord_limits() -> None:
         ),
         build_message_template_embed(
             settings,
+            announcement_surfaces=announcement_surfaces,
             section="server_anniversary",
             guild=guild,
             server_anniversary=server_anniversary,
@@ -152,6 +190,7 @@ def test_studio_and_setup_embeds_stay_within_discord_limits() -> None:
         ),
         build_message_template_embed(
             settings,
+            announcement_surfaces=announcement_surfaces,
             section="events",
             guild=guild,
             server_anniversary=server_anniversary,
@@ -159,6 +198,7 @@ def test_studio_and_setup_embeds_stay_within_discord_limits() -> None:
         ),
         build_message_template_embed(
             settings,
+            announcement_surfaces=announcement_surfaces,
             section="help",
             guild=guild,
             server_anniversary=server_anniversary,
@@ -204,6 +244,7 @@ def test_admin_status_and_info_embeds_stay_within_discord_limits() -> None:
         _build_dry_run_status_embed(
             readiness,
             _settings(),
+            announcement_surfaces=_surfaces(),
             kind="birthday_announcement",
             channel_id=123,
             preview_member_count=2,
@@ -215,6 +256,7 @@ def test_admin_status_and_info_embeds_stay_within_discord_limits() -> None:
         _build_recurring_event_list_embed(list(_recurring_events())),
         build_server_anniversary_control_embed(
             _settings(),
+            announcement_surfaces=_surfaces(),
             guild=SimpleNamespace(created_at=datetime(2020, 3, 25, tzinfo=UTC)),
             celebration=_server_anniversary(),
         ),
@@ -225,7 +267,11 @@ def test_admin_status_and_info_embeds_stay_within_discord_limits() -> None:
 
 
 def test_help_section_splits_placeholder_reference_into_multiple_fields() -> None:
-    embed = build_message_template_embed(_settings(), section="help")
+    embed = build_message_template_embed(
+        _settings(),
+        announcement_surfaces=_surfaces(),
+        section="help",
+    )
 
     assert len(embed.fields) >= 4
     _assert_embed_within_limits(embed)

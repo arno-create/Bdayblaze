@@ -429,9 +429,13 @@ class BirthdaySchedulerService:
 
         sent_event_ids: list[int] = []
         skipped_event_ids_by_code: dict[str, list[int]] = {}
+        assume_all_delivered = not result.delivered_user_ids and not result.skipped_user_ids
         for event in batch_events:
             if event.user_id is None:
                 skipped_event_ids_by_code.setdefault("missing_user_id", []).append(event.id)
+                continue
+            if assume_all_delivered:
+                sent_event_ids.append(event.id)
                 continue
             if event.user_id in result.skipped_user_ids:
                 skipped_event_ids_by_code.setdefault(

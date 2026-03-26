@@ -1,30 +1,60 @@
 from __future__ import annotations
 
-from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 
 from bdayblaze.domain.media_validation import mark_validated_direct_media_url
-from bdayblaze.domain.models import GuildSettings
+from bdayblaze.domain.models import (
+    AnnouncementSurfaceSettings,
+    GuildSettings,
+)
 from bdayblaze.services.errors import ValidationError
 from bdayblaze.services.settings_service import SettingsService
 
 
 class FakeSettingsRepository:
-    def __init__(self, settings: GuildSettings | None = None) -> None:
+    def __init__(
+        self,
+        settings: GuildSettings | None = None,
+        *,
+        surfaces: dict[str, AnnouncementSurfaceSettings] | None = None,
+    ) -> None:
         self.settings = settings
+        self.surfaces = surfaces or {}
         self.saved: GuildSettings | None = None
+        self.saved_surface: AnnouncementSurfaceSettings | None = None
         self.timezone_refresh_calls: list[tuple[int, str]] = []
 
     async def fetch_guild_settings(self, guild_id: int) -> GuildSettings | None:
         assert self.settings is None or self.settings.guild_id == guild_id
         return self.settings
 
+    async def list_guild_announcement_surfaces(
+        self,
+        guild_id: int,
+    ) -> dict[str, AnnouncementSurfaceSettings]:
+        return {
+            kind: surface
+            for kind, surface in self.surfaces.items()
+            if surface.guild_id == guild_id
+        }
+
     async def upsert_guild_settings(self, settings: GuildSettings) -> GuildSettings:
         self.saved = settings
         self.settings = settings
         return settings
+
+    async def upsert_guild_announcement_surface(
+        self,
+        surface: AnnouncementSurfaceSettings,
+    ) -> AnnouncementSurfaceSettings:
+        self.saved_surface = surface
+        self.surfaces[surface.surface_kind] = surface
+        return surface
+
+    async def delete_guild_announcement_surface(self, guild_id: int, surface_kind: str) -> None:
+        self.surfaces.pop(surface_kind, None)
 
     async def refresh_timezone_bound_schedules(
         self,
@@ -120,14 +150,28 @@ async def test_settings_service_saves_announcement_theme() -> None:
 
 
 @pytest.mark.asyncio
+async def test_settings_service_saves_global_celebration_behavior() -> None:
+    repository = FakeSettingsRepository(GuildSettings.default(1))
+    service = SettingsService(repository)  # type: ignore[arg-type]
+
+    saved = await service.update_settings(
+        FakeGuild(1),  # type: ignore[arg-type]
+        celebration_mode="party",
+    )
+
+    assert saved.celebration_mode == "party"
+
+
+@pytest.mark.asyncio
 async def test_settings_service_rejects_invalid_studio_media_url() -> None:
     repository = FakeSettingsRepository(GuildSettings.default(1))
     service = SettingsService(repository)  # type: ignore[arg-type]
 
     with pytest.raises(ValidationError, match="must use HTTPS"):
-        await service.update_settings(
+        await service.update_announcement_surface(
             FakeGuild(1),  # type: ignore[arg-type]
-            announcement_image_url="http://example.com/banner.png",
+            surface_kind="birthday_announcement",
+            image_url="http://example.com/banner.png",
         )
 
 
@@ -137,9 +181,10 @@ async def test_settings_service_accepts_signed_extensionless_media_url() -> None
     service = SettingsService(repository)  # type: ignore[arg-type]
 
     with pytest.raises(ValidationError, match="Media Tools first"):
-        await service.update_settings(
+        await service.update_announcement_surface(
             FakeGuild(1),  # type: ignore[arg-type]
-            announcement_image_url="https://cdn.example.com/assets/banner?sig=abc123",
+            surface_kind="birthday_announcement",
+            image_url="https://cdn.example.com/assets/banner?sig=abc123",
         )
 
 
@@ -153,10 +198,11 @@ async def test_settings_service_accepts_validated_extensionless_media_url() -> N
 
     saved = await service.update_validated_media(
         FakeGuild(1),  # type: ignore[arg-type]
+        surface_kind="birthday_announcement",
         announcement_image_url=validated_url,
     )
 
-    assert saved.announcement_image_url == validated_url
+    assert saved.image_url == validated_url
 
 
 @pytest.mark.asyncio
@@ -167,6 +213,7 @@ async def test_settings_service_rejects_unvalidated_extensionless_media_url() ->
     with pytest.raises(ValidationError, match="Media Tools first"):
         await service.update_validated_media(
             FakeGuild(1),  # type: ignore[arg-type]
+            surface_kind="birthday_announcement",
             announcement_image_url="https://cdn.example.com/assets/banner?sig=abc123",
         )
 
@@ -174,12 +221,16 @@ async def test_settings_service_rejects_unvalidated_extensionless_media_url() ->
 @pytest.mark.asyncio
 async def test_settings_service_preserves_validated_media_on_unrelated_update() -> None:
     repository = FakeSettingsRepository(
-        replace(
-            GuildSettings.default(1),
-            announcement_image_url=mark_validated_direct_media_url(
-                "https://cdn.example.com/assets/banner?sig=abc123"
-            ),
-        )
+        GuildSettings.default(1),
+        surfaces={
+            "birthday_announcement": AnnouncementSurfaceSettings(
+                guild_id=1,
+                surface_kind="birthday_announcement",
+                image_url=mark_validated_direct_media_url(
+                    "https://cdn.example.com/assets/banner?sig=abc123"
+                ),
+            )
+        },
     )
     service = SettingsService(repository)  # type: ignore[arg-type]
 
@@ -189,7 +240,7 @@ async def test_settings_service_preserves_validated_media_on_unrelated_update() 
     )
 
     assert saved.announcement_theme == "cute"
-    assert saved.announcement_image_url is not None
+    assert repository.surfaces["birthday_announcement"].image_url is not None
 
 
 @pytest.mark.asyncio
@@ -197,10 +248,11 @@ async def test_settings_service_rejects_obvious_non_image_media_url() -> None:
     repository = FakeSettingsRepository(GuildSettings.default(1))
     service = SettingsService(repository)  # type: ignore[arg-type]
 
-    with pytest.raises(ValidationError, match="unsupported file type"):
-        await service.update_settings(
+    with pytest.raises(ValidationError, match="unsupported \\.zip content"):
+        await service.update_announcement_surface(
             FakeGuild(1),  # type: ignore[arg-type]
-            announcement_thumbnail_url="https://example.com/file.zip",
+            surface_kind="birthday_announcement",
+            thumbnail_url="https://example.com/file.zip",
         )
 
 
@@ -236,6 +288,7 @@ async def test_settings_service_blocks_unsafe_media_url_keyword() -> None:
     with pytest.raises(ValidationError, match="blocked unsafe keywords"):
         await service.update_validated_media(
             FakeGuild(1),  # type: ignore[arg-type]
+            surface_kind="birthday_announcement",
             announcement_thumbnail_url="https://cdn.example.com/nsfw/banner.png",
         )
 
@@ -279,3 +332,34 @@ async def test_settings_service_refreshes_timezone_bound_schedules_when_timezone
 
     assert saved.default_timezone == "Europe/Berlin"
     assert repository.timezone_refresh_calls == [(1, "Europe/Berlin")]
+
+
+@pytest.mark.asyncio
+async def test_update_announcement_surface_deletes_sparse_row_when_all_overrides_are_cleared(
+) -> None:
+    repository = FakeSettingsRepository(
+        GuildSettings.default(1),
+        surfaces={
+            "anniversary": AnnouncementSurfaceSettings(
+                guild_id=1,
+                surface_kind="anniversary",
+                channel_id=456,
+                image_url="https://cdn.example.com/anniversary.gif",
+                thumbnail_url="https://cdn.example.com/anniversary-thumb.webp",
+            )
+        },
+    )
+    service = SettingsService(repository)  # type: ignore[arg-type]
+
+    saved = await service.update_announcement_surface(
+        FakeGuild(1),  # type: ignore[arg-type]
+        surface_kind="anniversary",
+        channel_id=None,
+        image_url=None,
+        thumbnail_url=None,
+    )
+
+    assert saved.channel_id is None
+    assert saved.image_url is None
+    assert saved.thumbnail_url is None
+    assert "anniversary" not in repository.surfaces

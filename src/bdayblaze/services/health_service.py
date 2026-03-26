@@ -4,8 +4,17 @@ from datetime import UTC, datetime, timedelta
 
 import discord
 
+from bdayblaze.domain.announcement_surfaces import (
+    resolve_announcement_surface,
+    surface_source_label,
+)
 from bdayblaze.domain.birthday_logic import validate_timezone
-from bdayblaze.domain.models import HealthIssue, SchedulerMetrics
+from bdayblaze.domain.models import (
+    AnnouncementSurfaceKind,
+    HealthIssue,
+    ResolvedAnnouncementSurface,
+    SchedulerMetrics,
+)
 from bdayblaze.repositories.postgres import PostgresRepository
 from bdayblaze.services.diagnostics import (
     build_channel_diagnostics,
@@ -46,6 +55,14 @@ class HealthService:
                 )
             )
         else:
+            announcement_surfaces = await self._repository.list_guild_announcement_surfaces(
+                guild.id
+            )
+            birthday_surface = resolve_announcement_surface(
+                guild.id,
+                "birthday_announcement",
+                announcement_surfaces,
+            )
             try:
                 validate_timezone(settings.default_timezone)
             except ValueError:
@@ -58,13 +75,18 @@ class HealthService:
                     )
                 )
 
-            for diagnostic in build_presentation_diagnostics(settings.presentation()):
+            for diagnostic in build_presentation_diagnostics(
+                birthday_surface.presentation(settings)
+            ):
                 issues.append(
                     HealthIssue(
                         severity=diagnostic.severity,
                         code=diagnostic.code,
                         summary=diagnostic.summary,
-                        action=diagnostic.action or "Review the saved celebration media settings.",
+                        action=(
+                            diagnostic.action or "Review the saved celebration media settings."
+                        )
+                        + f" {_surface_media_note(birthday_surface)}",
                     )
                 )
             for diagnostic in build_studio_content_diagnostics(settings):
@@ -80,7 +102,9 @@ class HealthService:
             for diagnostic in build_channel_diagnostics(
                 guild,
                 channel_id=(
-                    settings.announcement_channel_id if settings.announcements_enabled else None
+                    birthday_surface.channel.effective_value
+                    if settings.announcements_enabled
+                    else None
                 ),
                 label="announcement",
             ):
@@ -92,16 +116,23 @@ class HealthService:
                             summary=diagnostic.summary,
                             action=(
                                 diagnostic.action or "Review the configured announcement channel."
-                            ),
+                            )
+                            + f" {_surface_channel_note(birthday_surface)}",
                         )
                     )
 
-            anniversary_channel_id = (
-                settings.anniversary_channel_id or settings.announcement_channel_id
+            anniversary_surface = resolve_announcement_surface(
+                guild.id,
+                "anniversary",
+                announcement_surfaces,
             )
             for diagnostic in build_channel_diagnostics(
                 guild,
-                channel_id=anniversary_channel_id if settings.anniversary_enabled else None,
+                channel_id=(
+                    anniversary_surface.channel.effective_value
+                    if settings.anniversary_enabled
+                    else None
+                ),
                 label="anniversary",
             ):
                 if settings.anniversary_enabled:
@@ -112,7 +143,8 @@ class HealthService:
                             summary=diagnostic.summary,
                             action=(
                                 diagnostic.action or "Review the configured anniversary channel."
-                            ),
+                            )
+                            + f" {_surface_channel_note(anniversary_surface)}",
                         )
                     )
 
@@ -179,10 +211,20 @@ class HealthService:
                     )
                 if not celebration.enabled:
                     continue
-                effective_channel_id = celebration.channel_id or settings.announcement_channel_id
+                surface_kind: AnnouncementSurfaceKind = (
+                    "server_anniversary"
+                    if celebration.celebration_kind == "server_anniversary"
+                    else "recurring_event"
+                )
+                resolved_surface = resolve_announcement_surface(
+                    guild.id,
+                    surface_kind,
+                    announcement_surfaces,
+                    event_channel_id=celebration.channel_id,
+                )
                 for diagnostic in build_channel_diagnostics(
                     guild,
-                    channel_id=effective_channel_id,
+                    channel_id=resolved_surface.channel.effective_value,
                     label="recurring event",
                 ):
                     issues.append(
@@ -194,7 +236,11 @@ class HealthService:
                                 f"{diagnostic.summary}"
                             ),
                             action=(
-                                diagnostic.action or "Review the recurring event channel override."
+                                (
+                                    diagnostic.action
+                                    or "Review the recurring event channel override."
+                                )
+                                + f" {_surface_channel_note(resolved_surface)}"
                             ),
                         )
                     )
@@ -211,12 +257,15 @@ class HealthService:
                         )
                     )
             if server_anniversary is not None and server_anniversary.enabled:
-                effective_channel_id = (
-                    server_anniversary.channel_id or settings.announcement_channel_id
+                resolved_server_surface = resolve_announcement_surface(
+                    guild.id,
+                    "server_anniversary",
+                    announcement_surfaces,
+                    event_channel_id=server_anniversary.channel_id,
                 )
                 for diagnostic in build_channel_diagnostics(
                     guild,
-                    channel_id=effective_channel_id,
+                    channel_id=resolved_server_surface.channel.effective_value,
                     label="server anniversary",
                 ):
                     issues.append(
@@ -225,8 +274,11 @@ class HealthService:
                             code=f"server_anniversary_{diagnostic.code}",
                             summary=f"Server anniversary is blocked: {diagnostic.summary}",
                             action=(
-                                diagnostic.action
-                                or "Review the server-anniversary channel override."
+                                (
+                                    diagnostic.action
+                                    or "Review the server-anniversary channel override."
+                                )
+                                + f" {_surface_channel_note(resolved_server_surface)}"
                             ),
                         )
                     )
@@ -335,3 +387,35 @@ class HealthService:
             )
 
         return issues
+
+
+def _surface_channel_note(surface: ResolvedAnnouncementSurface) -> str:
+    configured = (
+        f"<#{surface.channel.configured_value}>"
+        if surface.channel.configured_value is not None
+        else "Not set"
+    )
+    if surface.channel.override_value is not None:
+        configured = (
+            f"Surface default {configured}; "
+            f"event override <#{surface.channel.override_value}>"
+        )
+    effective = (
+        f"<#{surface.channel.effective_value}>"
+        if surface.channel.effective_value is not None
+        else "Not configured"
+    )
+    return (
+        f"Configured route: {configured}. Effective route: {effective} "
+        f"({surface_source_label(surface.channel.source, surface_kind=surface.surface_kind)})."
+    )
+
+
+def _surface_media_note(surface: ResolvedAnnouncementSurface) -> str:
+    return (
+        "Configured and effective media are resolved per surface. "
+        "Image source: "
+        f"{surface_source_label(surface.image.source, surface_kind=surface.surface_kind)}. "
+        "Thumbnail source: "
+        f"{surface_source_label(surface.thumbnail.source, surface_kind=surface.surface_kind)}."
+    )

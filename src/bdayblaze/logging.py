@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from typing import Any
+from typing import Any, cast
 
 import structlog
 
@@ -24,7 +24,8 @@ def configure_logging(level: str) -> None:
 
 
 def get_logger(**fields: Any) -> structlog.stdlib.BoundLogger:
-    return structlog.get_logger("bdayblaze").bind(**fields)
+    logger = structlog.get_logger("bdayblaze").bind(**fields)
+    return cast(structlog.stdlib.BoundLogger, logger)
 
 
 def redact_identifier(value: int | str) -> str:

@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from bdayblaze.domain.timezones import timezone_examples_text
 
-LATE_CELEBRATION_NOTE = "We missed the exact moment, but not the celebration 🎂"
+LATE_CELEBRATION_NOTE = "We missed the exact moment, but not the celebration. 🎂"
 
 
 def validate_timezone(timezone_name: str) -> ZoneInfo:
