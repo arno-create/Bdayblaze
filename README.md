@@ -257,10 +257,11 @@ Important behavior:
 
 ### Static website
 
-- `docs/` is the canonical static-site root for Bdayblaze.
-- Deploy `docs/` to GitHub Pages or any static host that can publish a directory as-is.
-- `.nojekyll` is included for GitHub Pages compatibility.
-- `docs/config.js` contains the optional invite/support link constants.
+- The repository root is the canonical GitHub Pages site source for Bdayblaze.
+- GitHub Pages should be set to `Deploy from a branch`, branch `main`, folder `/(root)`.
+- The Pages-served files now live at repo root: `index.html`, `styles.css`, `config.js`, and `.nojekyll`.
+- Root-relative deployment keeps the site unambiguous for GitHub Pages project pages like `/Bdayblaze/`.
+- `config.js` contains the optional invite/support link constants.
 - The Render bot service should not be used as the marketing-site host.
 
 ### Built-in health endpoints
@@ -325,7 +326,7 @@ The code can expose clearer startup state, but it cannot force Render to auto-de
 
 ## Website and legal
 
-- `docs/` contains the canonical repo-managed static landing page bundle with no build step.
+- The repo root contains the canonical GitHub Pages landing page bundle with no build step.
 - `LICENSE` ships Apache 2.0 for the project.
 - `NOTICE` keeps project attribution alongside the license.
 - AI-generated cake/card rendering is intentionally not part of this release candidate yet.

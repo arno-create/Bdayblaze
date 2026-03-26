@@ -39,7 +39,7 @@ def test_http_health_root_page_explains_runtime_surface() -> None:
     page = server._build_root_page()
 
     assert "Bdayblaze bot runtime" in page
-    assert "docs/" in page
+    assert "repository root" in page
     assert "/readyz" in page
 
 

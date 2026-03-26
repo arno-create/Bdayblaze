@@ -262,6 +262,6 @@ HTTP endpoints:
 
 ## Public site boundary
 
-- The public landing page is a separate static bundle rooted at `docs/`.
+- The public landing page is a separate static bundle rooted at the repository root for GitHub Pages.
 - The bot runtime exposes `/livez`, `/readyz`, and `/healthz`; it is not the public marketing-site host.
 - Keeping the public site static and repo-contained avoids adding a second backend surface for a lightweight release site.

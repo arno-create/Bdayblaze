@@ -1,4 +1,4 @@
-# Bot runtime only. The public landing page lives in docs/ and should be deployed as a static site.
+# Bot runtime only. The public landing page is published separately from GitHub Pages main/(root).
 services:
   - type: web
     name: bdayblaze

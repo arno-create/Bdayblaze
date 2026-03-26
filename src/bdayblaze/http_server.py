@@ -242,8 +242,8 @@ class HttpHealthServer:
           public static website.
         </p>
         <p>
-          Deploy the static landing page from the repository's <code>docs/</code> directory to
-          GitHub Pages or another static host.
+          GitHub Pages should publish the repository root so the static landing page and its
+          assets are served from the same source of truth.
         </p>
         <ul>
           <li><a href="/livez">/livez</a> for basic process liveness.</li>
