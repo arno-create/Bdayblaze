@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bdayblaze Privacy Policy</title>
+    <meta
+      name="description"
+      content="Public privacy policy for Bdayblaze, the Discord birthday bot with server-scoped storage and private admin tooling."
+    />
+    <meta name="theme-color" content="#1a0908" />
+    <link rel="canonical" href="https://arno-create.github.io/Bdayblaze/privacy/" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Manrope:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="../styles.css" />
+    <script defer src="../site.js"></script>
+  </head>
+  <body class="site-privacy">
+    <a class="skip-link" href="#main-content">Skip to content</a>
+
+    <div class="ambient ambient-top" aria-hidden="true"></div>
+    <div class="ambient ambient-left" aria-hidden="true"></div>
+    <div class="ambient ambient-right" aria-hidden="true"></div>
+
+    <header class="site-header">
+      <div class="shell header-inner">
+        <a class="brand-lockup" href="../" aria-label="Bdayblaze home">
+          <img
+            src="../assets/logo.jpg"
+            alt="Bdayblaze logo"
+            width="1024"
+            height="1024"
+            decoding="async"
+          />
+          <span>Bdayblaze</span>
+        </a>
+
+        <div class="header-actions">
+          <a class="button button-ghost" href="../">Website</a>
+          <a
+            class="button button-primary"
+            href="https://discord.com/oauth2/authorize?client_id=1485920716573380660"
+            target="_blank"
+            rel="noreferrer"
+            >Install</a
+          >
+        </div>
+      </div>
+    </header>
+
+    <main class="policy-main" id="main-content">
+      <div class="shell">
+        <section class="policy-hero" data-reveal>
+          <p class="eyebrow">Bdayblaze privacy policy</p>
+          <h1>Clear privacy rules for a Discord bot that is designed to stay scoped and practical.</h1>
+          <p class="policy-copy">
+            Bdayblaze stores birthday information per server membership, keeps admin tooling
+            private by default, and avoids Message Content intent. This page summarizes what the
+            bot stores, how it is used, and which controls members and admins have.
+          </p>
+          <div class="policy-actions">
+            <a class="button button-secondary" href="../">Back to website</a>
+            <a
+              class="button button-ghost"
+              href="https://github.com/arno-create/Bdayblaze/blob/main/PRIVACY.md"
+              target="_blank"
+              rel="noreferrer"
+              >Markdown source</a
+            >
+          </div>
+        </section>
+
+        <section class="policy-grid" data-reveal aria-label="Privacy highlights">
+          <article class="policy-card">
+            <h3>Server-scoped storage</h3>
+            <p>Birthday records are stored for the current Discord server, not as a cross-server global profile.</p>
+          </article>
+          <article class="policy-card">
+            <h3>Minimal collection</h3>
+            <p>The core record is month, day, optional year, optional timezone override, and a visibility setting.</p>
+          </article>
+          <article class="policy-card">
+            <h3>Private admin surfaces</h3>
+            <p>Setup, Studio, previews, analytics, health, and import/export flows are private to the admin using them.</p>
+          </article>
+          <article class="policy-card">
+            <h3>No Message Content intent</h3>
+            <p>Bdayblaze does not rely on Message Content intent for the feature set described on this site.</p>
+          </article>
+        </section>
+
+        <section class="policy-section" data-reveal>
+          <h2>What Bdayblaze stores</h2>
+          <p class="policy-copy">
+            For birthday records, Bdayblaze stores the birthday month and day, an optional birth
+            year, an optional timezone override, and a server-scoped visibility choice. If a
+            server uses tracked member anniversaries, the bot may also store compact anniversary
+            data needed for that feature.
+          </p>
+          <p class="policy-copy">
+            The bot can also store server settings, Celebration Studio configuration, recurring
+            event definitions, compact celebration history, Birthday Capsule wishes, surprise
+            reward state, and lightweight analytics or scheduler state required to run the product.
+          </p>
+        </section>
+
+        <section class="policy-section" data-reveal>
+          <h2>What stays private</h2>
+          <ul class="policy-list">
+            <li>Birthday visibility is server-scoped, with <code>private</code> and <code>server_visible</code> modes.</li>
+            <li>Birth year is optional and hidden by default in normal member-facing browse flows.</li>
+            <li>Birthday Capsule wishes stay private until the target member's birthday window opens.</li>
+            <li>Admin setup, Studio, preview, analytics, health, import, and export flows stay private to the admin using them.</li>
+          </ul>
+        </section>
+
+        <section class="policy-section" data-reveal>
+          <h2>How quests, timeline, and surprises work</h2>
+          <p class="policy-copy">
+            Birthday Quests can use wish progress, optional check-ins, and reactions on the shared
+            birthday announcement post. Reaction quests store compact celebration-level totals tied
+            to the announcement message, not per-reactor identity records.
+          </p>
+          <p class="policy-copy">
+            Timeline history stores compact celebration metadata such as counts, quest completion,
+            and reward state. Birthday Surprises remain compact reward records. Nitro concierge is
+            manual admin follow-up only; Bdayblaze does not buy, gift, or deliver Nitro.
+          </p>
+        </section>
+
+        <section class="policy-section" data-reveal>
+          <h2>Logging, media validation, and safety</h2>
+          <p class="policy-copy">
+            Bdayblaze is designed to avoid logging raw birth dates, raw birth years, raw wish text,
+            raw blocked Studio content, or raw blocked media URLs in normal operational logs.
+          </p>
+          <p class="policy-copy">
+            Media validation can make short outbound checks for admin-supplied image URLs so the
+            bot can distinguish direct media from webpages, unsupported files, or unsafe links.
+            The bot does not perform image-content moderation or vision scanning.
+          </p>
+          <p class="policy-copy">
+            Servers can optionally enable a Studio safety audit channel. When enabled, it logs only
+            minimal metadata such as actor, surface, field names, blocked category, and timestamp.
+          </p>
+        </section>
+
+        <section class="policy-section" data-reveal>
+          <h2>Imports, exports, and deletion</h2>
+          <p class="policy-copy">
+            CSV import and export are scoped to the current server and remain private to admins.
+            Export includes only the fields required for bot operation: user id, birthday month and
+            day, optional birth year, timezone override, and visibility.
+          </p>
+          <p class="policy-copy">
+            Members can delete their own birthday record with <code>/birthday remove</code>. Admins
+            can remove records privately with <code>/birthday member remove</code>. Exported CSV
+            files should be treated as personal data by the server administrators who request them.
+          </p>
+        </section>
+
+        <section class="policy-section" data-reveal>
+          <h2>What Bdayblaze does not do</h2>
+          <ul class="policy-list">
+            <li>It does not build a global birthday identity across servers.</li>
+            <li>It does not use Message Content intent for the release surface described here.</li>
+            <li>It does not store individual reactor identities for reaction quests.</li>
+            <li>It does not run an automated Nitro purchase, payment, or gifting workflow.</li>
+            <li>It does not include AI-generated birthday cakes or cards in this release surface.</li>
+          </ul>
+        </section>
+      </div>
+    </main>
+
+    <footer class="site-footer">
+      <div class="shell footer-grid">
+        <div>
+          <a class="brand-lockup footer-brand" href="../" aria-label="Bdayblaze home">
+            <img
+              src="../assets/logo.jpg"
+              alt="Bdayblaze logo"
+              width="1024"
+              height="1024"
+              loading="lazy"
+              decoding="async"
+            />
+            <span>Bdayblaze</span>
+          </a>
+          <p class="footer-copy">Public privacy page for the Bdayblaze release site and repository.</p>
+        </div>
+
+        <div>
+          <p class="footer-heading">Links</p>
+          <div class="footer-links">
+            <a href="../">Website</a>
+            <a href="https://github.com/arno-create/Bdayblaze" target="_blank" rel="noreferrer">GitHub</a>
+            <a href="https://discord.com/servers/inevitable-friendship-1322933864360050688" target="_blank" rel="noreferrer">Support</a>
+          </div>
+        </div>
+
+        <div>
+          <p class="footer-heading">More</p>
+          <div class="footer-links">
+            <a href="https://arno-create.github.io/babblebox-bot/" target="_blank" rel="noreferrer">Babblebox</a>
+            <a href="https://x.com/arno__if" target="_blank" rel="noreferrer">X</a>
+            <a href="https://instagram.com/arno.if" target="_blank" rel="noreferrer">Instagram</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="shell footer-meta">
+        <p>Copyright <span data-year></span> Arno Create</p>
+        <p>Canonical public site entrypoint: root index.html on GitHub Pages.</p>
+      </div>
+    </footer>
+  </body>
+</html>

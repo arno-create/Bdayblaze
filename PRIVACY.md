@@ -1,153 +1,120 @@
-# Privacy and Threat Notes
+# Bdayblaze Privacy Policy
 
-## Data minimization
+Bdayblaze is a Discord birthday bot built around server-scoped storage, private admin tooling, and low-noise celebration features. This document explains what the bot stores and how that data is used.
 
-- Birthdays are stored per guild membership, not globally across servers.
-- Stored birthday data is limited to:
-  - month
-  - day
-  - optional year
-  - optional timezone override
-  - server-scoped visibility choice
-- Join anniversaries are tracked only when the bot has a reliable join timestamp through birthday/admin flows or explicit anniversary sync.
-- Birthday Capsule wishes are stored per guild only and reveal on that guild's birthday celebration day.
-- Birthday Quest reactions store only compact per-celebration reaction totals tied to the shared birthday announcement message.
-- Timeline rows store compact celebration metadata such as counts, quest completion, and reward state.
-- No message content is collected.
-- No activity or inactivity tracking is performed in this pass.
+The public website version of this policy lives at [https://arno-create.github.io/Bdayblaze/privacy/](https://arno-create.github.io/Bdayblaze/privacy/).
 
-## Visibility model
+## What Bdayblaze stores
 
-- `private`: visible to the member and admins only.
-- `server_visible`: visible in standard birthday browse commands for that server.
+For each saved birthday record, Bdayblaze stores:
+
+- birthday month
+- birthday day
+- optional birth year
+- optional timezone override
+- server-scoped visibility choice
+
+If a server uses other product surfaces, Bdayblaze may also store:
+
+- guild settings for birthday, anniversary, and Studio behavior
+- Birthday Capsule wishes for the current server
+- compact Birthday Quest progress tied to an active celebration
+- compact Timeline history and surprise reward state
+- tracked anniversary and recurring event configuration
+- scheduler and delivery state required to run the bot reliably
+
+## Server scope and visibility
+
+- Birthday data is stored per guild membership, not as a global cross-server profile.
 - Visibility is server-scoped.
-- Birth year is never shown in non-admin browse flows.
+- Visibility modes are:
+  - `private`: visible to the member and admins only
+  - `server_visible`: visible in normal birthday browse commands for that server
+- Birth year is optional and hidden by default in non-admin browse flows.
 
-## Logging rules
+## Birthday Capsules, Quests, Timeline, and Surprises
 
-- Do not log raw birth dates or birth years.
-- Do not log raw custom message bodies or templates.
-- Do not log raw Birthday Capsule wish text or raw wish links.
-- Do not log raw blocked Studio/admin payloads.
-- Prefer internal IDs, status codes, and aggregate diagnostics over sensitive content.
+- Birthday Capsule wishes are stored per guild and stay private until the target member's birthday window opens.
+- Birthday Quests can use wish progress, optional check-ins, and reactions on the shared birthday announcement post.
+- Reaction quests store celebration-level totals tied to the announcement message. They do not store individual reactor identities.
+- Timeline history stores compact celebration metadata such as counts, quest completion, and reward state.
+- Birthday Surprises remain compact reward records.
+- Nitro concierge is manual admin follow-up only. Bdayblaze does not buy, gift, or deliver Nitro.
 
-## Studio and customization safety
+## Admin surfaces and privacy
 
-- Celebration Studio uses a strict placeholder whitelist.
-- There is no eval, Jinja, arbitrary attribute access, or raw embed JSON execution.
-- Saved Studio data stays compact: text fields, preset names, colors, channel IDs, and validated URLs.
-- Uploaded binaries are not stored in the database.
+The following flows are designed to stay private to the admin using them:
 
-### Media handling
+- `/birthday studio`
+- `/birthday setup`
+- `/birthday test-message`
+- `/birthday analytics`
+- `/birthday health`
+- `/birthday import`
+- `/birthday export`
+- `/birthday member ...`
 
-- Media URLs must use HTTPS and a public host.
-- The bot distinguishes direct-media URLs from normal webpages.
-- Unsupported media links are surfaced explicitly instead of being silently discarded.
-- Signed URLs, query-string URLs, and extensionless object-storage URLs may be accepted only when Media Tools validation succeeds.
-- Admin-triggered media validation uses a short, bounded outbound probe.
+These flows are intended for operator control, previewing, diagnostics, and maintenance rather than public server output.
+
+## Logging and safety
+
+Bdayblaze is designed to avoid logging raw sensitive celebration content in normal operational logs. The bot is built to avoid logging:
+
+- raw birth dates
+- raw birth years
+- raw Birthday Capsule wish text
+- raw wish links
+- raw blocked Studio or admin payloads
+- raw blocked media URLs
+
+Where possible, the bot prefers internal ids, status codes, field names, and compact diagnostics.
+
+## Media validation
+
+- Admin-supplied image URLs can be checked with short, bounded validation requests.
+- The goal is to distinguish direct media from webpages, unsupported files, or unsafe links before save.
 - The bot does not continuously fetch saved media in the background.
-- The bot does not perform image-content moderation.
-
-### Abuse protection scope
-
-Studio/admin save flows block obvious:
-
-- profanity or vulgarity
-- sexual / NSFW wording
-- hateful slurs
-- harassment-style threat wording
-- unsafe URL keywords and unsafe host patterns
-
-This is a deterministic rules layer, not full moderation. It is meant to catch obvious misuse, not replace human moderation or image scanning.
+- The bot does not perform image-content moderation or NSFW vision scanning.
 
 ## Optional Studio audit logging
 
-- Admins can optionally configure a Studio audit channel from `/birthday setup` -> `Studio safety`.
-- Audit logging is off by default.
-- When enabled, blocked Studio/admin attempts log only:
-  - actor
-  - surface
-  - field names
-  - blocked category
-  - timestamp
-- Raw blocked template text, raw blocked URLs, birth dates, and birth years are intentionally excluded.
-- Repeated identical blocked attempts are deduped for a short in-memory window to avoid spam.
+Servers can optionally enable a Studio safety audit channel.
 
-## User expectations
+When enabled, Bdayblaze logs only minimal metadata for blocked Studio or admin save attempts:
 
-- `/birthday view` exposes only the caller's own stored record unless an admin uses member-management commands.
-- `/birthday remove` deletes the caller's record for the current server.
-- `/birthday timeline` remains guild-scoped and visibility-aware.
-- `/birthday wish add|list|remove` only affects the current server and never shares wishes cross-server.
-- `/birthday quest status|check-in` remains guild-scoped and uses only celebration totals plus optional check-in state.
-- `/birthday today`, `/birthday next`, `/birthday upcoming`, `/birthday month`, `/birthday twins`, and `/birthday list` remain guild-scoped and visibility-aware.
-- `/birthday member ...`, `/birthday import`, `/birthday export`, `/birthday setup`, `/birthday studio`, `/birthday health`, and `/birthday test-message` are admin-oriented and private to the admin using them.
-- `/birthday analytics` and `/birthday surprise queue|fulfill` are admin-only and private to the admin using them.
-- `/birthday test-message` is preview-only and never posts a live celebration.
+- actor
+- surface
+- field names
+- blocked category
+- timestamp
 
-## Import and export
+The audit log intentionally excludes raw blocked template text, raw blocked URLs, birth dates, and birth years.
 
-- Birthday CSV import/export is scoped to the current server only.
-- Export includes only fields required for bot operation:
+## Import, export, and deletion
+
+- CSV import and export are scoped to the current server only.
+- Export delivery remains private to admins.
+- Export includes only the fields required for bot operation:
   - `user_id`
   - `month`
   - `day`
   - `birth_year`
   - `timezone_override`
   - `visibility`
-- Export delivery remains private to admins.
-- Import uses schema validation, size limits, row-numbered errors, and a preview-before-apply flow.
-- Exported CSV files should be treated as personal data.
+- Members can delete their own record with `/birthday remove`.
+- Admins can remove records privately with `/birthday member remove`.
+- Exported CSV files should be treated as personal data by the server administrators who request them.
 
-## Threat summary
+## What Bdayblaze does not do
 
-### Assets
+- It does not create a global birthday identity across servers.
+- It does not use Message Content intent for the release surface documented in this repository.
+- It does not store per-reactor identity for reaction quests.
+- It does not run an automated Nitro purchase or gifting workflow.
+- It does not include AI-generated birthday cards or cakes in this release surface.
 
-- Birthday records
-- Guild configuration
-- Tracked anniversary records
-- Recurring celebration definitions
-- Server-anniversary configuration
-- Celebration event queue
-- Announcement batch state
-- Bot token and database credentials
+## Contact and links
 
-### Primary risks
-
-- over-collection of personal data
-- birthday visibility leaking outside intended guild scope
-- unrevealed birthday wishes leaking before the celebration day
-- reaction quest state leaking more than compact celebration totals
-- duplicate or missed celebrations after restarts
-- stale channels or roles causing noisy failures
-- sensitive content leaking through logs, diagnostics, or exports
-
-### Mitigations
-
-- least-privilege intents and permissions
-- guild-scoped storage with privacy-first defaults
-- optional birth year and server-scoped visibility
-- private-by-default Birthday Capsules with per-guild moderation paths
-- shared-post reaction quests with debounced refresh and no per-reactor storage
-- durable event queue and persisted batch state for recovery
-- bounded stale-send recovery
-- centralized permission diagnostics and health reporting
-- minimal audit logging for blocked Studio/admin abuse attempts
-
-## Operational guidance
-
-- Restrict database access to the bot runtime and migration workflow.
-- Use environment variables or a secret manager for credentials.
-- Prefer pooled Postgres connections.
-- Treat exports, backups, and database snapshots as sensitive personal data.
-- Review who has admin access to import/export, member-management, and Studio flows.
-
-## Edge-case product decisions
-
-- Leap-day birthdays celebrate on February 28 in non-leap years.
-- If a member changes timezone during an active celebration, role-removal timing is preserved and the new timezone applies to future occurrences.
-- If a member leaves the server, announcements and DMs are skipped safely and role cleanup is attempted when possible.
-- If a stored birthday record is deleted, that member's celebration history is removed and queued wishes targeting them are removed.
-- Nitro concierge winners are records only. Delivery confirmation remains manual and auditable by admins.
-- AI-generated cards/cakes are intentionally not part of this release candidate.
-- If a crash happens after a send but before send state is persisted, the bot performs only a small bounded recovery scan. If the original message is gone or outside that window, one duplicate announcement can still occur.
+- Website: [Bdayblaze](https://arno-create.github.io/Bdayblaze/)
+- Repository: [GitHub](https://github.com/arno-create/Bdayblaze)
+- Support server: [Discord support server](https://discord.com/servers/inevitable-friendship-1322933864360050688)

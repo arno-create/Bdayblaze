@@ -3,321 +3,601 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Bdayblaze | Privacy-first Discord birthday celebrations</title>
+    <title>Bdayblaze | Premium Birthday Celebrations For Discord</title>
     <meta
       name="description"
-      content="Bdayblaze is a privacy-first Discord birthday bot with Birthday Capsules, Quests, Surprises, timeline profiles, and restart-safe delivery."
+      content="Bdayblaze brings polished birthday posts, Birthday Capsules, Quests, Surprises, Timeline cards, and private admin tooling to Discord servers."
     />
-    <meta name="theme-color" content="#c7662d" />
+    <meta name="theme-color" content="#1a0908" />
     <meta property="og:title" content="Bdayblaze" />
     <meta
       property="og:description"
-      content="Privacy-first Discord birthday celebrations with Capsules, Quests, Surprises, timeline profiles, and restart-safe delivery."
+      content="Premium, privacy-first birthday celebrations for Discord with Capsules, Quests, Timeline cards, and restart-safe operator tooling."
     />
     <meta property="og:type" content="website" />
-    <meta name="twitter:card" content="summary" />
+    <meta property="og:url" content="https://arno-create.github.io/Bdayblaze/" />
+    <meta
+      property="og:image"
+      content="https://arno-create.github.io/Bdayblaze/assets/banner.png"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Bdayblaze" />
+    <meta
+      name="twitter:description"
+      content="Premium, privacy-first birthday celebrations for Discord with Capsules, Quests, Timeline cards, and restart-safe operator tooling."
+    />
+    <meta
+      name="twitter:image"
+      content="https://arno-create.github.io/Bdayblaze/assets/banner.png"
+    />
+    <link rel="canonical" href="https://arno-create.github.io/Bdayblaze/" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=Space+Grotesk:wght@400;500;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Manrope:wght@400;500;600;700;800&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="./styles.css" />
-    <script defer src="./config.js"></script>
+    <script defer src="./site.js"></script>
   </head>
-  <body>
-    <div class="page-glow page-glow-left"></div>
-    <div class="page-glow page-glow-right"></div>
+  <body class="site-home">
+    <a class="skip-link" href="#main-content">Skip to content</a>
 
-    <header class="topbar-shell">
-      <div class="topbar">
-        <a class="brand" href="#top">Bdayblaze</a>
-        <nav class="topbar-links" aria-label="Primary">
+    <div class="ambient ambient-top" aria-hidden="true"></div>
+    <div class="ambient ambient-left" aria-hidden="true"></div>
+    <div class="ambient ambient-right" aria-hidden="true"></div>
+
+    <header class="site-header">
+      <div class="shell header-inner">
+        <a class="brand-lockup" href="./" aria-label="Bdayblaze home">
+          <img
+            src="./assets/logo.jpg"
+            alt="Bdayblaze logo"
+            width="1024"
+            height="1024"
+            decoding="async"
+          />
+          <span>Bdayblaze</span>
+        </a>
+
+        <nav class="site-nav" aria-label="Primary">
+          <a href="#showcase">Showcase</a>
           <a href="#features">Features</a>
-          <a href="#how-it-works">How it works</a>
-          <a href="#commands">Commands</a>
+          <a href="#operators">Operators</a>
           <a href="#privacy">Privacy</a>
         </nav>
+
+        <div class="header-actions">
+          <a
+            class="button button-ghost"
+            href="https://github.com/arno-create/Bdayblaze"
+            target="_blank"
+            rel="noreferrer"
+            >GitHub</a
+          >
+          <a
+            class="button button-primary"
+            href="https://discord.com/oauth2/authorize?client_id=1485920716573380660"
+            target="_blank"
+            rel="noreferrer"
+            >Install</a
+          >
+        </div>
       </div>
     </header>
 
-    <main id="top">
+    <main id="main-content">
       <section class="hero">
-        <div class="hero-grid shell">
-          <div class="hero-copy">
-            <p class="eyebrow">Release-grade birthday bot for Discord</p>
-            <h1>Warm birthday moments, built with privacy and operator trust in mind.</h1>
+        <div class="shell hero-layout">
+          <div class="hero-copy" data-reveal>
+            <p class="eyebrow">Premium birthday celebrations for Discord servers</p>
+            <h1>Birthday energy that feels crafted, not automated.</h1>
             <p class="hero-text">
-              Bdayblaze turns birthdays into polished Discord-native celebrations with private
-              Birthday Capsules, compact Birthday Quests, safe Birthday Surprises, and
-              restart-safe delivery that fits constrained hosting.
+              Bdayblaze turns a routine birthday bot into a polished celebration layer: Birthday
+              Capsules, Quests, Surprises, Timeline cards, and a private Studio that gives admins
+              real control without adding operational sprawl.
             </p>
+
             <div class="hero-actions">
               <a
                 class="button button-primary"
+                href="https://discord.com/oauth2/authorize?client_id=1485920716573380660"
+                target="_blank"
+                rel="noreferrer"
+                >Install Bdayblaze</a
+              >
+              <a
+                class="button button-secondary"
+                href="https://discord.com/servers/inevitable-friendship-1322933864360050688"
+                target="_blank"
+                rel="noreferrer"
+                >Join support server</a
+              >
+              <a
+                class="button button-ghost"
                 href="https://github.com/arno-create/Bdayblaze"
                 target="_blank"
                 rel="noreferrer"
                 >View repository</a
               >
-              <a
-                class="button button-secondary"
-                data-optional-link="invite"
-                href="#"
-                hidden
-                >Invite bot</a
-              >
-              <a
-                class="button button-secondary"
-                data-optional-link="support"
-                href="#"
-                hidden
-                >Support</a
-              >
             </div>
-            <ul class="hero-points">
-              <li>Server-scoped birthdays with privacy-first defaults</li>
-              <li>No Message Content intent, no Redis, no extra workers</li>
-              <li>Shared-post reaction quests without per-reactor storage</li>
+
+            <ul class="hero-signals" aria-label="Key product highlights">
+              <li>Server-scoped birthday data</li>
+              <li>No Message Content intent</li>
+              <li>Restart-safe scheduling</li>
             </ul>
           </div>
 
-          <div class="hero-panel">
-            <div class="hero-timeline">
-              <p class="card-label">Today celebration card</p>
-              <h2>Jamie timeline</h2>
-              <ul>
-                <li>Status: celebrating right now</li>
-                <li>Capsule: ready for public reveal</li>
-                <li>Quest wishes: 4/4</li>
-                <li>Quest reactions: 7/7</li>
-                <li>Nitro concierge: awaiting manual admin fulfillment</li>
-              </ul>
-            </div>
-            <div class="hero-note">
-              <p class="card-label">Late recovery wording</p>
-              <p class="quote">We missed the exact moment, but not the celebration.</p>
-              <p class="caption">
-                Recovery stays bounded, persisted, and operator-readable instead of turning into a
-                noisy retry system.
+          <div class="hero-stage" data-reveal>
+            <div class="hero-stage-glow" aria-hidden="true"></div>
+            <img
+              class="hero-banner"
+              src="./assets/banner.png"
+              alt="Bdayblaze banner with the mascot, party cake, gifts, balloons, and wordmark"
+              width="1536"
+              height="1024"
+              fetchpriority="high"
+              decoding="async"
+            />
+
+            <div class="hero-panel hero-panel-top">
+              <p class="panel-label">What ships with the bot</p>
+              <p>
+                Celebration Studio, Birthday Setup, Media Tools, Timeline cards, Quests,
+                Capsules, Surprises, analytics, and recovery-minded delivery.
               </p>
             </div>
+
+            <div class="hero-panel hero-panel-bottom">
+              <p class="panel-label">Why it feels calmer</p>
+              <ul>
+                <li>Admin surfaces stay private</li>
+                <li>Shared-post reaction quests avoid per-reactor storage</li>
+                <li>Safe media validation catches broken or unsafe links before save</li>
+              </ul>
+            </div>
           </div>
         </div>
       </section>
 
-      <section class="section shell" id="features">
-        <div class="section-heading">
-          <p class="eyebrow">Standout features</p>
-          <h2>Compact features with real product weight</h2>
-        </div>
-        <div class="feature-grid">
-          <article>
-            <h3>Birthday Capsules</h3>
-            <p>
-              Friends queue wishes ahead of time. Wishes stay hidden until the member birthday
-              window opens.
+      <section class="trust-strip shell" aria-label="Trust highlights" data-reveal>
+        <p>Privacy-first defaults</p>
+        <p>Private operator UX</p>
+        <p>Safe media validation</p>
+        <p>Lightweight on constrained hosting</p>
+        <p>Discord-native command surface</p>
+      </section>
+
+      <section class="section" id="showcase">
+        <div class="shell">
+          <div class="section-head" data-reveal>
+            <p class="eyebrow">Visual product showcase</p>
+            <h2>The product already looks like something admins can trust on day one.</h2>
+            <p class="section-copy">
+              Bdayblaze is strongest when its public moments and private controls feel equally
+              intentional. The core release surfaces are already there in Discord.
             </p>
+          </div>
+
+          <article class="showcase-row" data-reveal>
+            <div class="showcase-copy">
+              <p class="showcase-number">01</p>
+              <h3>Celebration Studio keeps the whole birthday experience under one roof.</h3>
+              <p>
+                Birthday announcements, DMs, anniversaries, shared visuals, capsules, quests,
+                surprises, and yearly events all stay inside a single private admin flow.
+              </p>
+              <ul class="detail-list">
+                <li>Shared visuals and previews stay close to the actual celebration copy.</li>
+                <li>Reset paths are explicit, so mistakes do not become hidden state.</li>
+                <li>Admins can tune the release feel without leaving Discord.</li>
+              </ul>
+            </div>
+            <figure class="browser-shot browser-shot-tall">
+              <div class="browser-chrome" aria-hidden="true">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+              <img
+                src="./assets/celebration_studio_panel.jpg"
+                alt="Bdayblaze Celebration Studio showing birthday announcements, DMs, anniversaries, shared visuals, quests, surprises, and preview controls"
+                width="572"
+                height="1024"
+                loading="lazy"
+                decoding="async"
+              />
+              <figcaption>
+                Celebration Studio is the main control surface for shaping live celebrations.
+              </figcaption>
+            </figure>
           </article>
-          <article>
-            <h3>Birthday Quests</h3>
-            <p>
-              Optional quest goals track revealed wishes, shared announcement reactions, and an
-              optional birthday check-in without broad activity monitoring.
-            </p>
+
+          <article class="showcase-row showcase-row-reverse" data-reveal>
+            <div class="showcase-copy">
+              <p class="showcase-number">02</p>
+              <h3>Birthday Setup handles routing, eligibility, and quiet operational details.</h3>
+              <p>
+                The setup flow is built for real server administration: channel routing,
+                timezones, membership rules, role toggles, anniversary handling, and safety
+                settings before anything goes public.
+              </p>
+              <ul class="detail-list">
+                <li>Birthday, anniversary, and DM behavior are visible from one panel.</li>
+                <li>Timezone defaults and role rules are part of the flow, not hidden config.</li>
+                <li>Studio safety and operator previews stay close to setup.</li>
+              </ul>
+            </div>
+            <figure class="browser-shot">
+              <div class="browser-chrome" aria-hidden="true">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+              <img
+                src="./assets/setup_panel.jpg"
+                alt="Bdayblaze Birthday Setup showing channel routing, eligibility rules, anniversary routing, timezone, and studio safety controls"
+                width="942"
+                height="1024"
+                loading="lazy"
+                decoding="async"
+              />
+              <figcaption>
+                Birthday Setup keeps routing, anti-noise controls, and safety in one place.
+              </figcaption>
+            </figure>
           </article>
-          <article>
-            <h3>Birthday Surprises</h3>
-            <p>
-              Compact, weighted reward selection with manual-only Nitro concierge follow-up and
-              clear admin audit state.
-            </p>
-          </article>
-          <article>
-            <h3>Timeline profiles</h3>
-            <p>
-              <code>/birthday timeline</code> shows countdowns, active celebration state, wishes,
-              quest progress, and compact history.
-            </p>
-          </article>
-          <article>
-            <h3>Media Tools</h3>
-            <p>
-              Direct media, webpage wrappers, unsupported files, and unsafe URLs are surfaced
-              explicitly so admins know why a save was accepted or blocked.
-            </p>
-          </article>
-          <article>
-            <h3>Admin analytics</h3>
-            <p>
-              Lightweight command-based analytics surface birthdays stored, wishes queued, quest
-              completions, surprise counts, and recovery issues without a dashboard backend.
-            </p>
+
+          <article class="showcase-row" data-reveal>
+            <div class="showcase-copy">
+              <p class="showcase-number">03</p>
+              <h3>Media Tools protects the final post before a bad link ever reaches your server.</h3>
+              <p>
+                Admins get clear feedback for direct media, webpage wrappers, unsupported files,
+                and unsafe URLs. Failed saves do not silently wipe the last working media entry.
+              </p>
+              <ul class="detail-list">
+                <li>Validation is explicit instead of a vague pass or fail.</li>
+                <li>
+                  Signed URLs and extensionless object links can still work when validation
+                  confirms them.
+                </li>
+                <li>Bad media stays an admin problem, not a broken public post.</li>
+              </ul>
+            </div>
+            <figure class="browser-shot">
+              <div class="browser-chrome" aria-hidden="true">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+              <img
+                src="./assets/media_tools_panel.png"
+                alt="Bdayblaze Media Tools showing saved media, validation states, and controls for editing or resetting image URLs"
+                width="619"
+                height="758"
+                loading="lazy"
+                decoding="async"
+              />
+              <figcaption>
+                Media Tools makes image safety and renderability understandable to operators.
+              </figcaption>
+            </figure>
           </article>
         </div>
       </section>
 
-      <section class="section shell storyband" id="how-it-works">
-        <div class="section-heading">
-          <p class="eyebrow">How it works</p>
-          <h2>Discord-native, restart-safe, and free-tier conscious</h2>
-        </div>
-        <div class="story-steps">
-          <article>
-            <span>1</span>
-            <h3>Members save birthdays privately</h3>
-            <p>Month and day are required, birth year is optional, and visibility stays guild-scoped.</p>
-          </article>
-          <article>
-            <span>2</span>
-            <h3>Admins configure Studio</h3>
-            <p>Routing, visuals, safety checks, and previews stay private to the operator.</p>
-          </article>
-          <article>
-            <span>3</span>
-            <h3>Scheduler claims durable work</h3>
-            <p>Announcements, DMs, capsule reveals, and role windows run from persisted event rows.</p>
-          </article>
-          <article>
-            <span>4</span>
-            <h3>Reaction goals refresh live</h3>
-            <p>Shared birthday posts can drive quest reactions through debounced refreshes only.</p>
-          </article>
+      <section class="section" id="features">
+        <div class="shell feature-layout">
+          <div class="section-head" data-reveal>
+            <p class="eyebrow">Signature features</p>
+            <h2>The bot is not just a reminder. It is a full celebration layer.</h2>
+            <p class="section-copy">
+              Bdayblaze is designed around moments members actually notice and controls admins
+              actually need.
+            </p>
+          </div>
+
+          <div class="signature-grid" data-reveal>
+            <article>
+              <h3>Birthday Capsules</h3>
+              <p>
+                Queue wishes privately ahead of time and reveal them on the birthday window, not
+                before.
+              </p>
+            </article>
+            <article>
+              <h3>Birthday Quests</h3>
+              <p>
+                Mix wishes, shared-post reaction goals, and optional check-ins without broad
+                activity tracking.
+              </p>
+            </article>
+            <article>
+              <h3>Birthday Surprises</h3>
+              <p>
+                Keep rewards compact, auditable, and server-safe, including manual-only Nitro
+                concierge follow-up.
+              </p>
+            </article>
+            <article>
+              <h3>Timeline Cards</h3>
+              <p>
+                Give members a single view for countdowns, active celebration state, and recent
+                history.
+              </p>
+            </article>
+            <article>
+              <h3>Analytics</h3>
+              <p>
+                Surface stored birthdays, wishes, quest progress, and reward activity from
+                Discord-native admin commands.
+              </p>
+            </article>
+            <article>
+              <h3>Recovery and Reliability</h3>
+              <p>
+                Persist events before side effects run, keep recovery bounded, and stay practical
+                on small hosting plans.
+              </p>
+            </article>
+          </div>
         </div>
       </section>
 
-      <section class="section shell" id="commands">
-        <div class="section-heading">
-          <p class="eyebrow">Canonical commands</p>
-          <h2>One coherent command surface</h2>
+      <section class="section" id="how-it-works">
+        <div class="shell">
+          <div class="section-head" data-reveal>
+            <p class="eyebrow">How it works</p>
+            <h2>Simple enough for members, controlled enough for admins.</h2>
+          </div>
+
+          <ol class="flow-list" data-reveal>
+            <li>
+              <span>1</span>
+              <div>
+                <h3>Members save birthdays once</h3>
+                <p>
+                  Month and day are required. Birth year is optional. Visibility stays scoped to
+                  the current server.
+                </p>
+              </div>
+            </li>
+            <li>
+              <span>2</span>
+              <div>
+                <h3>Admins shape the experience privately</h3>
+                <p>
+                  Studio, setup, previews, safety rules, analytics, and health checks remain
+                  operator-facing.
+                </p>
+              </div>
+            </li>
+            <li>
+              <span>3</span>
+              <div>
+                <h3>Bdayblaze schedules from real member time</h3>
+                <p>
+                  Announcements and celebration windows use each member&apos;s effective timezone
+                  and persisted event records.
+                </p>
+              </div>
+            </li>
+            <li>
+              <span>4</span>
+              <div>
+                <h3>The server gets a cleaner celebration moment</h3>
+                <p>
+                  Capsules unlock, quests progress, surprises stay compact, and recovery remains
+                  bounded after restarts.
+                </p>
+              </div>
+            </li>
+          </ol>
         </div>
-        <div class="command-layout">
-          <article>
-            <h3>Members</h3>
-            <ul>
-              <li><code>/birthday set</code>, <code>view</code>, <code>remove</code>, <code>privacy</code></li>
-              <li><code>/birthday today</code>, <code>next</code>, <code>upcoming</code>, <code>month</code>, <code>twins</code>, <code>list</code></li>
-              <li><code>/birthday wish add</code>, <code>list</code>, <code>remove</code></li>
-              <li><code>/birthday capsule preview</code></li>
-              <li><code>/birthday quest status</code>, <code>check-in</code></li>
-              <li><code>/birthday timeline</code></li>
+      </section>
+
+      <section class="section" id="operators">
+        <div class="shell operator-layout">
+          <div class="operator-copy" data-reveal>
+            <p class="eyebrow">Admin and operator angle</p>
+            <h2>Built for server teams that want polish without a mess behind the scenes.</h2>
+            <p class="section-copy">
+              The bot stays async-first and lightweight, but the product surface still feels
+              deliberate: previews before launch, reliable routing, safe media checks, analytics,
+              and role-aware setup that does not demand a web dashboard.
+            </p>
+
+            <div class="operator-points">
+              <article>
+                <h3>Private control surfaces</h3>
+                <p>
+                  `/birthday studio`, `/birthday setup`, `/birthday test-message`, `/birthday
+                  health`, and import/export flows stay private to the admin using them.
+                </p>
+              </article>
+              <article>
+                <h3>Low-noise media safety</h3>
+                <p>
+                  Unsafe or broken media is rejected clearly, and failed saves do not clobber the
+                  last working image state.
+                </p>
+              </article>
+              <article>
+                <h3>Production-minded by default</h3>
+                <p>
+                  No Message Content intent, restart-safe scheduling, bounded stale-send recovery,
+                  and health endpoints for hosted deployments.
+                </p>
+              </article>
+            </div>
+          </div>
+
+          <aside class="operator-aside" data-reveal>
+            <p class="panel-label">What makes the release feel trustworthy</p>
+            <ul class="aside-list">
+              <li>Server-scoped birthdays instead of a global profile</li>
+              <li>Optional birth year, hidden by default</li>
+              <li>Shared-post reaction totals instead of per-reactor tracking</li>
+              <li>Private previews before live announcements</li>
             </ul>
-          </article>
-          <article>
-            <h3>Admins</h3>
-            <ul>
-              <li><code>/birthday studio</code>, <code>setup</code>, <code>test-message</code>, <code>analytics</code>, <code>health</code></li>
-              <li><code>/birthday surprise queue</code>, <code>fulfill</code></li>
-              <li><code>/birthday member view</code>, <code>set</code>, <code>remove</code></li>
-              <li><code>/birthday anniversary settings</code>, <code>sync</code></li>
-              <li><code>/birthday event add</code>, <code>edit</code>, <code>list</code>, <code>remove</code></li>
-              <li><code>/birthday import</code>, <code>export</code></li>
-            </ul>
-          </article>
+
+            <div class="operator-links">
+              <a
+                class="text-link"
+                href="https://discord.com/servers/inevitable-friendship-1322933864360050688"
+                target="_blank"
+                rel="noreferrer"
+                >Support server</a
+              >
+              <a class="text-link" href="./privacy/">Read privacy policy</a>
+            </div>
+          </aside>
         </div>
       </section>
 
-      <section class="section shell privacy-split" id="privacy">
-        <div>
-          <p class="eyebrow">Privacy</p>
-          <h2>Personal data handled with restraint</h2>
-          <ul class="detail-list">
-            <li>Birthdays stay scoped to the current server and are never shared cross-server.</li>
-            <li>Birth year is optional and hidden by default.</li>
-            <li>Unrevealed wishes stay private until the celebration day.</li>
-            <li>Reaction quests store only celebration-level totals tied to the announcement post.</li>
-            <li>Deletion paths remain available through member and admin remove flows.</li>
-          </ul>
+      <section class="section" id="privacy">
+        <div class="shell privacy-layout">
+          <div class="section-head" data-reveal>
+            <p class="eyebrow">Privacy and trust</p>
+            <h2>Careful data handling without burying the product in legal fog.</h2>
+            <p class="section-copy">
+              Bdayblaze keeps birthdays scoped to the current server, avoids Message Content
+              intent, stores only compact quest and timeline state, and keeps admin tooling
+              private by default. For the full details, read the
+              <a class="inline-link" href="./privacy/">public privacy policy</a>.
+            </p>
+          </div>
+
+          <div class="privacy-grid" data-reveal>
+            <article>
+              <h3>Stored per server</h3>
+              <p>
+                Birthday month/day, optional birth year, optional timezone override, and a
+                server-scoped visibility choice.
+              </p>
+            </article>
+            <article>
+              <h3>Private where it matters</h3>
+              <p>
+                Birthday wishes reveal on the birthday window, and admin setup, Studio, previews,
+                analytics, health, and import/export flows stay private to admins.
+              </p>
+            </article>
+            <article>
+              <h3>Minimal tracking</h3>
+              <p>
+                Reaction quests use celebration-level totals tied to the shared announcement post.
+                No Message Content intent, no global profile, no automated Nitro gifting flow.
+              </p>
+            </article>
+          </div>
         </div>
-        <aside class="privacy-panel">
-          <p class="card-label">What Bdayblaze does not do</p>
-          <ul>
-            <li>No Message Content intent</li>
-            <li>No Jinja, eval, or arbitrary attribute access</li>
-            <li>No automated Nitro gifting or payment flow</li>
-            <li>No AI-generated cake or card system in this release</li>
-          </ul>
-        </aside>
       </section>
 
-      <section class="section shell trust-grid" id="trust">
-        <article>
-          <p class="eyebrow">Reliability</p>
-          <h3>Built for constrained hosting</h3>
-          <p>
-            Single-process async bot, Postgres-backed scheduling, bounded recovery work, and no
-            extra worker stack.
-          </p>
-        </article>
-        <article>
-          <p class="eyebrow">Operator clarity</p>
-          <h3>Diagnostics without a dashboard</h3>
-          <p>
-            Health endpoints, command-based analytics, and Studio diagnostics keep operators
-            informed without widening the architecture.
-          </p>
-        </article>
-        <article>
-          <p class="eyebrow">Pages source</p>
-          <h3>Published from repo root</h3>
-          <p>
-            GitHub Pages should publish <code>main / (root)</code> so this landing page and its
-            assets are served from one unambiguous location.
-          </p>
-        </article>
+      <section class="section section-cta">
+        <div class="shell cta-panel" data-reveal>
+          <div>
+            <p class="eyebrow">Launch Bdayblaze</p>
+            <h2>
+              Install the bot, shape the celebration, and make birthday moments feel worth waiting
+              for.
+            </h2>
+          </div>
+          <div class="cta-actions">
+            <a
+              class="button button-primary button-large"
+              href="https://discord.com/oauth2/authorize?client_id=1485920716573380660"
+              target="_blank"
+              rel="noreferrer"
+              >Install Bdayblaze</a
+            >
+            <a
+              class="button button-secondary button-large"
+              href="https://discord.com/servers/inevitable-friendship-1322933864360050688"
+              target="_blank"
+              rel="noreferrer"
+              >Support server</a
+            >
+            <a
+              class="button button-ghost button-large"
+              href="https://github.com/arno-create/Bdayblaze"
+              target="_blank"
+              rel="noreferrer"
+              >GitHub</a
+            >
+          </div>
+        </div>
       </section>
     </main>
 
-    <footer class="footer shell">
-      <div>
-        <p class="brand">Bdayblaze</p>
-        <p class="footer-copy">
-          Privacy-first birthday celebrations for Discord servers that want polish without
-          operational sprawl.
+    <footer class="site-footer">
+      <div class="shell footer-grid">
+        <div>
+          <a class="brand-lockup footer-brand" href="./" aria-label="Bdayblaze home">
+            <img
+              src="./assets/logo.jpg"
+              alt="Bdayblaze logo"
+              width="1024"
+              height="1024"
+              loading="lazy"
+              decoding="async"
+            />
+            <span>Bdayblaze</span>
+          </a>
+          <p class="footer-copy">
+            A polished Discord birthday bot for servers that care about operator clarity, privacy,
+            and celebration quality.
+          </p>
+        </div>
+
+        <div>
+          <p class="footer-heading">Product</p>
+          <div class="footer-links">
+            <a
+              href="https://discord.com/oauth2/authorize?client_id=1485920716573380660"
+              target="_blank"
+              rel="noreferrer"
+              >Install</a
+            >
+            <a
+              href="https://discord.com/servers/inevitable-friendship-1322933864360050688"
+              target="_blank"
+              rel="noreferrer"
+              >Support</a
+            >
+            <a href="https://github.com/arno-create/Bdayblaze" target="_blank" rel="noreferrer"
+              >GitHub</a
+            >
+            <a href="./privacy/">Privacy policy</a>
+          </div>
+        </div>
+
+        <div>
+          <p class="footer-heading">More from Arno Create</p>
+          <div class="footer-links">
+            <a
+              href="https://arno-create.github.io/babblebox-bot/"
+              target="_blank"
+              rel="noreferrer"
+              >Babblebox</a
+            >
+            <a href="https://x.com/arno__if" target="_blank" rel="noreferrer">X</a>
+            <a href="https://instagram.com/arno.if" target="_blank" rel="noreferrer"
+              >Instagram</a
+            >
+          </div>
+        </div>
+      </div>
+
+      <div class="shell footer-meta">
+        <p>Copyright <span data-year></span> Arno Create</p>
+        <p>
+          Canonical public site: repo root GitHub Pages bundle. Render serves the bot runtime and
+          health endpoints only.
         </p>
       </div>
-      <div class="footer-links">
-        <a href="https://github.com/arno-create/Bdayblaze" target="_blank" rel="noreferrer"
-          >Repository</a
-        >
-        <a data-optional-link="invite" href="#" hidden>Invite</a>
-        <a data-optional-link="support" href="#" hidden>Support</a>
-        <a href="https://github.com/arno-create/Bdayblaze/blob/main/PRIVACY.md" target="_blank" rel="noreferrer"
-          >Privacy policy</a
-        >
-      </div>
-      <p class="footer-copy">Copyright <span id="site-year"></span> Bdayblaze</p>
     </footer>
-
-    <script>
-      (() => {
-        const configured = window.BDAYBLAZE_SITE_CONFIG || {};
-        const optionalLinks = {
-          invite: typeof configured.inviteUrl === "string" ? configured.inviteUrl.trim() : "",
-          support: typeof configured.supportUrl === "string" ? configured.supportUrl.trim() : "",
-        };
-
-        for (const node of document.querySelectorAll("[data-optional-link]")) {
-          const key = node.getAttribute("data-optional-link");
-          if (!key) {
-            continue;
-          }
-          const href = optionalLinks[key] || "";
-          if (!href) {
-            node.hidden = true;
-            continue;
-          }
-          node.href = href;
-          node.hidden = false;
-          node.target = "_blank";
-          node.rel = "noreferrer";
-        }
-
-        const yearNode = document.getElementById("site-year");
-        if (yearNode) {
-          yearNode.textContent = String(new Date().getFullYear());
-        }
-      })();
-    </script>
   </body>
 </html>
