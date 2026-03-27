@@ -83,3 +83,41 @@ def test_recurring_event_inherits_route_and_uses_surface_thumbnail() -> None:
         == "https://cdn.example.com/recurring-thumb.webp"
     )
     assert resolved.thumbnail.source == "custom"
+
+
+def test_invalid_custom_media_does_not_silently_fall_back_to_birthday_defaults() -> None:
+    surfaces = _surfaces()
+    surfaces["anniversary"] = AnnouncementSurfaceSettings(
+        guild_id=1,
+        surface_kind="anniversary",
+        image_url="https://cdn.example.com/not-image.pdf",
+    )
+
+    resolved = resolve_announcement_surface(1, "anniversary", surfaces)
+
+    assert resolved.image.configured_value == "https://cdn.example.com/not-image.pdf"
+    assert resolved.image.effective_value == "https://cdn.example.com/not-image.pdf"
+    assert resolved.image.source == "custom"
+    assert (
+        resolved.thumbnail.effective_value
+        == "https://cdn.example.com/birthday-thumb.webp"
+    )
+    assert resolved.thumbnail.source == "inherited:birthday_announcement"
+
+
+def test_surface_inherits_only_the_fields_that_are_unset() -> None:
+    surfaces = _surfaces()
+    surfaces["server_anniversary"] = AnnouncementSurfaceSettings(
+        guild_id=1,
+        surface_kind="server_anniversary",
+        thumbnail_url="https://cdn.example.com/server-thumb.webp",
+    )
+
+    resolved = resolve_announcement_surface(1, "server_anniversary", surfaces)
+
+    assert resolved.channel.effective_value == 123
+    assert resolved.channel.source == "inherited:birthday_announcement"
+    assert resolved.image.effective_value == "https://cdn.example.com/birthday.gif"
+    assert resolved.image.source == "inherited:birthday_announcement"
+    assert resolved.thumbnail.effective_value == "https://cdn.example.com/server-thumb.webp"
+    assert resolved.thumbnail.source == "custom"

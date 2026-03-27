@@ -257,11 +257,15 @@ def test_media_tools_embed_explains_probe_results() -> None:
 
     assert fields["Updated"] == "No changes were saved. Your current saved media is unchanged."
     assert "Blocked saves never clear the currently saved media." in fields["Save protection"]
+    assert "Configured image:" in fields["Configured surface media"]
+    assert "Configured thumbnail:" in fields["Configured surface media"]
     assert "https://cdn.example.com/current-banner.gif" in fields["Configured surface media"]
     assert (
         "https://tenor.com/view/funny-cat-happy-birthday-123456"
         not in fields["Configured surface media"]
     )
+    assert "Effective image:" in fields["Effective live media"]
+    assert "Effective thumbnail:" in fields["Effective live media"]
     assert "https://tenor.com/view/funny-cat-happy-birthday-123456" in fields["Latest validation"]
     assert "Webpage link rejected" in values
     assert "Direct media accepted" in values
@@ -305,7 +309,26 @@ def test_setup_embed_shows_effective_source_for_inherited_surfaces() -> None:
     )
 
     assert "Inherited from Birthday announcement" in anniversary_field.value
+    assert "Configured image: Not set" in anniversary_field.value
+    assert "Effective thumbnail:" in anniversary_field.value
     assert "Event-level channel overrides still win" in server_field.value
+
+
+def test_message_template_embed_help_calls_out_anniversary_placeholder_validity() -> None:
+    embed = build_message_template_embed(
+        GuildSettings.default(1),
+        section="help",
+        guild=_guild(),  # type: ignore[arg-type]
+    )
+
+    placeholder_field = next(
+        field for field in embed.fields if field.name == "\U0001F389 Anniversary placeholder rules"
+    )
+
+    assert "{anniversary.years}" in placeholder_field.value
+    assert "Member anniversary only" in placeholder_field.value
+    assert "{server_anniversary.years_since_creation}" in placeholder_field.value
+    assert "Server anniversary only" in placeholder_field.value
 
 
 @pytest.mark.asyncio
@@ -333,4 +356,8 @@ async def test_studio_preview_uses_explicit_surface_selection() -> None:
     status_fields = {field.name: field.value for field in status_embed.fields}
 
     assert status_fields["Preview surface"] == "Member anniversary"
+    assert "Configured route:" in status_fields["Routing and mentions"]
+    assert "Effective route:" in status_fields["Routing and mentions"]
+    assert "Configured image:" in status_fields["Media and visuals"]
+    assert "Configured thumbnail:" in status_fields["Media and visuals"]
     assert "Happy anniversary" in (preview_embed.description or "")

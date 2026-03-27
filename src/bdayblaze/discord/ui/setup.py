@@ -3,6 +3,7 @@
 import asyncio
 from calendar import month_name
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Final, Literal, cast
 
 import discord
@@ -10,10 +11,10 @@ import discord
 from bdayblaze.discord.announcements import build_announcement_message
 from bdayblaze.discord.embed_budget import BudgetedEmbed, code_block_snippet, truncate_text
 from bdayblaze.domain.announcement_surfaces import (
+    describe_resolved_field,
     normalize_announcement_surfaces,
     resolve_announcement_surface,
     surface_label,
-    surface_source_label,
 )
 from bdayblaze.domain.announcement_template import (
     DEFAULT_ANNIVERSARY_TEMPLATE,
@@ -21,6 +22,7 @@ from bdayblaze.domain.announcement_template import (
     DEFAULT_DM_TEMPLATE,
     default_template_for_kind,
     preview_context_for_kind,
+    server_anniversary_years_since_creation,
     supported_placeholder_groups,
 )
 from bdayblaze.domain.announcement_theme import (
@@ -43,6 +45,7 @@ from bdayblaze.domain.models import (
     GuildSurpriseReward,
     RecurringCelebration,
     ResolvedAnnouncementSurface,
+    ResolvedSurfaceField,
 )
 from bdayblaze.domain.timezones import timezone_guidance
 from bdayblaze.logging import get_logger, redact_identifier
@@ -140,59 +143,46 @@ def _resolve_surface(
 
 
 def _surface_route_lines(surface: ResolvedAnnouncementSurface) -> tuple[str, str]:
-    configured = (
-        f"<#{surface.channel.configured_value}>"
-        if surface.channel.configured_value is not None
-        else "Inherited / not set"
-    )
-    if surface.channel.override_value is not None:
-        configured = (
-            f"Surface default {configured}; event override <#{surface.channel.override_value}>"
-        )
-    effective = (
-        f"<#{surface.channel.effective_value}>"
-        if surface.channel.effective_value is not None
-        else "Not configured"
-    )
-    return (
-        f"Configured route: {configured}",
-        (
-            "Effective route: "
-            f"{effective} "
-            f"({surface_source_label(surface.channel.source, surface_kind=surface.surface_kind)})"
-        ),
+    return describe_resolved_field(
+        surface.channel,
+        label="route",
+        surface_kind=surface.surface_kind,
+        value_formatter=lambda channel_id: f"<#{channel_id}>",
     )
 
 
 def _surface_media_lines(surface: ResolvedAnnouncementSurface) -> tuple[str, ...]:
     return (
-        _configured_media_line(surface.image.configured_value, label="Configured image"),
-        (
-            "Effective image: "
-            f"{_media_effective_label(surface.image.effective_value)} "
-            f"({surface_source_label(surface.image.source, surface_kind=surface.surface_kind)})"
-        ),
-        _configured_media_line(
-            surface.thumbnail.configured_value,
-            label="Configured thumbnail",
-        ),
-        (
-            "Effective thumbnail: "
-            f"{_media_effective_label(surface.thumbnail.effective_value)} "
-            f"({surface_source_label(surface.thumbnail.source, surface_kind=surface.surface_kind)})"
-        ),
+        *_surface_media_field_lines(surface.image, label="image", surface=surface),
+        *_surface_media_field_lines(surface.thumbnail, label="thumbnail", surface=surface),
     )
 
 
-def _configured_media_line(value: str | None, *, label: str) -> str:
-    return f"{label}: {'Custom' if value is not None else 'Inherited / not set'}"
+def _surface_media_field_lines(
+    field: ResolvedSurfaceField[str],
+    *,
+    label: Literal["image", "thumbnail"],
+    surface: ResolvedAnnouncementSurface,
+) -> tuple[str, str]:
+    return describe_resolved_field(
+        field,
+        label=label,
+        surface_kind=surface.surface_kind,
+        value_formatter=lambda value: _media_value_label(value, label=label),
+    )
 
 
-def _media_effective_label(value: str | None) -> str:
-    assessment = assess_media_url(value, label="Media")
+def _media_value_label(
+    value: str,
+    *,
+    label: str,
+    max_length: int = 72,
+) -> str:
+    assessment = assess_media_url(value, label=label.title())
     if assessment is None:
         return "Not set"
-    return assessment.status_label()
+    display_url = strip_validated_direct_media_marker(assessment.normalized_url)
+    return f"{assessment.status_label()} | {truncate_text(display_url or '', max_length)}"
 
 
 def _celebration_mode_label(mode: str) -> str:
@@ -392,7 +382,9 @@ def build_setup_embed(
             f"{_surface_route_lines(birthday_surface)[0]}\n"
             f"{_surface_route_lines(birthday_surface)[1]}\n"
             f"{_surface_media_lines(birthday_surface)[0]}\n"
-            f"{_surface_media_lines(birthday_surface)[1]}"
+            f"{_surface_media_lines(birthday_surface)[1]}\n"
+            f"{_surface_media_lines(birthday_surface)[2]}\n"
+            f"{_surface_media_lines(birthday_surface)[3]}"
         ),
         inline=False,
     )
@@ -433,7 +425,10 @@ def build_setup_embed(
             f"Member anniversaries: {_format_enabled(settings.anniversary_enabled)}\n"
             f"{_surface_route_lines(anniversary_surface)[0]}\n"
             f"{_surface_route_lines(anniversary_surface)[1]}\n"
+            f"{_surface_media_lines(anniversary_surface)[0]}\n"
             f"{_surface_media_lines(anniversary_surface)[1]}\n"
+            f"{_surface_media_lines(anniversary_surface)[2]}\n"
+            f"{_surface_media_lines(anniversary_surface)[3]}\n"
             "Model: tracked members only"
         ),
         inline=False,
@@ -443,7 +438,10 @@ def build_setup_embed(
         value=(
             f"{_surface_route_lines(server_surface)[0]}\n"
             f"{_surface_route_lines(server_surface)[1]}\n"
+            f"{_surface_media_lines(server_surface)[0]}\n"
             f"{_surface_media_lines(server_surface)[1]}\n"
+            f"{_surface_media_lines(server_surface)[2]}\n"
+            f"{_surface_media_lines(server_surface)[3]}\n"
             "Event-level channel overrides still win when one is saved."
         ),
         inline=False,
@@ -453,7 +451,10 @@ def build_setup_embed(
         value=(
             f"{_surface_route_lines(recurring_surface)[0]}\n"
             f"{_surface_route_lines(recurring_surface)[1]}\n"
+            f"{_surface_media_lines(recurring_surface)[0]}\n"
             f"{_surface_media_lines(recurring_surface)[1]}\n"
+            f"{_surface_media_lines(recurring_surface)[2]}\n"
+            f"{_surface_media_lines(recurring_surface)[3]}\n"
             "Individual yearly events can keep their own channel override or inherit this default."
         ),
         inline=False,
@@ -556,7 +557,6 @@ def build_media_tools_embed(
         announcement_surfaces,
         surface_kind,
     )
-    current_surface = _normalized_surfaces(settings, announcement_surfaces)[surface_kind]
     surface_title = surface_label(surface_kind)
     budget = BudgetedEmbed.create(
         title="Surface Route and Media",
@@ -578,11 +578,8 @@ def build_media_tools_embed(
     budget.add_line_fields(
         "Configured surface media",
         (
-            _media_state_line(current_surface.image_url, label=f"{surface_title} image"),
-            _media_state_line(
-                current_surface.thumbnail_url,
-                label=f"{surface_title} thumbnail",
-            ),
+            _surface_media_lines(resolved_surface)[0],
+            _surface_media_lines(resolved_surface)[2],
         ),
         inline=False,
     )
@@ -645,8 +642,10 @@ def build_media_tools_embed(
     budget.add_field(
         name="Reset behavior",
         value=(
-            "Clear image or Clear thumbnail removes only that override. Reset surface to "
-            "inherited clears this surface route, image, and thumbnail together."
+            "Clear image or Clear thumbnail removes only that override. On non-birthday "
+            "surfaces, the cleared field immediately inherits from Birthday announcement if a "
+            "default exists. Reset surface to inherited clears this surface route, image, and "
+            "thumbnail overrides together."
         ),
         inline=False,
     )
@@ -724,6 +723,10 @@ def build_message_template_embed(
                 f"Status: {_format_enabled(settings.announcements_enabled)}\n"
                 f"{_surface_route_lines(birthday_surface)[0]}\n"
                 f"{_surface_route_lines(birthday_surface)[1]}\n"
+                f"{_surface_media_lines(birthday_surface)[0]}\n"
+                f"{_surface_media_lines(birthday_surface)[1]}\n"
+                f"{_surface_media_lines(birthday_surface)[2]}\n"
+                f"{_surface_media_lines(birthday_surface)[3]}\n"
                 "Copy length: "
                 f"{len(settings.announcement_template or DEFAULT_ANNOUNCEMENT_TEMPLATE)} chars"
             ),
@@ -744,6 +747,10 @@ def build_message_template_embed(
                 f"Status: {_format_enabled(settings.anniversary_enabled)}\n"
                 f"{_surface_route_lines(anniversary_surface)[0]}\n"
                 f"{_surface_route_lines(anniversary_surface)[1]}\n"
+                f"{_surface_media_lines(anniversary_surface)[0]}\n"
+                f"{_surface_media_lines(anniversary_surface)[1]}\n"
+                f"{_surface_media_lines(anniversary_surface)[2]}\n"
+                f"{_surface_media_lines(anniversary_surface)[3]}\n"
                 "Model: tracked members only"
             ),
             inline=False,
@@ -753,7 +760,12 @@ def build_message_template_embed(
             value=(
                 f"Status: {_format_enabled(state.enabled)}\n"
                 f"Date: {_format_month_day(state.month, state.day)}\n"
+                f"{_surface_route_lines(server_surface)[0]}\n"
                 f"{_surface_route_lines(server_surface)[1]}\n"
+                f"{_surface_media_lines(server_surface)[0]}\n"
+                f"{_surface_media_lines(server_surface)[1]}\n"
+                f"{_surface_media_lines(server_surface)[2]}\n"
+                f"{_surface_media_lines(server_surface)[3]}\n"
                 "Source: "
                 f"{'Guild creation date' if state.use_guild_created_date else 'Custom date'}"
             ),
@@ -795,8 +807,12 @@ def build_message_template_embed(
             budget.add_line_fields(
                 "\U0001F4C5 Recurring annual events defaults",
                 (
+                    _surface_route_lines(recurring_surface)[0],
                     _surface_route_lines(recurring_surface)[1],
+                    _surface_media_lines(recurring_surface)[0],
                     _surface_media_lines(recurring_surface)[1],
+                    _surface_media_lines(recurring_surface)[2],
+                    _surface_media_lines(recurring_surface)[3],
                 ),
                 inline=False,
             )
@@ -829,15 +845,26 @@ def build_message_template_embed(
             inline=False,
         )
         budget.add_field(
+            name="\U0001F389 Anniversary placeholder rules",
+            value=(
+                "`{anniversary.years}` - Valid on: Member anniversary only.\n"
+                "`{server_anniversary.years_since_creation}` - Valid on: Server anniversary only.\n"
+                "`{event.name}` / `{event.date}` / `{event.kind}` - Valid on: Member "
+                "anniversary, Server anniversary, Recurring annual event."
+            ),
+            inline=False,
+        )
+        budget.add_field(
             name="\U0001F9ED Preview and reset notes",
             value=(
                 "Media Tools validates image and thumbnail URLs before save.\n"
                 "Signed, query-string, and extensionless URLs can work when validation proves "
                 "they are direct media assets.\n"
                 "Full preview is still the final Discord render check. It never pings members.\n"
-                "Reset copy restores the default template. Surface reset returns the current "
-                "route and media to inheritance. Global look covers theme, title, footer, "
-                "accent, and global celebration behavior."
+                "Reset copy restores the default template. Surface reset clears the current "
+                "route, image, and thumbnail overrides together, then inheritance applies only "
+                "where those fields are unset. Global look covers theme, title, footer, accent, "
+                "and global celebration behavior."
             ),
             inline=False,
         )
@@ -1048,20 +1075,6 @@ def _presentation_lines(
         *_global_look_lines(settings),
         *_surface_media_lines(surface),
     )
-
-
-def _media_state_line(
-    value: str | None,
-    *,
-    label: str,
-) -> str:
-    if value is None or not value.strip():
-        return f"{label}: Not set"
-    assessment = assess_media_url(value, label=label)
-    if assessment is None:
-        return f"{label}: Not set"
-    display_url = strip_validated_direct_media_marker(assessment.normalized_url)
-    return f"{label}: {assessment.status_label()} | {truncate_text(display_url or '', 72)}"
 
 
 def _media_validation_line(
@@ -3531,10 +3544,15 @@ class StudioMediaView(AdminPanelView):
         interaction: discord.Interaction,
         _: discord.ui.Button[StudioMediaView],
     ) -> None:
+        latest = await self.settings_service.get_settings(self.guild.id)
         latest_surfaces = await self.settings_service.get_announcement_surfaces(self.guild.id)
-        latest_surface = latest_surfaces[self.surface_kind]
-        checked_image_url = strip_validated_direct_media_marker(latest_surface.image_url)
-        checked_thumbnail_url = strip_validated_direct_media_marker(latest_surface.thumbnail_url)
+        resolved_surface = _resolve_surface(latest, latest_surfaces, self.surface_kind)
+        checked_image_url = strip_validated_direct_media_marker(
+            resolved_surface.image.effective_value
+        )
+        checked_thumbnail_url = strip_validated_direct_media_marker(
+            resolved_surface.thumbnail.effective_value
+        )
         image_result, thumbnail_result = await asyncio.gather(
             probe_media_url(
                 checked_image_url,
@@ -3547,7 +3565,7 @@ class StudioMediaView(AdminPanelView):
         )
         await self.refresh(
             interaction,
-            note=f"Current {surface_label(self.surface_kind)} media was validated.",
+            note=f"Effective {surface_label(self.surface_kind)} media was validated.",
             image_probe=image_result,
             thumbnail_probe=thumbnail_result,
             checked_image_url=checked_image_url,
@@ -3588,7 +3606,14 @@ class StudioMediaView(AdminPanelView):
         )
         await self.refresh(
             interaction,
-            note=f"{surface_label(self.surface_kind)} image override cleared.",
+            note=(
+                f"{surface_label(self.surface_kind)} image cleared."
+                if self.surface_kind == "birthday_announcement"
+                else (
+                    f"{surface_label(self.surface_kind)} image override cleared. "
+                    "Image now inherits from Birthday announcement when available."
+                )
+            ),
         )
 
     @discord.ui.button(label="Clear thumbnail", style=discord.ButtonStyle.secondary, row=2)
@@ -3604,7 +3629,14 @@ class StudioMediaView(AdminPanelView):
         )
         await self.refresh(
             interaction,
-            note=f"{surface_label(self.surface_kind)} thumbnail override cleared.",
+            note=(
+                f"{surface_label(self.surface_kind)} thumbnail cleared."
+                if self.surface_kind == "birthday_announcement"
+                else (
+                    f"{surface_label(self.surface_kind)} thumbnail override cleared. "
+                    "Thumbnail now inherits from Birthday announcement when available."
+                )
+            ),
         )
 
     @discord.ui.button(label="Reset to inherited", style=discord.ButtonStyle.danger, row=3)
@@ -3623,7 +3655,10 @@ class StudioMediaView(AdminPanelView):
         note = (
             "Birthday announcement route and media cleared."
             if self.surface_kind == "birthday_announcement"
-            else f"{surface_label(self.surface_kind)} now inherits route and media where available."
+            else (
+                f"{surface_label(self.surface_kind)} route, image, and thumbnail now inherit "
+                "from Birthday announcement where available."
+            )
         )
         await self.refresh(interaction, note=note)
 
@@ -4299,6 +4334,14 @@ async def _build_studio_preview_pair(
                 event_name=state.name,
                 event_month=state.month,
                 event_day=state.day,
+                server_anniversary_years_since_creation=(
+                    server_anniversary_years_since_creation(
+                        guild.created_at,
+                        now_utc=datetime.now(UTC),
+                    )
+                    if guild.created_at is not None
+                    else None
+                ),
             ).embed
         except (ValidationError, ValueError) as exc:
             return (

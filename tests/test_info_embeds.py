@@ -20,9 +20,16 @@ def test_build_help_embed_mentions_operator_flows() -> None:
     safety_field = next(
         field for field in embed.fields if field.name == "Studio media and safety"
     )
+    anniversary_field = next(
+        field for field in embed.fields if field.name == "Anniversary placeholders"
+    )
     assert "Media Tools" in safety_field.value
     assert "Regular webpages" in safety_field.value
+    assert "configured route/image/thumbnail" in safety_field.value
     assert "shared birthday announcement post" in safety_field.value
+    assert "{anniversary.years}" in anniversary_field.value
+    assert "{server_anniversary.years_since_creation}" in anniversary_field.value
+    assert "https://arno-create.github.io/Bdayblaze/help/" in (embed.footer.text or "")
 
 
 def test_build_about_embed_uses_package_metadata(monkeypatch) -> None:

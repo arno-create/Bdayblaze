@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import discord
 import pytest
 
-from bdayblaze.domain.models import GuildSettings
+from bdayblaze.domain.models import GuildSettings, RecurringCelebration
 from bdayblaze.services import diagnostics
 
 
@@ -186,6 +186,37 @@ def test_build_presentation_diagnostics_reports_needs_validation_for_ambiguous_m
     assert [item.code for item in diagnostics_result] == [
         "announcement_image_invalid_needs_validation"
     ]
+
+
+def test_build_studio_content_diagnostics_reports_invalid_anniversary_placeholder() -> None:
+    settings = replace(
+        GuildSettings.default(1),
+        anniversary_template="Happy {server_anniversary.years_since_creation}",
+    )
+
+    diagnostics_result = diagnostics.build_studio_content_diagnostics(settings)
+
+    assert [item.code for item in diagnostics_result] == ["anniversary_template_invalid"]
+
+
+def test_build_event_content_diagnostics_reports_invalid_server_anniversary_placeholder() -> None:
+    celebration = RecurringCelebration(
+        id=1,
+        guild_id=1,
+        name="Server anniversary",
+        event_month=3,
+        event_day=25,
+        channel_id=123,
+        template="Happy {anniversary.years}",
+        enabled=True,
+        next_occurrence_at_utc=datetime(2027, 3, 25, tzinfo=UTC),
+        celebration_kind="server_anniversary",
+        use_guild_created_date=True,
+    )
+
+    diagnostics_result = diagnostics.build_event_content_diagnostics(celebration)
+
+    assert [item.code for item in diagnostics_result] == ["server_anniversary_template_invalid"]
 
 
 def test_classify_discord_http_failure_marks_invalid_payload_as_permanent() -> None:

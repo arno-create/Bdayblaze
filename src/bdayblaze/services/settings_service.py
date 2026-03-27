@@ -123,7 +123,8 @@ class SettingsService:
             normalized_announcement_template = validate_announcement_template(
                 current.announcement_template
                 if isinstance(announcement_template, _UnsetType)
-                else announcement_template
+                else announcement_template,
+                kind="birthday_announcement",
             )
             ensure_safe_template(
                 normalized_announcement_template,
@@ -132,7 +133,8 @@ class SettingsService:
             normalized_dm_template = validate_announcement_template(
                 current.birthday_dm_template
                 if isinstance(birthday_dm_template, _UnsetType)
-                else birthday_dm_template
+                else birthday_dm_template,
+                kind="birthday_dm",
             )
             ensure_safe_template(
                 normalized_dm_template,
@@ -141,7 +143,8 @@ class SettingsService:
             normalized_anniversary_template = validate_announcement_template(
                 current.anniversary_template
                 if isinstance(anniversary_template, _UnsetType)
-                else anniversary_template
+                else anniversary_template,
+                kind="anniversary",
             )
             ensure_safe_template(
                 normalized_anniversary_template,

@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from typing import Final, Literal
 
+from bdayblaze.domain.announcement_surfaces import surface_label
 from bdayblaze.domain.birthday_logic import LATE_CELEBRATION_NOTE
 from bdayblaze.domain.media_validation import validate_direct_media_url
 from bdayblaze.domain.models import (
@@ -29,6 +30,14 @@ DEFAULT_RECURRING_EVENT_TEMPLATE: Final = "Today we are celebrating {event.name}
 MULTIPLE_TIMEZONES_LABEL: Final = "multiple timezones"
 MULTIPLE_DATES_LABEL: Final = "multiple celebration dates"
 MULTIPLE_YEARS_LABEL: Final = "multiple milestone years"
+SERVER_ANNIVERSARY_YEARS_PLACEHOLDER: Final = "server_anniversary.years_since_creation"
+_ALL_ANNOUNCEMENT_KINDS: Final[tuple[AnnouncementKind, ...]] = (
+    "birthday_announcement",
+    "birthday_dm",
+    "anniversary",
+    "server_anniversary",
+    "recurring_event",
+)
 
 PLACEHOLDER_DESCRIPTIONS: Final[dict[str, str]] = {
     "user.mention": "Mention the celebration member. In batches, this becomes all mentions.",
@@ -47,14 +56,62 @@ PLACEHOLDER_DESCRIPTIONS: Final[dict[str, str]] = {
     "timezone": "The shared timezone, or 'multiple timezones' when the batch differs.",
     "celebration_mode": "The saved celebration style label for this server.",
     "delivery.note": "Late-delivery note when recovery sends a celebration after its exact start.",
-    "event.name": "The recurring or anniversary event name when applicable.",
-    "event.date": "Readable event date like March 24 when applicable.",
-    "event.kind": "The event kind label, such as birthday or anniversary.",
-    "anniversary.years": "Years since the member joined, or a mixed-years label in batches.",
+    "event.name": (
+        "The anniversary or recurring event name. "
+        "Valid on: Member anniversary, Server anniversary, Recurring annual event."
+    ),
+    "event.date": (
+        "Readable event date like March 24. "
+        "Valid on: Member anniversary, Server anniversary, Recurring annual event."
+    ),
+    "event.kind": (
+        "The event kind label, such as anniversary or recurring event. "
+        "Valid on: Member anniversary, Server anniversary, Recurring annual event."
+    ),
+    "anniversary.years": (
+        "Years since the member joined, or a mixed-years label in batches. "
+        "Valid on: Member anniversary only."
+    ),
+    SERVER_ANNIVERSARY_YEARS_PLACEHOLDER: (
+        "Years since the server was created. Valid on: Server anniversary only."
+    ),
 }
 
 _PLACEHOLDER_ORDER: Final[tuple[str, ...]] = tuple(PLACEHOLDER_DESCRIPTIONS)
 _ALLOWED_PLACEHOLDERS: Final[frozenset[str]] = frozenset(_PLACEHOLDER_ORDER)
+_ALL_KIND_SET: Final[frozenset[AnnouncementKind]] = frozenset(_ALL_ANNOUNCEMENT_KINDS)
+_BIRTHDAY_KINDS: Final[frozenset[AnnouncementKind]] = frozenset(
+    ("birthday_announcement", "birthday_dm")
+)
+_MEMBER_KINDS: Final[frozenset[AnnouncementKind]] = frozenset(
+    ("birthday_announcement", "birthday_dm", "anniversary")
+)
+_EVENT_KINDS: Final[frozenset[AnnouncementKind]] = frozenset(
+    ("anniversary", "server_anniversary", "recurring_event")
+)
+_PLACEHOLDER_ALLOWED_KINDS: Final[dict[str, frozenset[AnnouncementKind]]] = {
+    "user.mention": _MEMBER_KINDS,
+    "user.display_name": _MEMBER_KINDS,
+    "user.name": _MEMBER_KINDS,
+    "members.mentions": _MEMBER_KINDS,
+    "members.names": _MEMBER_KINDS,
+    "members.count": _MEMBER_KINDS,
+    "server.name": _ALL_KIND_SET,
+    "birthday.month": _BIRTHDAY_KINDS,
+    "birthday.day": _BIRTHDAY_KINDS,
+    "birthday.date": _BIRTHDAY_KINDS,
+    "birthday.mentions": _BIRTHDAY_KINDS,
+    "birthday.names": _BIRTHDAY_KINDS,
+    "birthday.count": _BIRTHDAY_KINDS,
+    "timezone": _BIRTHDAY_KINDS,
+    "celebration_mode": _ALL_KIND_SET,
+    "delivery.note": _ALL_KIND_SET,
+    "event.name": _EVENT_KINDS,
+    "event.date": _EVENT_KINDS,
+    "event.kind": _EVENT_KINDS,
+    "anniversary.years": frozenset(("anniversary",)),
+    SERVER_ANNIVERSARY_YEARS_PLACEHOLDER: frozenset(("server_anniversary",)),
+}
 PLACEHOLDER_GROUPS: Final[dict[str, tuple[str, ...]]] = {
     "Birthday and member fields": (
         "user.mention",
@@ -81,6 +138,7 @@ PLACEHOLDER_GROUPS: Final[dict[str, tuple[str, ...]]] = {
         "event.date",
         "event.kind",
         "anniversary.years",
+        SERVER_ANNIVERSARY_YEARS_PLACEHOLDER,
     ),
 }
 
@@ -105,6 +163,7 @@ class AnnouncementRenderContext:
     event_name: str | None = None
     event_month: int | None = None
     event_day: int | None = None
+    server_anniversary_years_since_creation: int | None = None
     late_delivery: bool = False
 
 
@@ -114,21 +173,31 @@ class TemplateSegment:
     value: str
 
 
-def supported_placeholders() -> tuple[tuple[str, str], ...]:
+def supported_placeholders(
+    *,
+    kind: AnnouncementKind | None = None,
+) -> tuple[tuple[str, str], ...]:
+    placeholders = _placeholders_for_kind(kind) if kind is not None else _PLACEHOLDER_ORDER
     return tuple(
-        (placeholder, PLACEHOLDER_DESCRIPTIONS[placeholder]) for placeholder in _PLACEHOLDER_ORDER
+        (placeholder, PLACEHOLDER_DESCRIPTIONS[placeholder]) for placeholder in placeholders
     )
 
 
-def supported_placeholder_groups() -> tuple[tuple[str, tuple[tuple[str, str], ...]], ...]:
+def supported_placeholder_groups(
+    *,
+    kind: AnnouncementKind | None = None,
+) -> tuple[tuple[str, tuple[tuple[str, str], ...]], ...]:
+    allowed = _allowed_placeholders_for_kind(kind) if kind is not None else _ALLOWED_PLACEHOLDERS
     return tuple(
         (
             group_name,
             tuple(
                 (placeholder, PLACEHOLDER_DESCRIPTIONS[placeholder]) for placeholder in placeholders
+                if placeholder in allowed
             ),
         )
         for group_name, placeholders in PLACEHOLDER_GROUPS.items()
+        if any(placeholder in allowed for placeholder in placeholders)
     )
 
 
@@ -155,7 +224,11 @@ def normalize_announcement_template(template: str | None, *, kind: AnnouncementK
     return stripped or default_template_for_kind(kind)
 
 
-def validate_announcement_template(template: str | None) -> str | None:
+def validate_announcement_template(
+    template: str | None,
+    *,
+    kind: AnnouncementKind,
+) -> str | None:
     if template is None:
         return None
     normalized = template.strip()
@@ -166,16 +239,7 @@ def validate_announcement_template(template: str | None) -> str | None:
             f"Announcement messages must be {MAX_TEMPLATE_LENGTH} characters or fewer."
         )
     segments = _parse_template_segments(normalized)
-    unknown = sorted(
-        {
-            segment.value
-            for segment in segments
-            if segment.kind == "placeholder" and segment.value not in _ALLOWED_PLACEHOLDERS
-        }
-    )
-    if unknown:
-        formatted = ", ".join(f"{{{token}}}" for token in unknown)
-        raise ValueError(f"Unknown placeholder(s): {formatted}")
+    _validate_template_segments(segments, kind=kind)
     return normalized
 
 
@@ -228,16 +292,7 @@ def render_announcement_template(
 ) -> str:
     normalized = normalize_announcement_template(template, kind=context.kind)
     segments = _parse_template_segments(normalized)
-    unknown = sorted(
-        {
-            segment.value
-            for segment in segments
-            if segment.kind == "placeholder" and segment.value not in _ALLOWED_PLACEHOLDERS
-        }
-    )
-    if unknown:
-        formatted = ", ".join(f"{{{token}}}" for token in unknown)
-        raise ValueError(f"Unknown placeholder(s): {formatted}")
+    _validate_template_segments(segments, kind=context.kind)
 
     mapping = _build_placeholder_values(context=context)
     output: list[str] = []
@@ -245,11 +300,14 @@ def render_announcement_template(
         if segment.kind == "text":
             output.append(segment.value)
             continue
-        output.append(mapping[segment.value])
+        value = mapping[segment.value]
+        if value is None:
+            raise ValueError(_missing_placeholder_value_message(segment.value))
+        output.append(value)
     return "".join(output).strip()
 
 
-def _build_placeholder_values(*, context: AnnouncementRenderContext) -> dict[str, str]:
+def _build_placeholder_values(*, context: AnnouncementRenderContext) -> dict[str, str | None]:
     recipients = context.recipients
     first = recipients[0] if recipients else None
     if first is None:
@@ -337,6 +395,11 @@ def _build_placeholder_values(*, context: AnnouncementRenderContext) -> dict[str
         "event.date": event_date,
         "event.kind": event_kind_label,
         "anniversary.years": anniversary_years,
+        SERVER_ANNIVERSARY_YEARS_PLACEHOLDER: (
+            str(context.server_anniversary_years_since_creation)
+            if context.server_anniversary_years_since_creation is not None
+            else None
+        ),
     }
 
 
@@ -347,6 +410,14 @@ def anniversary_years(joined_at_utc: datetime, *, now_utc: datetime) -> int:
     if (current_date.month, current_date.day) < (joined_date.month, joined_date.day):
         return max(0, years - 1)
     return max(0, years)
+
+
+def server_anniversary_years_since_creation(
+    created_at_utc: datetime,
+    *,
+    now_utc: datetime,
+) -> int:
+    return anniversary_years(created_at_utc, now_utc=now_utc)
 
 
 def _parse_template_segments(template: str) -> list[TemplateSegment]:
@@ -454,6 +525,7 @@ def preview_context_for_kind(kind: AnnouncementKind) -> AnnouncementRenderContex
             event_name="Server anniversary",
             event_month=3,
             event_day=25,
+            server_anniversary_years_since_creation=6,
         )
     return AnnouncementRenderContext(
         kind=kind,
@@ -482,3 +554,78 @@ def preview_context_for_kind(kind: AnnouncementKind) -> AnnouncementRenderContex
 
 def celebration_date_for_occurrence(occurrence_at_utc: datetime) -> date:
     return occurrence_at_utc.astimezone(UTC).date()
+
+
+def _allowed_placeholders_for_kind(kind: AnnouncementKind) -> frozenset[str]:
+    return frozenset(
+        placeholder
+        for placeholder, allowed_kinds in _PLACEHOLDER_ALLOWED_KINDS.items()
+        if kind in allowed_kinds
+    )
+
+
+def _placeholders_for_kind(kind: AnnouncementKind) -> tuple[str, ...]:
+    allowed = _allowed_placeholders_for_kind(kind)
+    return tuple(placeholder for placeholder in _PLACEHOLDER_ORDER if placeholder in allowed)
+
+
+def _validate_template_segments(
+    segments: list[TemplateSegment],
+    *,
+    kind: AnnouncementKind,
+) -> None:
+    placeholders = {segment.value for segment in segments if segment.kind == "placeholder"}
+    unknown = sorted(token for token in placeholders if token not in _ALLOWED_PLACEHOLDERS)
+    if unknown:
+        formatted = ", ".join(f"{{{token}}}" for token in unknown)
+        raise ValueError(f"Unknown placeholder(s): {formatted}")
+
+    allowed = _allowed_placeholders_for_kind(kind)
+    unsupported = sorted(token for token in placeholders if token not in allowed)
+    if unsupported:
+        raise ValueError(_unsupported_placeholder_message(unsupported, kind=kind))
+
+
+def _unsupported_placeholder_message(
+    placeholders: list[str],
+    *,
+    kind: AnnouncementKind,
+) -> str:
+    formatted = ", ".join(f"{{{token}}}" for token in placeholders)
+    surface_name = surface_label(kind)
+    if len(placeholders) == 1:
+        token = placeholders[0]
+        return (
+            f"Placeholder {{{token}}} is not valid for {surface_name} templates. "
+            f"{_placeholder_validity_sentence(token)}{_placeholder_swap_hint(token, kind)}"
+        )
+    return (
+        f"Placeholders {formatted} are not valid for {surface_name} templates. "
+        "Review the placeholder help for valid surfaces."
+    )
+
+
+def _placeholder_validity_sentence(token: str) -> str:
+    allowed_labels = ", ".join(
+        surface_label(kind)
+        for kind in _ALL_ANNOUNCEMENT_KINDS
+        if kind in _PLACEHOLDER_ALLOWED_KINDS[token]
+    )
+    return f"Valid on: {allowed_labels}."
+
+
+def _placeholder_swap_hint(token: str, kind: AnnouncementKind) -> str:
+    if token == "anniversary.years" and kind == "server_anniversary":
+        return f" Use {{{SERVER_ANNIVERSARY_YEARS_PLACEHOLDER}}} instead."
+    if token == SERVER_ANNIVERSARY_YEARS_PLACEHOLDER and kind == "anniversary":
+        return " Use {anniversary.years} instead."
+    return ""
+
+
+def _missing_placeholder_value_message(token: str) -> str:
+    if token == SERVER_ANNIVERSARY_YEARS_PLACEHOLDER:
+        return (
+            "Placeholder {server_anniversary.years_since_creation} needs the server creation "
+            "date, but Discord did not provide it."
+        )
+    return f"Placeholder {{{token}}} could not be resolved for this preview."

@@ -5,10 +5,14 @@ from datetime import UTC, datetime, timedelta
 import discord
 
 from bdayblaze.domain.announcement_surfaces import (
+    describe_resolved_field,
     resolve_announcement_surface,
-    surface_source_label,
 )
 from bdayblaze.domain.birthday_logic import validate_timezone
+from bdayblaze.domain.media_validation import (
+    assess_media_url,
+    strip_validated_direct_media_marker,
+)
 from bdayblaze.domain.models import (
     AnnouncementSurfaceKind,
     HealthIssue,
@@ -126,6 +130,21 @@ class HealthService:
                 "anniversary",
                 announcement_surfaces,
             )
+            for diagnostic in build_presentation_diagnostics(
+                anniversary_surface.presentation(settings)
+            ):
+                issues.append(
+                    HealthIssue(
+                        severity=diagnostic.severity,
+                        code=f"anniversary_{diagnostic.code}",
+                        summary=diagnostic.summary,
+                        action=(
+                            diagnostic.action
+                            or "Review the saved anniversary surface media settings."
+                        )
+                        + f" {_surface_media_note(anniversary_surface)}",
+                    )
+                )
             for diagnostic in build_channel_diagnostics(
                 guild,
                 channel_id=(
@@ -222,6 +241,24 @@ class HealthService:
                     announcement_surfaces,
                     event_channel_id=celebration.channel_id,
                 )
+                for diagnostic in build_presentation_diagnostics(
+                    resolved_surface.presentation(settings)
+                ):
+                    issues.append(
+                        HealthIssue(
+                            severity=diagnostic.severity,
+                            code=f"recurring_event_{celebration.id}_{diagnostic.code}",
+                            summary=(
+                                f"Recurring event '{celebration.name}' is blocked: "
+                                f"{diagnostic.summary}"
+                            ),
+                            action=(
+                                diagnostic.action
+                                or "Review the recurring event surface media settings."
+                            )
+                            + f" {_surface_media_note(resolved_surface)}",
+                        )
+                    )
                 for diagnostic in build_channel_diagnostics(
                     guild,
                     channel_id=resolved_surface.channel.effective_value,
@@ -263,6 +300,21 @@ class HealthService:
                     announcement_surfaces,
                     event_channel_id=server_anniversary.channel_id,
                 )
+                for diagnostic in build_presentation_diagnostics(
+                    resolved_server_surface.presentation(settings)
+                ):
+                    issues.append(
+                        HealthIssue(
+                            severity=diagnostic.severity,
+                            code=f"server_anniversary_{diagnostic.code}",
+                            summary=f"Server anniversary is blocked: {diagnostic.summary}",
+                            action=(
+                                diagnostic.action
+                                or "Review the server-anniversary surface media settings."
+                            )
+                            + f" {_surface_media_note(resolved_server_surface)}",
+                        )
+                    )
                 for diagnostic in build_channel_diagnostics(
                     guild,
                     channel_id=resolved_server_surface.channel.effective_value,
@@ -390,32 +442,41 @@ class HealthService:
 
 
 def _surface_channel_note(surface: ResolvedAnnouncementSurface) -> str:
-    configured = (
-        f"<#{surface.channel.configured_value}>"
-        if surface.channel.configured_value is not None
-        else "Not set"
+    configured, effective = describe_resolved_field(
+        surface.channel,
+        label="route",
+        surface_kind=surface.surface_kind,
+        value_formatter=lambda channel_id: f"<#{channel_id}>",
     )
-    if surface.channel.override_value is not None:
-        configured = (
-            f"Surface default {configured}; "
-            f"event override <#{surface.channel.override_value}>"
-        )
-    effective = (
-        f"<#{surface.channel.effective_value}>"
-        if surface.channel.effective_value is not None
-        else "Not configured"
-    )
-    return (
-        f"Configured route: {configured}. Effective route: {effective} "
-        f"({surface_source_label(surface.channel.source, surface_kind=surface.surface_kind)})."
-    )
+    return f"{configured}. {effective}."
 
 
 def _surface_media_note(surface: ResolvedAnnouncementSurface) -> str:
     return (
-        "Configured and effective media are resolved per surface. "
-        "Image source: "
-        f"{surface_source_label(surface.image.source, surface_kind=surface.surface_kind)}. "
-        "Thumbnail source: "
-        f"{surface_source_label(surface.thumbnail.source, surface_kind=surface.surface_kind)}."
+        "Configured and effective media are resolved per field. "
+        f"{_surface_media_field_note(surface, field_name='image')} "
+        f"{_surface_media_field_note(surface, field_name='thumbnail')}"
     )
+
+
+def _surface_media_field_note(
+    surface: ResolvedAnnouncementSurface,
+    *,
+    field_name: str,
+) -> str:
+    field = surface.image if field_name == "image" else surface.thumbnail
+    configured, effective = describe_resolved_field(
+        field,
+        label=field_name,
+        surface_kind=surface.surface_kind,
+        value_formatter=lambda value: _format_media_value(value),
+    )
+    return f"{configured}. {effective}."
+
+
+def _format_media_value(value: str) -> str:
+    assessment = assess_media_url(value, label="Media")
+    if assessment is None:
+        return "Not set"
+    display_url = strip_validated_direct_media_marker(assessment.normalized_url)
+    return f"{assessment.status_label()} | {display_url or ''}"

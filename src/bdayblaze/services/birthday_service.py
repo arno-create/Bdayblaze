@@ -393,7 +393,10 @@ class BirthdayService:
             raise ValidationError("Recurring event name cannot be blank.")
         try:
             validate_birth_date(month, day)
-            normalized_template = validate_announcement_template(template)
+            normalized_template = validate_announcement_template(
+                template,
+                kind="recurring_event",
+            )
         except ValueError as exc:
             raise ValidationError(str(exc)) from exc
         ensure_safe_event_name(normalized_name)
@@ -471,7 +474,10 @@ class BirthdayService:
             month, day = override_month, override_day
 
         try:
-            normalized_template = validate_announcement_template(template)
+            normalized_template = validate_announcement_template(
+                template,
+                kind="server_anniversary",
+            )
         except ValueError as exc:
             raise ValidationError(str(exc)) from exc
         ensure_safe_template(normalized_template, label="Server anniversary template")

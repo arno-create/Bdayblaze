@@ -69,10 +69,22 @@ def build_help_embed() -> discord.Embed:
             "Use `/birthday studio` -> Media Tools for shared image and thumbnail URLs.\n"
             "Direct media URLs can preview as embeds. Regular webpages are shown as webpage URLs "
             "and unsupported files are called out separately instead of being silently dropped.\n"
+            "Setup, Studio, and preview panels now show configured route/image/thumbnail values "
+            "separately from the effective resolved values and source.\n"
             "Birthday Quests can optionally count reactions on the shared birthday announcement "
             "post without using Message Content.\n"
             "Studio also blocks obvious profanity, NSFW wording, slurs, harassment-style text, "
             "and unsafe URL patterns."
+        ),
+        inline=False,
+    )
+    budget.add_field(
+        name="Anniversary placeholders",
+        value=(
+            "`{anniversary.years}` -> Valid on member anniversary only.\n"
+            "`{server_anniversary.years_since_creation}` -> Valid on server anniversary only.\n"
+            "`{event.name}` / `{event.date}` / `{event.kind}` -> Valid on member anniversary, "
+            "server anniversary, and recurring annual events."
         ),
         inline=False,
     )
@@ -85,7 +97,12 @@ def build_help_embed() -> discord.Embed:
         ),
         inline=False,
     )
-    budget.set_footer("Use top-level /help and /about for bot-wide info.")
+    budget.set_footer(
+        
+            "Public docs: https://arno-create.github.io/Bdayblaze/help/ | "
+            "Use top-level /about for bot-wide info."
+        
+    )
     return budget.build()
 
 

@@ -5,6 +5,7 @@ import pytest
 from bdayblaze.domain.announcement_template import (
     DEFAULT_ANNOUNCEMENT_TEMPLATE,
     MULTIPLE_TIMEZONES_LABEL,
+    SERVER_ANNIVERSARY_YEARS_PLACEHOLDER,
     AnnouncementRenderContext,
     AnnouncementRenderRecipient,
     normalize_announcement_template,
@@ -63,20 +64,50 @@ def _context(
 
 def test_validate_template_rejects_unknown_placeholders() -> None:
     with pytest.raises(ValueError, match=r"\{user.secret\}"):
-        validate_announcement_template("Hello {user.secret}")
+        validate_announcement_template("Hello {user.secret}", kind="birthday_announcement")
 
 
 def test_validate_template_rejects_unmatched_braces() -> None:
     with pytest.raises(ValueError, match="unmatched"):
-        validate_announcement_template("Hello {birthday.names")
+        validate_announcement_template("Hello {birthday.names", kind="birthday_announcement")
 
 
 def test_validate_template_treats_blank_as_default_reset() -> None:
-    assert validate_announcement_template("   ") is None
+    assert validate_announcement_template("   ", kind="birthday_announcement") is None
     assert (
         normalize_announcement_template(None, kind="birthday_announcement")
         == DEFAULT_ANNOUNCEMENT_TEMPLATE
     )
+
+
+def test_validate_template_rejects_member_anniversary_years_on_server_anniversary() -> None:
+    with pytest.raises(
+        ValueError,
+        match=r"Use \{server_anniversary\.years_since_creation\} instead",
+    ):
+        validate_announcement_template(
+            "Happy {anniversary.years}",
+            kind="server_anniversary",
+        )
+
+
+def test_validate_template_rejects_server_anniversary_years_on_member_anniversary() -> None:
+    with pytest.raises(
+        ValueError,
+        match=r"Use \{anniversary\.years\} instead",
+    ):
+        validate_announcement_template(
+            f"Happy {{{SERVER_ANNIVERSARY_YEARS_PLACEHOLDER}}}",
+            kind="anniversary",
+        )
+
+
+def test_validate_template_rejects_event_placeholders_on_birthday_surfaces() -> None:
+    with pytest.raises(ValueError, match=r"not valid for Birthday announcement templates"):
+        validate_announcement_template(
+            "Today is {event.name}",
+            kind="birthday_announcement",
+        )
 
 
 def test_render_template_supports_escaped_literal_braces() -> None:
@@ -149,6 +180,40 @@ def test_render_template_surfaces_recovery_note_placeholder() -> None:
     assert "missed the exact moment" in rendered
 
 
+def test_render_template_supports_server_anniversary_years_placeholder() -> None:
+    rendered = render_announcement_template(
+        f"Server age: {{{SERVER_ANNIVERSARY_YEARS_PLACEHOLDER}}}",
+        context=AnnouncementRenderContext(
+            kind="server_anniversary",
+            server_name="Birthday Club",
+            celebration_mode="party",
+            recipients=[],
+            event_name="Server anniversary",
+            event_month=4,
+            event_day=1,
+            server_anniversary_years_since_creation=6,
+        ),
+    )
+
+    assert rendered == "Server age: 6"
+
+
+def test_render_template_requires_server_creation_years_for_server_anniversary() -> None:
+    with pytest.raises(ValueError, match="needs the server creation date"):
+        render_announcement_template(
+            f"Server age: {{{SERVER_ANNIVERSARY_YEARS_PLACEHOLDER}}}",
+            context=AnnouncementRenderContext(
+                kind="server_anniversary",
+                server_name="Birthday Club",
+                celebration_mode="party",
+                recipients=[],
+                event_name="Server anniversary",
+                event_month=4,
+                event_day=1,
+            ),
+        )
+
+
 def test_validate_media_url_accepts_https_image_with_query_string() -> None:
     assert (
         validate_media_url(
@@ -201,7 +266,7 @@ def test_validate_accent_color_rejects_invalid_hex() -> None:
 
 def test_render_template_uses_context_dates() -> None:
     rendered = render_announcement_template(
-        "{birthday.date} | {event.date}",
+        "{event.date}",
         context=AnnouncementRenderContext(
             kind="recurring_event",
             server_name="Birthday Club",
@@ -214,4 +279,4 @@ def test_render_template_uses_context_dates() -> None:
         ),
     )
 
-    assert rendered == "multiple celebration dates | March 25"
+    assert rendered == "March 25"

@@ -117,3 +117,41 @@ async def test_health_service_distinguishes_configured_and_effective_inherited_r
         "Configured route: <#123>. Effective route: <#123> "
         "(Custom for Birthday announcement)."
     ) in actions
+
+
+@pytest.mark.asyncio
+async def test_health_service_reports_configured_and_effective_media_for_inherited_surfaces(
+) -> None:
+    repository = FakeRepository()
+    repository.surfaces["birthday_announcement"] = AnnouncementSurfaceSettings(
+        guild_id=1,
+        surface_kind="birthday_announcement",
+        channel_id=123,
+        image_url="https://example.com/manual.pdf",
+    )
+    metrics = SchedulerMetrics(
+        last_iteration_at_utc=datetime.now(UTC),
+        recovery_completed=True,
+    )
+    service = HealthService(
+        repository,  # type: ignore[arg-type]
+        metrics,
+        recovery_grace_hours=6,
+        scheduler_max_sleep_seconds=60,
+    )
+
+    issues = await service.inspect_guild(FakeGuild())  # type: ignore[arg-type]
+    actions = "\n".join(issue.action for issue in issues)
+
+    assert (
+        "Configured image: Unsupported media rejected | https://example.com/manual.pdf."
+        in actions
+    )
+    assert (
+        "Effective image: Unsupported media rejected | https://example.com/manual.pdf "
+        "(Custom for Birthday announcement)."
+    ) in actions
+    assert (
+        "Effective image: Unsupported media rejected | https://example.com/manual.pdf "
+        "(Inherited from Birthday announcement)."
+    ) in actions

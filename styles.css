@@ -808,6 +808,33 @@ main {
   gap: 0.85rem;
 }
 
+.help-quicklinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+}
+
+.help-quicklinks a {
+  padding: 0.62rem 0.92rem;
+  border: 1px solid rgba(255, 220, 182, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 239, 216, 0.8);
+  font-size: 0.93rem;
+  transition:
+    color 180ms ease,
+    border-color 180ms ease,
+    background 180ms ease,
+    transform 180ms ease;
+}
+
+.help-quicklinks a:hover {
+  color: var(--accent-strong);
+  border-color: rgba(255, 220, 182, 0.22);
+  background: rgba(255, 255, 255, 0.07);
+  transform: translateY(-2px);
+}
+
 .policy-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -843,7 +870,15 @@ main {
 #features,
 #how-it-works,
 #operators,
-#privacy {
+#privacy,
+#overview,
+#get-started,
+#commands,
+#studio,
+#media,
+#anniversaries,
+#reliability,
+#faq {
   scroll-margin-top: 7rem;
 }
 
@@ -1073,6 +1108,11 @@ main {
   .cta-actions .button,
   .policy-actions .button {
     width: 100%;
+  }
+
+  .help-quicklinks a {
+    width: 100%;
+    text-align: center;
   }
 
   .hero-signals li {

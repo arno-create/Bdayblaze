@@ -124,6 +124,19 @@ async def test_settings_service_rejects_unknown_template_placeholders() -> None:
 
 
 @pytest.mark.asyncio
+async def test_settings_service_rejects_server_anniversary_placeholder_on_member_anniversary(
+) -> None:
+    repository = FakeSettingsRepository(GuildSettings.default(1))
+    service = SettingsService(repository)  # type: ignore[arg-type]
+
+    with pytest.raises(ValidationError, match=r"Use \{anniversary\.years\} instead"):
+        await service.update_settings(
+            FakeGuild(1),  # type: ignore[arg-type]
+            anniversary_template="Happy {server_anniversary.years_since_creation}",
+        )
+
+
+@pytest.mark.asyncio
 async def test_settings_service_resets_blank_template_to_default_storage() -> None:
     repository = FakeSettingsRepository(GuildSettings.default(1))
     service = SettingsService(repository)  # type: ignore[arg-type]
@@ -216,6 +229,35 @@ async def test_settings_service_rejects_unvalidated_extensionless_media_url() ->
             surface_kind="birthday_announcement",
             announcement_image_url="https://cdn.example.com/assets/banner?sig=abc123",
         )
+
+
+@pytest.mark.asyncio
+async def test_settings_service_keeps_last_saved_media_when_new_value_is_rejected() -> None:
+    repository = FakeSettingsRepository(
+        GuildSettings.default(1),
+        surfaces={
+            "birthday_announcement": AnnouncementSurfaceSettings(
+                guild_id=1,
+                surface_kind="birthday_announcement",
+                image_url=mark_validated_direct_media_url(
+                    "https://cdn.example.com/assets/banner?sig=abc123"
+                ),
+            )
+        },
+    )
+    service = SettingsService(repository)  # type: ignore[arg-type]
+
+    with pytest.raises(ValidationError, match="unsupported \\.zip content"):
+        await service.update_validated_media(
+            FakeGuild(1),  # type: ignore[arg-type]
+            surface_kind="birthday_announcement",
+            announcement_image_url="https://cdn.example.com/assets/banner.zip",
+        )
+
+    assert (
+        repository.surfaces["birthday_announcement"].image_url
+        == mark_validated_direct_media_url("https://cdn.example.com/assets/banner?sig=abc123")
+    )
 
 
 @pytest.mark.asyncio

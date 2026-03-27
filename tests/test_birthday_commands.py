@@ -12,6 +12,7 @@ from bdayblaze.discord.cogs.birthday import (
     _require_ready_delivery,
     _visible_only_for_scope,
 )
+from bdayblaze.domain.announcement_template import server_anniversary_years_since_creation
 from bdayblaze.domain.media_validation import mark_validated_direct_media_url
 from bdayblaze.domain.models import (
     AnnouncementDeliveryReadiness,
@@ -277,6 +278,57 @@ async def test_build_preview_embed_supports_server_anniversary_preview() -> None
 
     assert embed.title
     assert "Server anniversary" in embed.description
+
+
+@pytest.mark.asyncio
+async def test_build_preview_embed_renders_explicit_server_anniversary_years_placeholder() -> None:
+    service = FakeBirthdayService()
+    service.server_anniversary = replace(
+        service.server_anniversary,
+        template="Server age: {server_anniversary.years_since_creation}",
+    )
+    settings = replace(GuildSettings.default(1), announcements_enabled=True)
+    guild = FakeGuild(1)
+
+    embed = await _build_preview_embed(
+        guild,  # type: ignore[arg-type]
+        settings,
+        service,  # type: ignore[arg-type]
+        announcement_surfaces=_surfaces(),
+        kind="server_anniversary",
+        member=None,
+        event_id=None,
+    )
+
+    expected_years = server_anniversary_years_since_creation(
+        guild.created_at,
+        now_utc=datetime.now(UTC),
+    )
+    assert f"Server age: {expected_years}" in (embed.description or "")
+
+
+@pytest.mark.asyncio
+async def test_build_preview_embed_rejects_member_anniversary_years_on_server_anniversary() -> None:
+    service = FakeBirthdayService()
+    service.server_anniversary = replace(
+        service.server_anniversary,
+        template="Server age: {anniversary.years}",
+    )
+    settings = replace(GuildSettings.default(1), announcements_enabled=True)
+
+    with pytest.raises(
+        ValueError,
+        match=r"Use \{server_anniversary\.years_since_creation\} instead",
+    ):
+        await _build_preview_embed(
+            FakeGuild(1),  # type: ignore[arg-type]
+            settings,
+            service,  # type: ignore[arg-type]
+            announcement_surfaces=_surfaces(),
+            kind="server_anniversary",
+            member=None,
+            event_id=None,
+        )
 
 
 @pytest.mark.asyncio

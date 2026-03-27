@@ -6,10 +6,8 @@ import discord
 
 from bdayblaze.discord.embed_budget import BudgetedEmbed, truncate_text
 from bdayblaze.domain.announcement_template import (
-    DEFAULT_ANNOUNCEMENT_TEMPLATE,
     AnnouncementRenderContext,
     AnnouncementRenderRecipient,
-    default_template_for_kind,
     render_announcement_template,
     validate_announcement_presentation,
 )
@@ -54,6 +52,7 @@ def build_announcement_message(
     event_name: str | None = None,
     event_month: int | None = None,
     event_day: int | None = None,
+    server_anniversary_years_since_creation: int | None = None,
     late_delivery: bool = False,
     mention_suppressed: bool = False,
 ) -> PreparedAnnouncement:
@@ -66,17 +65,10 @@ def build_announcement_message(
         event_name=event_name,
         event_month=event_month,
         event_day=event_day,
+        server_anniversary_years_since_creation=server_anniversary_years_since_creation,
         late_delivery=late_delivery,
     )
-    try:
-        description = render_announcement_template(template, context=context)
-    except ValueError:
-        description = render_announcement_template(
-            DEFAULT_ANNOUNCEMENT_TEMPLATE
-            if kind == "birthday_announcement"
-            else default_template_for_kind(kind),
-            context=context,
-        )
+    description = render_announcement_template(template, context=context)
     recovery_note = LATE_CELEBRATION_NOTE
     if late_delivery and recovery_note not in description:
         description = f"{recovery_note}\n\n{description}".strip()

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import TypeVar, cast
 
 from bdayblaze.domain.models import (
@@ -42,6 +42,39 @@ def surface_source_label(
         inherited_from = cast(AnnouncementKind, source.split(":", 1)[1])
         return f"Inherited from {surface_label(inherited_from)}"
     return "Not configured"
+
+
+def describe_resolved_field(
+    field: ResolvedSurfaceField[T],
+    *,
+    label: str,
+    surface_kind: AnnouncementSurfaceKind,
+    value_formatter: Callable[[T], str],
+    configured_unset: str = "Not set",
+    effective_unset: str = "Not configured",
+) -> tuple[str, str]:
+    configured = (
+        value_formatter(field.configured_value)
+        if field.configured_value is not None
+        else configured_unset
+    )
+    if field.override_value is not None:
+        configured = (
+            f"Surface default {configured}; "
+            f"event override {value_formatter(field.override_value)}"
+        )
+    effective = (
+        value_formatter(field.effective_value)
+        if field.effective_value is not None
+        else effective_unset
+    )
+    return (
+        f"Configured {label}: {configured}",
+        (
+            f"Effective {label}: {effective} "
+            f"({surface_source_label(field.source, surface_kind=surface_kind)})"
+        ),
+    )
 
 
 def normalize_announcement_surfaces(

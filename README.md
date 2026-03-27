@@ -1,10 +1,10 @@
-![Bdayblaze banner](assets/banner.png)
+![Bdayblaze banner](assets/banner.jpg)
 
 # Bdayblaze
 
 Bdayblaze is a production-minded Discord birthday bot built for polished celebration moments, private admin control, and reliable delivery on lightweight infrastructure.
 
-[Install Bdayblaze](https://discord.com/oauth2/authorize?client_id=1485920716573380660) | [Support server](https://discord.com/servers/inevitable-friendship-1322933864360050688) | [GitHub Pages site](https://arno-create.github.io/Bdayblaze/) | [Repository](https://github.com/arno-create/Bdayblaze)
+[Install Bdayblaze](https://discord.com/oauth2/authorize?client_id=1485920716573380660) | [Support server](https://discord.com/servers/inevitable-friendship-1322933864360050688) | [GitHub Pages site](https://arno-create.github.io/Bdayblaze/) | [Help and FAQ](https://arno-create.github.io/Bdayblaze/help/) | [Repository](https://github.com/arno-create/Bdayblaze)
 
 ## Why Bdayblaze
 
@@ -87,6 +87,7 @@ Admins:
 ## Privacy and legal
 
 - [Privacy policy](PRIVACY.md)
+- [Public Help and FAQ page](https://arno-create.github.io/Bdayblaze/help/)
 - [Public privacy page](https://arno-create.github.io/Bdayblaze/privacy/)
 - [Terms of Service](TERMS.md)
 - [Public Terms of Service page](https://arno-create.github.io/Bdayblaze/terms/)

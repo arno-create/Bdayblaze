@@ -14,6 +14,7 @@ from bdayblaze.discord.member_resolution import MemberResolutionError, resolve_g
 from bdayblaze.domain.announcement_template import (
     AnnouncementRenderRecipient,
     anniversary_years,
+    server_anniversary_years_since_creation,
 )
 from bdayblaze.domain.models import (
     AnniversaryRecipientSnapshot,
@@ -450,6 +451,14 @@ class DiscordSchedulerGateway:
                 event_name=event_name,
                 event_month=event_month,
                 event_day=event_day,
+                server_anniversary_years_since_creation=(
+                    server_anniversary_years_since_creation(
+                        guild.created_at,
+                        now_utc=datetime.now(UTC),
+                    )
+                    if celebration_kind == "server_anniversary" and guild.created_at is not None
+                    else None
+                ),
                 late_delivery=_late_delivery(scheduled_for_utc),
             )
         except ValueError as exc:

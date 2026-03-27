@@ -8,11 +8,13 @@ from typing import Literal
 import discord
 
 from bdayblaze.domain.announcement_surfaces import resolve_announcement_surface
+from bdayblaze.domain.announcement_template import validate_announcement_template
 from bdayblaze.domain.birthday_logic import membership_age_days
 from bdayblaze.domain.media_validation import assess_media_url
 from bdayblaze.domain.models import (
     AnnouncementDeliveryReadiness,
     AnnouncementDeliveryStatus,
+    AnnouncementKind,
     AnnouncementStudioPresentation,
     AnnouncementSurfaceKind,
     AnnouncementSurfaceSettings,
@@ -359,14 +361,13 @@ def build_presentation_diagnostics(
 
 def build_studio_content_diagnostics(settings: GuildSettings) -> tuple[DeliveryDiagnostic, ...]:
     diagnostics: list[DeliveryDiagnostic] = []
-    for label, value, validator in (
-        ("Birthday announcement template", settings.announcement_template, ensure_safe_template),
-        ("Birthday DM template", settings.birthday_dm_template, ensure_safe_template),
-        ("Anniversary template", settings.anniversary_template, ensure_safe_template),
-    ):
-        diagnostics.extend(
-            _policy_diagnostics(label=label, value=value, validator=validator)
-        )
+    template_inputs: tuple[tuple[str, AnnouncementKind, str | None], ...] = (
+        ("Birthday announcement template", "birthday_announcement", settings.announcement_template),
+        ("Birthday DM template", "birthday_dm", settings.birthday_dm_template),
+        ("Anniversary template", "anniversary", settings.anniversary_template),
+    )
+    for label, kind, value in template_inputs:
+        diagnostics.extend(_template_diagnostics(label=label, value=value, kind=kind))
     diagnostics.extend(
         _policy_diagnostics(
             label="Announcement title override",
@@ -403,10 +404,14 @@ def build_event_content_diagnostics(
             value=celebration.name,
             validator=ensure_safe_text,
         ),
-        *_policy_diagnostics(
+        *_template_diagnostics(
             label=template_label,
             value=celebration.template,
-            validator=ensure_safe_template,
+            kind=(
+                "server_anniversary"
+                if celebration.celebration_kind == "server_anniversary"
+                else "recurring_event"
+            ),
         ),
     ]
     return tuple(diagnostics)
@@ -575,3 +580,31 @@ def _policy_diagnostics(
             ),
         )
     return ()
+
+
+def _template_diagnostics(
+    *,
+    label: str,
+    value: str | None,
+    kind: AnnouncementSurfaceKind | Literal["birthday_dm"],
+) -> tuple[DeliveryDiagnostic, ...]:
+    diagnostics: list[DeliveryDiagnostic] = []
+    try:
+        validate_announcement_template(value, kind=kind)
+    except ValueError as exc:
+        diagnostics.append(
+            DeliveryDiagnostic(
+                severity="error",
+                code=f"{label.lower().replace(' ', '_')}_invalid",
+                summary=str(exc),
+                action="Open the relevant Studio surface, fix the template, and save again.",
+            )
+        )
+    diagnostics.extend(
+        _policy_diagnostics(
+            label=label,
+            value=value,
+            validator=ensure_safe_template,
+        )
+    )
+    return tuple(diagnostics)

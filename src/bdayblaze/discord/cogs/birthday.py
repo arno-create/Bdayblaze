@@ -21,17 +21,18 @@ from bdayblaze.discord.ui.setup import (
     build_setup_embed,
 )
 from bdayblaze.domain.announcement_surfaces import (
+    describe_resolved_field,
     resolve_announcement_surface,
-    surface_source_label,
 )
 from bdayblaze.domain.announcement_template import (
     AnnouncementRenderRecipient,
     anniversary_years,
     preview_context_for_kind,
+    server_anniversary_years_since_creation,
 )
 from bdayblaze.domain.announcement_theme import announcement_theme_label
 from bdayblaze.domain.birthday_logic import LATE_CELEBRATION_NOTE, is_birthday_active_now
-from bdayblaze.domain.media_validation import assess_media_url
+from bdayblaze.domain.media_validation import assess_media_url, strip_validated_direct_media_marker
 from bdayblaze.domain.models import (
     AnnouncementSurfaceKind,
     AnnouncementSurfaceSettings,
@@ -1915,6 +1916,14 @@ async def _build_preview_embed(
             event_name="Server anniversary",
             event_month=event_month,
             event_day=event_day,
+            server_anniversary_years_since_creation=(
+                server_anniversary_years_since_creation(
+                    guild.created_at,
+                    now_utc=datetime.now(UTC),
+                )
+                if guild.created_at is not None
+                else None
+            ),
         ).embed
 
     if kind in {"birthday_announcement", "birthday_dm"} and member is not None:
@@ -2096,27 +2105,11 @@ def _resolved_preview_surface(
 def _preview_route_lines(surface: ResolvedAnnouncementSurface | None) -> tuple[str, str]:
     if surface is None:
         return ("Configured route: n/a", "Effective route: Private DM")
-    configured = (
-        f"<#{surface.channel.configured_value}>"
-        if surface.channel.configured_value is not None
-        else "Inherited / not set"
-    )
-    if surface.channel.override_value is not None:
-        configured = (
-            f"Surface default {configured}; event override <#{surface.channel.override_value}>"
-        )
-    effective = (
-        f"<#{surface.channel.effective_value}>"
-        if surface.channel.effective_value is not None
-        else "Not configured"
-    )
-    return (
-        f"Configured route: {configured}",
-        (
-            "Effective route: "
-            f"{effective} "
-            f"({surface_source_label(surface.channel.source, surface_kind=surface.surface_kind)})"
-        ),
+    return describe_resolved_field(
+        surface.channel,
+        label="route",
+        surface_kind=surface.surface_kind,
+        value_formatter=lambda channel_id: f"<#{channel_id}>",
     )
 
 
@@ -2187,38 +2180,33 @@ def _preview_visual_lines(
         "Global celebration behavior: "
         f"{_celebration_mode_label(settings.celebration_mode)}",
         f"Title override: {settings.announcement_title_override or 'Default'}",
-        _preview_media_state_line(
-            resolved_surface.image.effective_value,
-            label=(
-                "Image "
-                "("
-                f"{surface_source_label(
-                    resolved_surface.image.source,
-                    surface_kind=resolved_surface.surface_kind,
-                )}"
-                ")"
-            ),
+        *_preview_media_lines(resolved_surface),
+    )
+
+
+def _preview_media_lines(surface: ResolvedAnnouncementSurface) -> tuple[str, ...]:
+    return (
+        *describe_resolved_field(
+            surface.image,
+            label="image",
+            surface_kind=surface.surface_kind,
+            value_formatter=lambda value: _preview_media_value_label(value, label="image"),
         ),
-        _preview_media_state_line(
-            resolved_surface.thumbnail.effective_value,
-            label=(
-                "Thumbnail "
-                "("
-                f"{surface_source_label(
-                    resolved_surface.thumbnail.source,
-                    surface_kind=resolved_surface.surface_kind,
-                )}"
-                ")"
-            ),
+        *describe_resolved_field(
+            surface.thumbnail,
+            label="thumbnail",
+            surface_kind=surface.surface_kind,
+            value_formatter=lambda value: _preview_media_value_label(value, label="thumbnail"),
         ),
     )
 
 
-def _preview_media_state_line(value: str | None, *, label: str) -> str:
-    assessment = assess_media_url(value, label=label)
+def _preview_media_value_label(value: str, *, label: str) -> str:
+    assessment = assess_media_url(value, label=label.title())
     if assessment is None:
-        return f"{label}: Not set"
-    return f"{label}: {assessment.status_label()}"
+        return "Not set"
+    display_url = strip_validated_direct_media_marker(assessment.normalized_url)
+    return f"{assessment.status_label()} | {truncate_text(display_url or '', 72)}"
 
 
 async def _require_ready_delivery(
