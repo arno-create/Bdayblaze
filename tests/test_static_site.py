@@ -15,7 +15,7 @@ def test_help_page_exists_and_covers_core_product_topics() -> None:
     assert "Help and FAQ" in help_html
     assert "Everything admins and members need" in help_html
     assert 'href="#media"' in help_html
-    assert "Route and media model" in help_html
+    assert "Route and media behavior" in help_html
     assert "{anniversary.years}" in help_html
     assert "{server_anniversary.years_since_creation}" in help_html
     assert "https://discord.com/servers/inevitable-friendship-1322933864360050688" in help_html

@@ -291,6 +291,46 @@ class PostgresRepository:
             )
         return self._map_guild_surprise_reward(row)
 
+    async def upsert_guild_surprise_rewards(
+        self,
+        rewards: list[GuildSurpriseReward],
+    ) -> list[GuildSurpriseReward]:
+        if not rewards:
+            return []
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                rows = []
+                for reward in rewards:
+                    row = await connection.fetchrow(
+                        """
+                        INSERT INTO guild_surprise_rewards (
+                            guild_id,
+                            reward_type,
+                            label,
+                            weight,
+                            enabled,
+                            note_text,
+                            updated_at_utc
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6, NOW())
+                        ON CONFLICT (guild_id, reward_type) DO UPDATE SET
+                            label = EXCLUDED.label,
+                            weight = EXCLUDED.weight,
+                            enabled = EXCLUDED.enabled,
+                            note_text = EXCLUDED.note_text,
+                            updated_at_utc = NOW()
+                        RETURNING *
+                        """,
+                        reward.guild_id,
+                        reward.reward_type,
+                        reward.label,
+                        reward.weight,
+                        reward.enabled,
+                        reward.note_text,
+                    )
+                    rows.append(row)
+        return [self._map_guild_surprise_reward(row) for row in rows]
+
     async def fetch_member_birthday(self, guild_id: int, user_id: int) -> MemberBirthday | None:
         async with self._pool.acquire() as connection:
             row = await connection.fetchrow(

@@ -92,7 +92,7 @@ class FakeGuild:
 
 
 @pytest.mark.asyncio
-async def test_health_service_distinguishes_configured_and_effective_inherited_routes() -> None:
+async def test_health_service_reports_compact_live_route_and_source_notes() -> None:
     repository = FakeRepository()
     metrics = SchedulerMetrics(
         last_iteration_at_utc=datetime.now(UTC),
@@ -110,17 +110,14 @@ async def test_health_service_distinguishes_configured_and_effective_inherited_r
     actions = "\n".join(issue.action for issue in issues)
 
     assert (
-        "Configured route: Not set. Effective route: <#123> "
-        "(Inherited from Birthday announcement)."
+        "Route: <#123> (inherits birthday default). "
+        "Route source: inherits birthday default."
     ) in actions
-    assert (
-        "Configured route: <#123>. Effective route: <#123> "
-        "(Custom for Birthday announcement)."
-    ) in actions
+    assert "Route: <#123> (custom). Route source: custom." in actions
 
 
 @pytest.mark.asyncio
-async def test_health_service_reports_configured_and_effective_media_for_inherited_surfaces(
+async def test_health_service_reports_compact_media_state_for_invalid_inherited_surfaces(
 ) -> None:
     repository = FakeRepository()
     repository.surfaces["birthday_announcement"] = AnnouncementSurfaceSettings(
@@ -143,15 +140,6 @@ async def test_health_service_reports_configured_and_effective_media_for_inherit
     issues = await service.inspect_guild(FakeGuild())  # type: ignore[arg-type]
     actions = "\n".join(issue.action for issue in issues)
 
-    assert (
-        "Configured image: Unsupported media rejected | https://example.com/manual.pdf."
-        in actions
-    )
-    assert (
-        "Effective image: Unsupported media rejected | https://example.com/manual.pdf "
-        "(Custom for Birthday announcement)."
-    ) in actions
-    assert (
-        "Effective image: Unsupported media rejected | https://example.com/manual.pdf "
-        "(Inherited from Birthday announcement)."
-    ) in actions
+    assert "Image: unsupported file (custom, needs attention)." in actions
+    assert "Media source: mixed (custom / not set)." in actions
+    assert "Image: unsupported file (inherits birthday default, needs attention)." in actions

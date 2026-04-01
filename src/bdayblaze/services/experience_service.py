@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
+from typing import TypedDict
 
 from bdayblaze.domain.birthday_logic import (
     current_celebration_window_utc,
@@ -52,6 +53,13 @@ _DEFAULT_REWARD_NOTES: dict[SurpriseRewardType, str | None] = {
 }
 _TIMELINE_ENTRY_LIMIT = 6
 _TIMELINE_STREAK_SCAN_LIMIT = 24
+
+
+class SurpriseRewardUpdate(TypedDict, total=False):
+    enabled: bool
+    weight: int
+    label: str
+    note_text: str | None
 
 
 class _UnsetType:
@@ -163,6 +171,45 @@ class ExperienceService:
             note_text=next_note,
         )
         return await self._repository.upsert_guild_surprise_reward(reward)
+
+    async def update_surprise_rewards(
+        self,
+        guild_id: int,
+        *,
+        updates: dict[SurpriseRewardType, SurpriseRewardUpdate],
+    ) -> list[GuildSurpriseReward]:
+        current_rewards = {
+            reward.reward_type: reward for reward in await self.list_surprise_rewards(guild_id)
+        }
+        next_rewards: list[GuildSurpriseReward] = []
+        for reward_type in _REWARD_ORDER:
+            current = current_rewards[reward_type]
+            patch = updates.get(reward_type, {})
+            enabled_value = patch.get("enabled")
+            weight_value = patch.get("weight")
+            label_value = patch.get("label")
+            note_marker = patch.get("note_text", UNSET)
+            next_weight = current.weight if weight_value is None else int(weight_value)
+            if next_weight < 0 or next_weight > 1000:
+                raise ValidationError("Surprise weight must be between 0 and 1000.")
+            next_label = _normalize_reward_label(
+                current.label if label_value is None else str(label_value),
+                reward_type=reward_type,
+            )
+            next_note = _normalize_reward_note(
+                current.note_text if isinstance(note_marker, _UnsetType) else note_marker,
+                reward_type=reward_type,
+            )
+            next_rewards.append(
+                replace(
+                    current,
+                    enabled=current.enabled if enabled_value is None else bool(enabled_value),
+                    weight=next_weight,
+                    label=next_label,
+                    note_text=next_note,
+                )
+            )
+        return await self._repository.upsert_guild_surprise_rewards(next_rewards)
 
     async def add_wish(
         self,

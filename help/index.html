@@ -233,7 +233,7 @@
               <span>3</span>
               <div>
                 <h3>Open Studio</h3>
-                <p>Use <code>/birthday studio</code> to manage templates, media, previews, anniversaries, recurring events, and global look.</p>
+                <p>Use <code>/birthday studio</code> to manage celebration copy, style, previews, annual events, and the experience-layer tools.</p>
               </div>
             </li>
             <li>
@@ -283,23 +283,23 @@
             </article>
             <article class="policy-card">
               <h3>Previews</h3>
-              <p>Previews never ping members. They show the selected surface, the current readiness summary, and the effective route and media state.</p>
+              <p>Previews never ping members. They show the selected surface, readiness, and the same compact live route/media truth used across Setup, Studio, and Health.</p>
             </article>
             <article class="policy-card">
               <h3>Health</h3>
-              <p><code>/birthday health</code> checks channels, permissions, roles, scheduler lag, recent failures, template issues, and effective surface media problems.</p>
+              <p><code>/birthday health</code> checks channels, permissions, roles, scheduler lag, recent failures, template issues, and live surface media problems.</p>
             </article>
           </div>
         </section>
 
         <section class="policy-section" data-reveal id="media">
-          <h2>Route and media model</h2>
+          <h2>Route and media behavior</h2>
           <ul class="policy-list">
             <li>Route, image, and thumbnail resolve independently. A surface can inherit one field and override another.</li>
             <li>Birthday announcement is the default source for member anniversaries, server anniversaries, and recurring annual events.</li>
             <li>Inheritance applies only when the target field is truly unset. A saved custom value, even a bad one, does not silently fall back.</li>
             <li>Server anniversaries and recurring annual events can use an event-level channel override for route only. That override does not replace image or thumbnail.</li>
-            <li>Setup, Studio, previews, and health show configured value, effective value, and source separately for route, image, and thumbnail.</li>
+            <li>Setup, Studio, previews, and health lead with the live route, media source, and health state, with diagnostics only when needed.</li>
             <li>Media Tools validates direct HTTPS image, GIF, and WebP URLs. Failed saves never wipe the last saved value.</li>
             <li><code>Validate current</code> checks the effective live image and thumbnail, including inherited media, without changing the saved settings.</li>
           </ul>
@@ -354,7 +354,7 @@
           <div class="policy-grid">
             <article class="policy-card">
               <h3>Why did my anniversary use the birthday image?</h3>
-              <p>That surface inherits image and thumbnail per field from Birthday announcement when its own field is unset. Check Studio for configured and effective values separately.</p>
+              <p>That surface inherits image and thumbnail per field from Birthday announcement when its own field is unset. Studio shows the live result first and keeps source details close by.</p>
             </article>
             <article class="policy-card">
               <h3>Why did a bad image not fall back to the birthday default?</h3>

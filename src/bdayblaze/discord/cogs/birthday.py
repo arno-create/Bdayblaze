@@ -21,7 +21,6 @@ from bdayblaze.discord.ui.setup import (
     build_setup_embed,
 )
 from bdayblaze.domain.announcement_surfaces import (
-    describe_resolved_field,
     resolve_announcement_surface,
 )
 from bdayblaze.domain.announcement_template import (
@@ -32,7 +31,7 @@ from bdayblaze.domain.announcement_template import (
 )
 from bdayblaze.domain.announcement_theme import announcement_theme_label
 from bdayblaze.domain.birthday_logic import LATE_CELEBRATION_NOTE, is_birthday_active_now
-from bdayblaze.domain.media_validation import assess_media_url, strip_validated_direct_media_marker
+from bdayblaze.domain.media_validation import assess_media_url
 from bdayblaze.domain.models import (
     AnnouncementSurfaceKind,
     AnnouncementSurfaceSettings,
@@ -46,6 +45,13 @@ from bdayblaze.domain.models import (
     MemberBirthday,
     NitroConciergeEntry,
     ResolvedAnnouncementSurface,
+)
+from bdayblaze.domain.operator_summary import (
+    celebration_mode_summary,
+    media_health_line,
+    media_line,
+    route_line,
+    route_source_line,
 )
 from bdayblaze.domain.timezones import autocomplete_timezones
 from bdayblaze.services.birthday_service import BirthdayService
@@ -801,6 +807,7 @@ class BirthdayGroup(
             view=MessageTemplateView(
                 settings_service=self._settings_service,
                 experience_service=self._experience_service,
+                experience_settings=experience_settings,
                 settings=settings,
                 announcement_surfaces=announcement_surfaces,
                 owner_id=interaction.user.id,
@@ -1227,6 +1234,10 @@ class BirthdayGroup(
                 limit=8,
             )
         )
+        experience_settings = await self._experience_service.get_settings(interaction.guild.id)
+        surprise_rewards = tuple(
+            await self._experience_service.list_surprise_rewards(interaction.guild.id)
+        )
         await interaction.followup.send(
             embed=build_message_template_embed(
                 latest,
@@ -1234,11 +1245,15 @@ class BirthdayGroup(
                 note="Member anniversary routing updated.",
                 section="anniversary",
                 guild=interaction.guild,
+                experience_settings=experience_settings,
+                surprise_rewards=surprise_rewards,
                 server_anniversary=server_anniversary,
                 recurring_events=recurring_events,
             ),
             view=MessageTemplateView(
                 settings_service=self._settings_service,
+                experience_service=self._experience_service,
+                experience_settings=experience_settings,
                 settings=latest,
                 announcement_surfaces=latest_surfaces,
                 owner_id=interaction.user.id,
@@ -1656,15 +1671,18 @@ def _build_health_embed(issues: object) -> discord.Embed:
         title="🩺 Health Check",
         color=discord.Color.orange(),
     )
-    embed.add_line_fields(
-        "Actionable issues",
-        [
-            f"[{issue.severity.upper()}] `{issue.code}`: {issue.summary}\n"
-            f"Action: {issue.action}"
-            for issue in typed_issues
-        ],
-        inline=False,
-    )
+    for severity in ("error", "warning", "info"):
+        scoped = [issue for issue in typed_issues if issue.severity == severity]
+        if not scoped:
+            continue
+        embed.add_line_fields(
+            f"{severity.title()} issues",
+            [
+                f"`{issue.code}`: {issue.summary}\nAction: {issue.action}"
+                for issue in scoped
+            ],
+            inline=False,
+        )
     return embed.build()
 
 
@@ -2071,10 +2089,7 @@ def _preview_kind_label(
 
 
 def _celebration_mode_label(mode: str) -> str:
-    return {
-        "quiet": "Quiet: polished, restrained celebration visuals",
-        "party": "Party: brighter, more playful celebration visuals",
-    }.get(mode, mode.title())
+    return celebration_mode_summary(mode)
 
 
 def _resolved_preview_surface(
@@ -2104,12 +2119,10 @@ def _resolved_preview_surface(
 
 def _preview_route_lines(surface: ResolvedAnnouncementSurface | None) -> tuple[str, str]:
     if surface is None:
-        return ("Configured route: n/a", "Effective route: Private DM")
-    return describe_resolved_field(
-        surface.channel,
-        label="route",
-        surface_kind=surface.surface_kind,
-        value_formatter=lambda channel_id: f"<#{channel_id}>",
+        return ("Route: private DM only", "Route source: direct DM flow")
+    return (
+        route_line(surface.channel, surface_kind=surface.surface_kind),
+        route_source_line(surface.channel, surface_kind=surface.surface_kind),
     )
 
 
@@ -2169,16 +2182,14 @@ def _preview_visual_lines(
         return (
             "Media status: Not used for live birthday DMs",
             f"Theme: {announcement_theme_label(settings.announcement_theme)}",
-            "Global celebration behavior: "
-            f"{_celebration_mode_label(settings.celebration_mode)}",
+            f"Style: {_celebration_mode_label(settings.celebration_mode)}",
             "Global look stays on public announcement surfaces.",
         )
     assert resolved_surface is not None
     return (
-        f"Media status: {'Ready' if not media_diagnostics else 'Needs attention'}",
+        media_health_line(resolved_surface),
         f"Theme: {announcement_theme_label(settings.announcement_theme)}",
-        "Global celebration behavior: "
-        f"{_celebration_mode_label(settings.celebration_mode)}",
+        f"Style: {_celebration_mode_label(settings.celebration_mode)}",
         f"Title override: {settings.announcement_title_override or 'Default'}",
         *_preview_media_lines(resolved_surface),
     )
@@ -2186,27 +2197,9 @@ def _preview_visual_lines(
 
 def _preview_media_lines(surface: ResolvedAnnouncementSurface) -> tuple[str, ...]:
     return (
-        *describe_resolved_field(
-            surface.image,
-            label="image",
-            surface_kind=surface.surface_kind,
-            value_formatter=lambda value: _preview_media_value_label(value, label="image"),
-        ),
-        *describe_resolved_field(
-            surface.thumbnail,
-            label="thumbnail",
-            surface_kind=surface.surface_kind,
-            value_formatter=lambda value: _preview_media_value_label(value, label="thumbnail"),
-        ),
+        media_line(surface.image, label="image", surface_kind=surface.surface_kind),
+        media_line(surface.thumbnail, label="thumbnail", surface_kind=surface.surface_kind),
     )
-
-
-def _preview_media_value_label(value: str, *, label: str) -> str:
-    assessment = assess_media_url(value, label=label.title())
-    if assessment is None:
-        return "Not set"
-    display_url = strip_validated_direct_media_marker(assessment.normalized_url)
-    return f"{assessment.status_label()} | {truncate_text(display_url or '', 72)}"
 
 
 async def _require_ready_delivery(

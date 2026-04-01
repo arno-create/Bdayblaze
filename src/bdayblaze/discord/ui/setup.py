@@ -1,7 +1,7 @@
 ﻿from __future__ import annotations
 
 import asyncio
-from calendar import month_name
+from calendar import month_name, monthrange
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Final, Literal, cast
@@ -11,7 +11,6 @@ import discord
 from bdayblaze.discord.announcements import build_announcement_message
 from bdayblaze.discord.embed_budget import BudgetedEmbed, code_block_snippet, truncate_text
 from bdayblaze.domain.announcement_surfaces import (
-    describe_resolved_field,
     normalize_announcement_surfaces,
     resolve_announcement_surface,
     surface_label,
@@ -46,6 +45,14 @@ from bdayblaze.domain.models import (
     RecurringCelebration,
     ResolvedAnnouncementSurface,
     ResolvedSurfaceField,
+)
+from bdayblaze.domain.operator_summary import (
+    celebration_mode_summary,
+    media_health_line,
+    media_line,
+    media_source_line,
+    route_line,
+    route_source_line,
 )
 from bdayblaze.domain.timezones import timezone_guidance
 from bdayblaze.logging import get_logger, redact_identifier
@@ -143,18 +150,18 @@ def _resolve_surface(
 
 
 def _surface_route_lines(surface: ResolvedAnnouncementSurface) -> tuple[str, str]:
-    return describe_resolved_field(
-        surface.channel,
-        label="route",
-        surface_kind=surface.surface_kind,
-        value_formatter=lambda channel_id: f"<#{channel_id}>",
+    return (
+        route_line(surface.channel, surface_kind=surface.surface_kind),
+        route_source_line(surface.channel, surface_kind=surface.surface_kind),
     )
 
 
 def _surface_media_lines(surface: ResolvedAnnouncementSurface) -> tuple[str, ...]:
     return (
-        *_surface_media_field_lines(surface.image, label="image", surface=surface),
-        *_surface_media_field_lines(surface.thumbnail, label="thumbnail", surface=surface),
+        media_line(surface.image, label="image", surface_kind=surface.surface_kind),
+        media_line(surface.thumbnail, label="thumbnail", surface_kind=surface.surface_kind),
+        media_health_line(surface),
+        media_source_line(surface),
     )
 
 
@@ -164,11 +171,9 @@ def _surface_media_field_lines(
     label: Literal["image", "thumbnail"],
     surface: ResolvedAnnouncementSurface,
 ) -> tuple[str, str]:
-    return describe_resolved_field(
-        field,
-        label=label,
-        surface_kind=surface.surface_kind,
-        value_formatter=lambda value: _media_value_label(value, label=label),
+    return (
+        media_line(field, label=label, surface_kind=surface.surface_kind),
+        f"{label.title()} source: {media_source_line(surface).split(': ', 1)[1]}",
     )
 
 
@@ -186,10 +191,7 @@ def _media_value_label(
 
 
 def _celebration_mode_label(mode: str) -> str:
-    return {
-        "quiet": "Quiet: polished, restrained celebration visuals",
-        "party": "Party: brighter, more playful celebration visuals",
-    }.get(mode, mode.title())
+    return celebration_mode_summary(mode)
 
 
 def _default_preview_kind_for_section(section: SectionName) -> AnnouncementKind:
@@ -237,6 +239,15 @@ def _global_look_lines(settings: GuildSettings) -> tuple[str, ...]:
         f"Footer text: {settings.announcement_footer_text or 'Default'}",
         f"Global celebration behavior: {_celebration_mode_label(settings.celebration_mode)}",
         f"Accent color: {_format_accent_color(settings.announcement_accent_color)}",
+    )
+
+
+def _style_summary_lines(settings: GuildSettings) -> tuple[str, ...]:
+    return (
+        f"Theme: {announcement_theme_label(settings.announcement_theme)}",
+        f"Mode: {_celebration_mode_label(settings.celebration_mode)}",
+        f"Title: {settings.announcement_title_override or 'Default'}",
+        f"Footer: {settings.announcement_footer_text or 'Default'}",
     )
 
 
@@ -370,117 +381,102 @@ def build_setup_embed(
     budget = BudgetedEmbed.create(
         title=_SETUP_TITLE,
         description=(
-            "Control routing, timezone, eligibility, and delivery safeguards before anything "
-            "goes live."
+            "Control live delivery basics first: routes, timezone, eligibility, and the guardrails "
+            "that decide who gets celebrated and where it lands."
         ),
         color=discord.Color.blurple(),
     )
     budget.add_field(
-        name="\U0001F382 Birthday announcement",
-        value=(
-            f"Status: {_format_enabled(settings.announcements_enabled)}\n"
-            f"{_surface_route_lines(birthday_surface)[0]}\n"
-            f"{_surface_route_lines(birthday_surface)[1]}\n"
-            f"{_surface_media_lines(birthday_surface)[0]}\n"
-            f"{_surface_media_lines(birthday_surface)[1]}\n"
-            f"{_surface_media_lines(birthday_surface)[2]}\n"
-            f"{_surface_media_lines(birthday_surface)[3]}"
+        name="\U0001F382 Birthday delivery",
+        value="\n".join(
+            (
+                f"Live: {_format_enabled(settings.announcements_enabled)}",
+                *_surface_route_lines(birthday_surface),
+                *_surface_media_lines(birthday_surface)[:3],
+            )
         ),
         inline=False,
     )
     budget.add_field(
-        name="\U0001F48C Birthday DM",
-        value=(
-            f"Status: {_format_enabled(settings.birthday_dm_enabled)}\n"
-            "Route: private DM only\n"
-            "Media: not used for birthday DMs\n"
-            f"Global celebration behavior: {_celebration_mode_label(settings.celebration_mode)}"
+        name="\U0001F48C Private birthday DM",
+        value="\n".join(
+            (
+                f"Live: {_format_enabled(settings.birthday_dm_enabled)}",
+                "Route: private DM only",
+                "Media: not used for birthday DMs",
+                f"Style: {_celebration_mode_label(settings.celebration_mode)}",
+            )
         ),
         inline=False,
     )
     budget.add_field(
-        name="\U0001F6E1 Eligibility and anti-spam",
-        value=(
-            "Eligibility role: "
-            f"{_format_eligibility_role(settings.eligibility_role_id)}\n"
-            f"Ignore bots: {_format_enabled(settings.ignore_bots)}\n"
-            f"Minimum membership age: {settings.minimum_membership_days} day(s)\n"
-            f"Mention suppression threshold: {settings.mention_suppression_threshold}"
+        name="\U0001F6E1 Roles and eligibility",
+        value="\n".join(
+            (
+                "Birthday role: "
+                f"{_format_enabled(settings.role_enabled)} "
+                f"({_format_role(settings.birthday_role_id)})",
+                f"Eligibility: {_format_eligibility_role(settings.eligibility_role_id)}",
+                f"Ignore bots: {_format_enabled(settings.ignore_bots)}",
+                f"Minimum membership age: {settings.minimum_membership_days} day(s)",
+                f"Mention suppression threshold: {settings.mention_suppression_threshold}",
+            )
         ),
         inline=False,
     )
     budget.add_field(
-        name="\U0001F48C Roles and private delivery",
-        value=(
-            "Birthday role: "
-            f"{_format_enabled(settings.role_enabled)} "
-            f"({_format_role(settings.birthday_role_id)})\n"
-            f"Birthday DM: {_format_enabled(settings.birthday_dm_enabled)}"
+        name="\U0001F389 Member anniversaries",
+        value="\n".join(
+            (
+                f"Live: {_format_enabled(settings.anniversary_enabled)}",
+                *_surface_route_lines(anniversary_surface),
+                *_surface_media_lines(anniversary_surface)[:3],
+                "Audience: tracked members only",
+            )
         ),
         inline=False,
     )
     budget.add_field(
-        name="\U0001F389 Anniversary routing",
-        value=(
-            f"Member anniversaries: {_format_enabled(settings.anniversary_enabled)}\n"
-            f"{_surface_route_lines(anniversary_surface)[0]}\n"
-            f"{_surface_route_lines(anniversary_surface)[1]}\n"
-            f"{_surface_media_lines(anniversary_surface)[0]}\n"
-            f"{_surface_media_lines(anniversary_surface)[1]}\n"
-            f"{_surface_media_lines(anniversary_surface)[2]}\n"
-            f"{_surface_media_lines(anniversary_surface)[3]}\n"
-            "Model: tracked members only"
+        name="\U0001F4C5 Annual celebrations",
+        value="\n".join(
+            (
+                "Server anniversary default:",
+                f"- {_surface_route_lines(server_surface)[0]}",
+                f"- {_surface_media_lines(server_surface)[0]}",
+                f"- {_surface_media_lines(server_surface)[1]}",
+                "Recurring events default:",
+                f"- {_surface_route_lines(recurring_surface)[0]}",
+                f"- {_surface_media_lines(recurring_surface)[0]}",
+                f"- {_surface_media_lines(recurring_surface)[1]}",
+                "Saved event-level channel overrides still win when one exists.",
+            )
         ),
         inline=False,
     )
     budget.add_field(
-        name="\U0001F3F0 Server anniversary defaults",
-        value=(
-            f"{_surface_route_lines(server_surface)[0]}\n"
-            f"{_surface_route_lines(server_surface)[1]}\n"
-            f"{_surface_media_lines(server_surface)[0]}\n"
-            f"{_surface_media_lines(server_surface)[1]}\n"
-            f"{_surface_media_lines(server_surface)[2]}\n"
-            f"{_surface_media_lines(server_surface)[3]}\n"
-            "Event-level channel overrides still win when one is saved."
+        name="\U0001F30D Timezone and safety",
+        value="\n".join(
+            (
+                f"Default timezone: `{settings.default_timezone}`",
+                f"Studio audit log: {_format_channel(settings.studio_audit_channel_id)}",
+                "Unsafe message text, event names, and media URLs are blocked before save.",
+                f"Timezone examples: {timezone_guidance(allow_server_default=False)}",
+            )
         ),
         inline=False,
     )
     budget.add_field(
-        name="\U0001F4C5 Recurring annual events defaults",
+        name="\u2728 Celebration Studio",
         value=(
-            f"{_surface_route_lines(recurring_surface)[0]}\n"
-            f"{_surface_route_lines(recurring_surface)[1]}\n"
-            f"{_surface_media_lines(recurring_surface)[0]}\n"
-            f"{_surface_media_lines(recurring_surface)[1]}\n"
-            f"{_surface_media_lines(recurring_surface)[2]}\n"
-            f"{_surface_media_lines(recurring_surface)[3]}\n"
-            "Individual yearly events can keep their own channel override or inherit this default."
-        ),
-        inline=False,
-    )
-    budget.add_field(
-        name="\U0001F30D Default timezone",
-        value=(
-            f"Saved: `{settings.default_timezone}`\n"
-            f"Examples: {timezone_guidance(allow_server_default=False)}"
+            "Use Celebration Studio for copy, Quiet vs Party style, previews, media tools, "
+            "server anniversary copy, capsules, quests, surprises, and recurring-event design."
         ),
         inline=False,
     )
     if note:
         budget.add_field(name="\u2728 Updated", value=note, inline=False)
-    budget.add_line_fields("\U0001F3A8 Global look", _global_look_lines(settings), inline=False)
-    budget.add_field(
-        name="Studio safety",
-        value=(
-            "Blocked-attempt audit log: "
-            f"{_format_channel(settings.studio_audit_channel_id)}\n"
-            "Unsafe message text, event names, and media URLs are blocked."
-        ),
-        inline=False,
-    )
     budget.set_footer(
-        "Open Celebration Studio from this panel to manage copy, media, previews, and resets."
+        "Setup keeps delivery basics clean. Studio handles how celebrations look and feel."
     )
     return budget.build()
 
@@ -496,6 +492,77 @@ def build_timezone_help_embed(*, allow_server_default: bool) -> discord.Embed:
             "Use the full IANA timezone name.\n"
             "Examples: `Asia/Yerevan`, `Europe/London`, `Europe/Berlin`, "
             "`America/New_York`, `America/Los_Angeles`, `Asia/Tokyo`."
+        ),
+        inline=False,
+    )
+    return budget.build()
+
+
+def build_membership_rules_embed(
+    settings: GuildSettings,
+    *,
+    note: str | None = None,
+) -> discord.Embed:
+    budget = BudgetedEmbed.create(
+        title="Membership and anti-spam rules",
+        description=(
+            "Set the delivery guardrails that decide who is eligible for birthday and "
+            "anniversary celebrations."
+        ),
+        color=discord.Color.blurple(),
+    )
+    if note:
+        budget.add_field(name="Updated", value=note, inline=False)
+    budget.add_line_fields(
+        "Current rules",
+        (
+            f"Ignore bots: {_format_enabled(settings.ignore_bots)}",
+            f"Minimum membership age: {settings.minimum_membership_days} day(s)",
+            f"Mention suppression threshold: {settings.mention_suppression_threshold}",
+        ),
+        inline=False,
+    )
+    budget.add_field(
+        name="Presets and custom values",
+        value=(
+            "Use the preset selects for common values. Choose the custom option only when your "
+            "server needs a different number."
+        ),
+        inline=False,
+    )
+    budget.set_footer("These rules apply before a live celebration is delivered.")
+    return budget.build()
+
+
+def build_quest_settings_embed(
+    settings: GuildExperienceSettings,
+    *,
+    note: str | None = None,
+) -> discord.Embed:
+    budget = BudgetedEmbed.create(
+        title="Birthday Quest controls",
+        description=(
+            "Tune the live quest rules with native controls instead of raw parser inputs."
+        ),
+        color=discord.Color.blurple(),
+    )
+    if note:
+        budget.add_field(name="Updated", value=note, inline=False)
+    budget.add_line_fields(
+        "Current rules",
+        (
+            f"Live: {_format_enabled(settings.quests_enabled)}",
+            f"Wish target: {settings.quest_wish_target}",
+            f"Reaction target: {settings.quest_reaction_target}",
+            f"Check-in required: {_format_enabled(settings.quest_checkin_enabled)}",
+        ),
+        inline=False,
+    )
+    budget.add_field(
+        name="Tracked objectives",
+        value=(
+            "Birthday Quests can count unlocked wishes, reactions on the shared birthday post, "
+            "and an optional manual check-in."
         ),
         inline=False,
     )
@@ -559,35 +626,39 @@ def build_media_tools_embed(
     )
     surface_title = surface_label(surface_kind)
     budget = BudgetedEmbed.create(
-        title="Surface Route and Media",
+        title="Media Tools",
         description=(
-            f"Manage route and media for {surface_title}. Save only direct HTTPS image, GIF, or "
-            "WebP file URLs here. Saved media stays in place until a replacement passes "
-            "validation. Webpage wrappers, unsupported files, and unsafe links are called out "
-            "explicitly instead of disappearing."
+            f"Manage the live route and media for {surface_title}. This view leads with what is "
+            "live now, then shows validation details only when they help."
         ),
         color=discord.Color.blurple(),
     )
     if note:
         budget.add_field(name="Updated", value=note, inline=False)
     budget.add_line_fields(
-        "Route state",
-        _surface_route_lines(resolved_surface),
-        inline=False,
-    )
-    budget.add_line_fields(
-        "Configured surface media",
+        "Live surface",
         (
-            _surface_media_lines(resolved_surface)[0],
-            _surface_media_lines(resolved_surface)[2],
+            *_surface_route_lines(resolved_surface),
+            *_surface_media_lines(resolved_surface)[:3],
         ),
         inline=False,
     )
     budget.add_line_fields(
-        "Effective live media",
+        "Inheritance and defaults",
         (
-            _surface_media_lines(resolved_surface)[1],
             _surface_media_lines(resolved_surface)[3],
+            (
+                "Birthday announcement acts as the default route and media source whenever "
+                "another surface leaves a field unset."
+                if surface_kind != "birthday_announcement"
+                else "Birthday announcement is the root default surface."
+            ),
+            (
+                "Saved event channel overrides still win for recurring events and server "
+                "anniversary posts."
+                if surface_kind in {"server_anniversary", "recurring_event"}
+                else "Clear one field to inherit just that field again."
+            ),
         ),
         inline=False,
     )
@@ -616,13 +687,13 @@ def build_media_tools_embed(
     budget.add_field(
         name="Save protection",
         value=(
-            "Blocked saves never clear the currently saved media. The Saved media section shows "
-            "what is still live, and Latest validation shows the exact URL that was checked."
+            "Blocked saves never clear the currently saved media. Validation can fail without "
+            "wiping the image or thumbnail that is already live."
         ),
         inline=False,
     )
     budget.add_field(
-        name="Common fixes",
+        name="Quick fixes",
         value=(
             "Tenor/Giphy: use the direct media file URL, not the page link.\n"
             "Google image results: wrapper links are webpages, not direct media files.\n"
@@ -631,33 +702,12 @@ def build_media_tools_embed(
         inline=False,
     )
     budget.add_field(
-        name="Validation flow",
+        name="Actions",
         value=(
-            "Edit media validates both URLs before save. Use Validate current to re-check saved "
-            "URLs without changing them. If validation is blocked or unavailable, no new media is "
-            "saved and the current saved media remains live."
-        ),
-        inline=False,
-    )
-    budget.add_field(
-        name="Reset behavior",
-        value=(
-            "Clear image or Clear thumbnail removes only that override. On non-birthday "
-            "surfaces, the cleared field immediately inherits from Birthday announcement if a "
-            "default exists. Reset surface to inherited clears this surface route, image, and "
-            "thumbnail overrides together."
-        ),
-        inline=False,
-    )
-    budget.add_field(
-        name="State guide",
-        value=(
-            "✅ Direct media accepted: Discord should usually render it.\n"
-            "⚠️ Webpage link rejected: this looks like a page, not an image/GIF file.\n"
-            "⛔ Unsupported media rejected: the link points to a non-image/GIF/WebP file.\n"
-            "🔎 Needs validation: the URL may still be direct media, but it needs checking.\n"
-            "⛔ Invalid or unsafe URL rejected: replace the URL before saving.\n"
-            "⚠️ Validation unavailable: the probe could not confirm it right now."
+            "Edit media validates before save.\n"
+            "Validate current re-checks the live image and thumbnail without changing them.\n"
+            "Clear image or Clear thumbnail removes only that one override.\n"
+            "Reset surface to inherited clears route, image, and thumbnail overrides together."
         ),
         inline=False,
     )
@@ -719,115 +769,117 @@ def build_message_template_embed(
     if section == "home":
         budget.add_field(
             name="\U0001F382 Birthday announcement",
-            value=(
-                f"Status: {_format_enabled(settings.announcements_enabled)}\n"
-                f"{_surface_route_lines(birthday_surface)[0]}\n"
-                f"{_surface_route_lines(birthday_surface)[1]}\n"
-                f"{_surface_media_lines(birthday_surface)[0]}\n"
-                f"{_surface_media_lines(birthday_surface)[1]}\n"
-                f"{_surface_media_lines(birthday_surface)[2]}\n"
-                f"{_surface_media_lines(birthday_surface)[3]}\n"
-                "Copy length: "
-                f"{len(settings.announcement_template or DEFAULT_ANNOUNCEMENT_TEMPLATE)} chars"
+            value="\n".join(
+                (
+                    f"Live: {_format_enabled(settings.announcements_enabled)}",
+                    _surface_route_lines(birthday_surface)[0],
+                    _surface_media_lines(birthday_surface)[0],
+                    _surface_media_lines(birthday_surface)[1],
+                    _surface_media_lines(birthday_surface)[2],
+                    "Copy: "
+                    f"{len(settings.announcement_template or DEFAULT_ANNOUNCEMENT_TEMPLATE)} chars",
+                )
             ),
             inline=False,
         )
         budget.add_field(
             name="\U0001F48C Birthday DM",
-            value=(
-                f"Status: {_format_enabled(settings.birthday_dm_enabled)}\n"
-                f"Copy length: {len(settings.birthday_dm_template or DEFAULT_DM_TEMPLATE)} chars\n"
-                "Delivery: best effort private DM"
+            value="\n".join(
+                (
+                    f"Live: {_format_enabled(settings.birthday_dm_enabled)}",
+                    "Delivery: best effort private DM",
+                    f"Copy: {len(settings.birthday_dm_template or DEFAULT_DM_TEMPLATE)} chars",
+                    f"Style: {_celebration_mode_label(settings.celebration_mode)}",
+                )
             ),
             inline=False,
         )
         budget.add_field(
             name="\U0001F389 Member anniversary",
-            value=(
-                f"Status: {_format_enabled(settings.anniversary_enabled)}\n"
-                f"{_surface_route_lines(anniversary_surface)[0]}\n"
-                f"{_surface_route_lines(anniversary_surface)[1]}\n"
-                f"{_surface_media_lines(anniversary_surface)[0]}\n"
-                f"{_surface_media_lines(anniversary_surface)[1]}\n"
-                f"{_surface_media_lines(anniversary_surface)[2]}\n"
-                f"{_surface_media_lines(anniversary_surface)[3]}\n"
-                "Model: tracked members only"
+            value="\n".join(
+                (
+                    f"Live: {_format_enabled(settings.anniversary_enabled)}",
+                    _surface_route_lines(anniversary_surface)[0],
+                    _surface_media_lines(anniversary_surface)[0],
+                    _surface_media_lines(anniversary_surface)[1],
+                    _surface_media_lines(anniversary_surface)[2],
+                    "Audience: tracked members only",
+                )
             ),
             inline=False,
         )
         budget.add_field(
-            name="\U0001F3F0 Server anniversary",
-            value=(
-                f"Status: {_format_enabled(state.enabled)}\n"
-                f"Date: {_format_month_day(state.month, state.day)}\n"
-                f"{_surface_route_lines(server_surface)[0]}\n"
-                f"{_surface_route_lines(server_surface)[1]}\n"
-                f"{_surface_media_lines(server_surface)[0]}\n"
-                f"{_surface_media_lines(server_surface)[1]}\n"
-                f"{_surface_media_lines(server_surface)[2]}\n"
-                f"{_surface_media_lines(server_surface)[3]}\n"
-                "Source: "
-                f"{'Guild creation date' if state.use_guild_created_date else 'Custom date'}"
-            ),
+            name="\U0001F3A8 Celebration style",
+            value="\n".join(_style_summary_lines(settings)),
             inline=False,
         )
-        budget.add_line_fields(
-            "\U0001F3A8 Global look",
-            _global_look_lines(settings),
+        budget.add_field(
+            name="\U0001F3F0 Annual celebrations",
+            value="\n".join(
+                (
+                    "Server anniversary: "
+                    f"{_format_enabled(state.enabled)} "
+                    f"on {_format_month_day(state.month, state.day)}",
+                    (
+                        "Date source: guild creation date"
+                        if state.use_guild_created_date
+                        else "Date source: custom saved date"
+                    ),
+                    _surface_route_lines(server_surface)[0],
+                    f"Recurring defaults: {_surface_route_lines(recurring_surface)[0]}",
+                    f"Configured yearly events: {len(recurring_events)}",
+                    (
+                        _format_event_line(recurring_events[0])
+                        if recurring_events
+                        else "No custom annual events are configured yet."
+                    ),
+                )
+            ),
             inline=False,
         )
         budget.add_field(
             name="\u2709\ufe0f Birthday Capsules",
-            value=(
-                f"Status: {_format_enabled(experience_state.capsules_enabled)}\n"
-                "Reveal: announcement channel when live, otherwise private unlock only"
+            value="\n".join(
+                (
+                    f"Live: {_format_enabled(experience_state.capsules_enabled)}",
+                    "Reveal: announcement channel when live, otherwise private unlock only",
+                )
             ),
             inline=False,
         )
         budget.add_field(
             name="\U0001F3AF Birthday Quests",
-            value=(
-                f"Status: {_format_enabled(experience_state.quests_enabled)}\n"
-                f"Wish target: {experience_state.quest_wish_target}\n"
-                f"Reaction target: {experience_state.quest_reaction_target}\n"
-                "Check-in: "
-                f"{_format_enabled(experience_state.quest_checkin_enabled)}"
+            value="\n".join(
+                (
+                    f"Live: {_format_enabled(experience_state.quests_enabled)}",
+                    f"Wish target: {experience_state.quest_wish_target}",
+                    f"Reaction target: {experience_state.quest_reaction_target}",
+                    f"Check-in: {_format_enabled(experience_state.quest_checkin_enabled)}",
+                )
             ),
             inline=False,
         )
         budget.add_field(
             name="\U0001F381 Birthday Surprises",
-            value=(
-                f"Status: {_format_enabled(experience_state.surprises_enabled)}\n"
-                f"Enabled rewards: {_enabled_reward_count(surprise_rewards)}"
+            value="\n".join(
+                (
+                    f"Live: {_format_enabled(experience_state.surprises_enabled)}",
+                    f"Enabled rewards: {_enabled_reward_count(surprise_rewards)}",
+                    "Nitro stays manual-only concierge fulfillment.",
+                )
             ),
             inline=False,
         )
-        if recurring_events:
-            budget.add_line_fields(
-                "\U0001F4C5 Recurring annual events defaults",
-                (
-                    _surface_route_lines(recurring_surface)[0],
-                    _surface_route_lines(recurring_surface)[1],
-                    _surface_media_lines(recurring_surface)[0],
-                    _surface_media_lines(recurring_surface)[1],
-                    _surface_media_lines(recurring_surface)[2],
-                    _surface_media_lines(recurring_surface)[3],
-                ),
-                inline=False,
-            )
-            budget.add_line_fields(
-                "\U0001F4C5 Custom annual events",
-                [_format_event_line(celebration) for celebration in recurring_events[:4]],
-                inline=False,
-            )
-        else:
-            budget.add_field(
-                name="\U0001F4C5 Custom annual events",
-                value="No custom annual events are configured yet.",
-                inline=False,
-            )
     elif section == "help":
+        budget.add_field(
+            name="\u2728 Operator flow",
+            value=(
+                "Use Setup for routes, timezone, roles, eligibility, and delivery safety.\n"
+                "Use Studio for celebration copy, Quiet vs Party style, previews, media tools, "
+                "annual-event polish, capsules, quests, and surprises."
+            ),
+            inline=False,
+        )
         for group_name, placeholders in supported_placeholder_groups():
             budget.add_line_fields(
                 group_name,
@@ -857,7 +909,8 @@ def build_message_template_embed(
         budget.add_field(
             name="\U0001F9ED Preview and reset notes",
             value=(
-                "Media Tools validates image and thumbnail URLs before save.\n"
+                "Media Tools leads with the live route, media source, and health state.\n"
+                "It validates image and thumbnail URLs before save.\n"
                 "Signed, query-string, and extensionless URLs can work when validation proves "
                 "they are direct media assets.\n"
                 "Full preview is still the final Discord render check. It never pings members.\n"
@@ -928,14 +981,13 @@ def build_message_template_embed(
         )
     elif section == "server_anniversary":
         budget.add_line_fields(
-            "\U0001F3F0 Schedule and routing",
+            "\U0001F3F0 Live behavior",
             (
-                f"Live status: {_format_enabled(state.enabled)}",
+                f"Live: {_format_enabled(state.enabled)}",
                 f"Date: {_format_month_day(state.month, state.day)}",
                 "Date source: "
                 f"{'Guild creation date' if state.use_guild_created_date else 'Custom date'}",
-                _surface_route_lines(server_surface)[0],
-                _surface_route_lines(server_surface)[1],
+                *_surface_route_lines(server_surface),
             ),
             inline=False,
         )
@@ -947,7 +999,7 @@ def build_message_template_embed(
             inline=False,
         )
         budget.add_line_fields(
-            "\U0001F3A8 Global look",
+            "\U0001F3A8 Style and media",
             _presentation_lines(settings, surface=server_surface),
             inline=False,
         )
@@ -1012,11 +1064,10 @@ def build_message_template_embed(
         )
     else:
         budget.add_line_fields(
-            "\U0001F4C5 Recurring-event defaults",
+            "\U0001F4C5 Live defaults",
             (
-                _surface_route_lines(recurring_surface)[0],
-                _surface_route_lines(recurring_surface)[1],
-                _surface_media_lines(recurring_surface)[1],
+                *_surface_route_lines(recurring_surface),
+                *_surface_media_lines(recurring_surface)[:3],
             ),
             inline=False,
         )
@@ -1035,10 +1086,10 @@ def build_message_template_embed(
         budget.add_field(
             name="\U0001F4CB Managing events",
             value=(
-                "Use `/birthday event add`, `/birthday event edit`, and "
-                "`/birthday event list` for direct event management.\n"
-                "Use `/birthday test-message surface:recurring_event` with an event id "
-                "to dry-run one."
+                "Use `/birthday event add`, `/birthday event edit`, and `/birthday event list` "
+                "to manage the yearly calendar.\n"
+                "Use `/birthday test-message surface:recurring_event` with an event id to dry-run "
+                "the exact live render."
             ),
             inline=False,
         )
@@ -1059,9 +1110,9 @@ def _add_delivery_section(
     surface: ResolvedAnnouncementSurface,
 ) -> None:
     budget.add_field(name=field_label, value=code_block_snippet(template), inline=False)
-    budget.add_line_fields("Routing and behavior", routing_lines, inline=False)
+    budget.add_line_fields("Live behavior", routing_lines, inline=False)
     budget.add_line_fields(
-        "\U0001F3A8 Global look",
+        "\U0001F3A8 Style and media",
         _presentation_lines(settings, surface=surface),
         inline=False,
     )
@@ -1072,8 +1123,8 @@ def _presentation_lines(
     surface: ResolvedAnnouncementSurface,
 ) -> tuple[str, ...]:
     return (
-        *_global_look_lines(settings),
-        *_surface_media_lines(surface),
+        *_style_summary_lines(settings),
+        *_surface_media_lines(surface)[:3],
     )
 
 
@@ -1142,9 +1193,9 @@ def _birthday_dm_presentation_lines(settings: GuildSettings) -> tuple[str, ...]:
     return (
         f"Theme: {announcement_theme_label(settings.announcement_theme)}",
         f"Theme note: {announcement_theme_description(settings.announcement_theme)}",
-        f"Global celebration behavior: {_celebration_mode_label(settings.celebration_mode)}",
+        f"Style: {_celebration_mode_label(settings.celebration_mode)}",
         "Global look controls stay on public announcement surfaces. Birthday DMs reuse the "
-        "theme and global celebration behavior only.",
+        "theme and celebration style only.",
     )
 
 
@@ -1289,7 +1340,7 @@ def build_server_anniversary_control_embed(
     budget = BudgetedEmbed.create(
         title="\U0001F3F0 Server Anniversary Controls",
         description=(
-            "Choose live status, date source, and channel routing without raw text inputs."
+            "Choose live status, date source, and channel routing with native controls."
         ),
         color=discord.Color.blurple(),
     )
@@ -1306,11 +1357,10 @@ def build_server_anniversary_control_embed(
         inline=False,
     )
     budget.add_line_fields(
-        "Routing",
+        "Live delivery",
         (
-            f"Channel override: {_format_channel(state.channel_id)}",
-            _surface_route_lines(resolved_surface)[0],
-            _surface_route_lines(resolved_surface)[1],
+            *_surface_route_lines(resolved_surface),
+            *_surface_media_lines(resolved_surface)[:3],
         ),
         inline=False,
     )
@@ -1318,16 +1368,50 @@ def build_server_anniversary_control_embed(
         name="Preview and copy",
         value=(
             "Use Preview below to see the exact current render.\n"
-            "Server anniversary copy still lives in the main Studio section."
+            "Server anniversary copy still lives in the main Studio section.\n"
+            "Set custom date now opens month/day selects instead of a raw text form."
         ),
         inline=False,
     )
     budget.add_line_fields(
-        "\U0001F3A8 Global look",
+        "\U0001F3A8 Style and media",
         _presentation_lines(settings, surface=resolved_surface),
         inline=False,
     )
     budget.set_footer("Use the controls below, then return to Celebration Studio.")
+    return budget.build()
+
+
+def build_server_anniversary_date_picker_embed(
+    *,
+    guild: discord.Guild,
+    celebration: RecurringCelebration | None,
+    selected_month: int | None,
+    selected_day: int | None,
+    note: str | None = None,
+) -> discord.Embed:
+    state = _server_anniversary_state(guild=guild, celebration=celebration)
+    budget = BudgetedEmbed.create(
+        title="\U0001F4C6 Custom server anniversary date",
+        description="Pick the saved month and day with selects instead of raw text input.",
+        color=discord.Color.blurple(),
+    )
+    if note:
+        budget.add_field(name="Updated", value=note, inline=False)
+    budget.add_line_fields(
+        "Current selection",
+        (
+            f"Selected date: {_format_month_day(selected_month, selected_day)}",
+            (
+                f"Saved date: {_format_month_day(state.month, state.day)}"
+                if not state.use_guild_created_date
+                else "Saved date: using guild creation date"
+            ),
+            "Saving here switches the server anniversary to a custom saved date.",
+        ),
+        inline=False,
+    )
+    budget.set_footer("Choose a month and day, then save the custom date.")
     return budget.build()
 
 class SetupView(AdminPanelView):
@@ -1497,13 +1581,23 @@ class SetupView(AdminPanelView):
         interaction: discord.Interaction,
         _: discord.ui.Button[SetupView],
     ) -> None:
-        await interaction.response.send_modal(
-            MembershipRulesModal(
-                settings_service=self.settings_service,
-                settings=self.settings,
-                owner_id=self.owner_id,
-                birthday_service=self.birthday_service,
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "This can only be used in a server.",
+                ephemeral=True,
             )
+            return
+        latest = await self.settings_service.get_settings(interaction.guild.id)
+        await interaction.response.send_message(
+            embed=build_membership_rules_embed(latest),
+            view=MembershipRulesView(
+                settings_service=self.settings_service,
+                settings=latest,
+                owner_id=self.owner_id,
+                guild=interaction.guild,
+                birthday_service=self.birthday_service,
+            ),
+            ephemeral=True,
         )
 
     @discord.ui.button(label="Studio safety", style=discord.ButtonStyle.secondary, row=4)
@@ -1559,6 +1653,7 @@ class SetupView(AdminPanelView):
             view=MessageTemplateView(
                 settings_service=self.settings_service,
                 experience_service=experience_service,
+                experience_settings=experience_settings,
                 settings=latest,
                 announcement_surfaces=latest_surfaces,
                 owner_id=self.owner_id,
@@ -1659,6 +1754,7 @@ class MessageTemplateView(AdminPanelView):
         *,
         settings_service: SettingsService,
         experience_service: ExperienceService | None = None,
+        experience_settings: GuildExperienceSettings | None = None,
         settings: GuildSettings,
         announcement_surfaces: (
             dict[AnnouncementSurfaceKind, AnnouncementSurfaceSettings] | None
@@ -1674,6 +1770,9 @@ class MessageTemplateView(AdminPanelView):
         super().__init__(timeout=900)
         self.settings_service = settings_service
         self.experience_service = experience_service
+        self.experience_settings = experience_settings or GuildExperienceSettings.default(
+            settings.guild_id
+        )
         self.settings = settings
         self.announcement_surfaces = _normalized_surfaces(settings, announcement_surfaces)
         self.owner_id = owner_id
@@ -1773,6 +1872,7 @@ class MessageTemplateView(AdminPanelView):
             view=MessageTemplateView(
                 settings_service=self.settings_service,
                 experience_service=self.experience_service,
+                experience_settings=experience_settings,
                 settings=latest,
                 announcement_surfaces=latest_surfaces,
                 owner_id=self.owner_id,
@@ -1808,22 +1908,38 @@ class MessageTemplateView(AdminPanelView):
             self.preview_current.label = "Preview selected surface"
             self.reset_current.label = "Reset to guild date"
         elif self.section == "capsules":
-            self.edit_primary.label = "Capsule settings"
+            self.edit_primary.label = (
+                "Disable capsules"
+                if self.experience_settings.capsules_enabled
+                else "Enable capsules"
+            )
             self.edit_secondary.disabled = True
             self.preview_current.label = "Preview capsule rules"
             self.reset_current.disabled = True
             self.reset_media.disabled = True
         elif self.section == "quests":
-            self.edit_primary.label = "Quest settings"
+            self.edit_primary.label = "Quest controls"
             self.edit_secondary.disabled = True
             self.preview_current.label = "Preview quest rules"
-            self.reset_current.disabled = True
+            self.reset_current.disabled = False
+            self.reset_current.label = (
+                "Disable quests"
+                if self.experience_settings.quests_enabled
+                else "Enable quests"
+            )
+            self.reset_current.style = discord.ButtonStyle.secondary
             self.reset_media.disabled = True
         elif self.section == "surprises":
-            self.edit_primary.label = "Surprise weights"
+            self.edit_primary.label = "Weight mix"
             self.edit_secondary.label = "Reward labels"
             self.preview_current.label = "Preview reward pool"
-            self.reset_current.disabled = True
+            self.reset_current.disabled = False
+            self.reset_current.label = (
+                "Disable surprises"
+                if self.experience_settings.surprises_enabled
+                else "Enable surprises"
+            )
+            self.reset_current.style = discord.ButtonStyle.secondary
             self.reset_media.disabled = True
         elif self.section == "events":
             self.edit_primary.label = "Event commands"
@@ -1845,7 +1961,7 @@ class MessageTemplateView(AdminPanelView):
         if not self.reset_media.disabled:
             self.reset_media.label = _surface_media_button_label(self.section)
         self.toggle_celebration_behavior.label = (
-            f"Behavior: {self.settings.celebration_mode.title()}"
+            f"Style: {self.settings.celebration_mode.title()}"
         )
 
     @discord.ui.button(label="Edit", style=discord.ButtonStyle.primary, row=2)
@@ -1901,39 +2017,43 @@ class MessageTemplateView(AdminPanelView):
             if self.experience_service is None:
                 raise ValidationError("Experience settings are not available in this panel.")
             experience_settings = await self.experience_service.get_settings(interaction.guild.id)
-            await interaction.response.send_modal(
-                CapsuleSettingsModal(
-                    experience_service=self.experience_service,
-                    settings=experience_settings,
-                    owner_id=self.owner_id,
-                    birthday_service=self.birthday_service,
-                )
+            await self.experience_service.update_settings(
+                interaction.guild.id,
+                capsules_enabled=not experience_settings.capsules_enabled,
+            )
+            await self.refresh(
+                interaction,
+                note=(
+                    "Birthday Capsules enabled."
+                    if not experience_settings.capsules_enabled
+                    else "Birthday Capsules disabled."
+                ),
             )
             return
         if self.section == "quests":
             if self.experience_service is None:
                 raise ValidationError("Experience settings are not available in this panel.")
             experience_settings = await self.experience_service.get_settings(interaction.guild.id)
-            await interaction.response.send_modal(
-                QuestSettingsModal(
+            await interaction.response.send_message(
+                embed=build_quest_settings_embed(experience_settings),
+                view=QuestSettingsView(
                     experience_service=self.experience_service,
                     settings=experience_settings,
                     owner_id=self.owner_id,
-                    birthday_service=self.birthday_service,
-                )
+                    guild=interaction.guild,
+                ),
+                ephemeral=True,
             )
             return
         if self.section == "surprises":
             if self.experience_service is None:
                 raise ValidationError("Experience settings are not available in this panel.")
-            experience_settings = await self.experience_service.get_settings(interaction.guild.id)
             rewards = tuple(
                 await self.experience_service.list_surprise_rewards(interaction.guild.id)
             )
             await interaction.response.send_modal(
                 SurpriseWeightsModal(
                     experience_service=self.experience_service,
-                    settings=experience_settings,
                     rewards=rewards,
                     owner_id=self.owner_id,
                     birthday_service=self.birthday_service,
@@ -2104,6 +2224,38 @@ class MessageTemplateView(AdminPanelView):
             server_anniversary,
             recurring_events,
         ) = await self._latest_context(interaction.guild)
+        if self.section == "quests":
+            if self.experience_service is None:
+                raise ValidationError("Experience settings are not available in this panel.")
+            await self.experience_service.update_settings(
+                interaction.guild.id,
+                quests_enabled=not _experience_settings.quests_enabled,
+            )
+            await self.refresh(
+                interaction,
+                note=(
+                    "Birthday Quests enabled."
+                    if not _experience_settings.quests_enabled
+                    else "Birthday Quests disabled."
+                ),
+            )
+            return
+        if self.section == "surprises":
+            if self.experience_service is None:
+                raise ValidationError("Experience settings are not available in this panel.")
+            await self.experience_service.update_settings(
+                interaction.guild.id,
+                surprises_enabled=not _experience_settings.surprises_enabled,
+            )
+            await self.refresh(
+                interaction,
+                note=(
+                    "Birthday Surprises enabled."
+                    if not _experience_settings.surprises_enabled
+                    else "Birthday Surprises disabled."
+                ),
+            )
+            return
         try:
             note = await self._reset_section(
                 interaction.guild,
@@ -2490,6 +2642,7 @@ class StudioReturnView(AdminPanelView):
             view=MessageTemplateView(
                 settings_service=self.settings_service,
                 experience_service=experience_service,
+                experience_settings=experience_settings,
                 settings=latest,
                 announcement_surfaces=latest_surfaces,
                 owner_id=self.owner_id,
@@ -2548,6 +2701,419 @@ class SetupReturnView(AdminPanelView):
                 birthday_service=self.birthday_service,
             ),
         )
+
+
+class MembershipRulesView(AdminPanelView):
+    def __init__(
+        self,
+        *,
+        settings_service: SettingsService,
+        settings: GuildSettings,
+        owner_id: int,
+        guild: discord.Guild,
+        birthday_service: BirthdayService | None,
+    ) -> None:
+        super().__init__(timeout=600)
+        self.settings_service = settings_service
+        self.settings = settings
+        self.owner_id = owner_id
+        self.guild = guild
+        self.birthday_service = birthday_service
+        self.add_item(MembershipIgnoreBotsSelect(self))
+        self.add_item(MembershipAgePresetSelect(self))
+        self.add_item(MembershipMentionPresetSelect(self))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(
+                "These membership controls belong to a different admin.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def refresh(self, interaction: discord.Interaction, *, note: str | None = None) -> None:
+        latest = await self.settings_service.get_settings(self.guild.id)
+        await interaction.response.edit_message(
+            embed=build_membership_rules_embed(latest, note=note),
+            view=MembershipRulesView(
+                settings_service=self.settings_service,
+                settings=latest,
+                owner_id=self.owner_id,
+                guild=self.guild,
+                birthday_service=self.birthday_service,
+            ),
+        )
+
+    @discord.ui.button(label="Back to setup", style=discord.ButtonStyle.secondary, row=3)
+    async def back_to_setup(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button[MembershipRulesView],
+    ) -> None:
+        latest = await self.settings_service.get_settings(self.guild.id)
+        await interaction.response.edit_message(
+            embed=_build_return_embed(
+                "Membership rules",
+                "Return to the main Setup panel.",
+            ),
+            view=SetupReturnView(
+                settings_service=self.settings_service,
+                birthday_service=self.birthday_service,
+                settings=latest,
+                owner_id=self.owner_id,
+                guild=self.guild,
+            ),
+        )
+
+
+class MembershipIgnoreBotsSelect(discord.ui.Select["MembershipRulesView"]):
+    def __init__(self, control_view: MembershipRulesView) -> None:
+        super().__init__(
+            placeholder=(
+                "Ignore bot accounts: "
+                f"{'On' if control_view.settings.ignore_bots else 'Off'}"
+            ),
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(
+                    label="Ignore bot accounts",
+                    value="on",
+                    description="Skip bot members entirely during celebration delivery.",
+                    default=control_view.settings.ignore_bots,
+                ),
+                discord.SelectOption(
+                    label="Include bot accounts",
+                    value="off",
+                    description="Allow bot members to stay eligible if other rules pass.",
+                    default=not control_view.settings.ignore_bots,
+                ),
+            ],
+            row=0,
+        )
+        self.control_view = control_view
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+        await self.control_view.settings_service.update_settings(
+            interaction.guild,
+            ignore_bots=self.values[0] == "on",
+        )
+        await self.control_view.refresh(interaction, note="Ignore-bots rule updated.")
+
+
+class MembershipAgePresetSelect(discord.ui.Select["MembershipRulesView"]):
+    def __init__(self, control_view: MembershipRulesView) -> None:
+        current = control_view.settings.minimum_membership_days
+        preset_values = (0, 1, 3, 7, 30, 90)
+        super().__init__(
+            placeholder=f"Minimum membership age: {current} day(s)",
+            min_values=1,
+            max_values=1,
+            options=[
+                *[
+                    discord.SelectOption(
+                        label=f"{value} day{'s' if value != 1 else ''}",
+                        value=str(value),
+                        default=current == value,
+                    )
+                    for value in preset_values
+                ],
+                discord.SelectOption(
+                    label="Custom number",
+                    value="custom",
+                    description="Enter a specific minimum day count.",
+                    default=current not in preset_values,
+                ),
+            ],
+            row=1,
+        )
+        self.control_view = control_view
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if self.values[0] == "custom":
+            await interaction.response.send_modal(
+                MembershipRuleNumberModal(
+                    settings_service=self.control_view.settings_service,
+                    owner_id=self.control_view.owner_id,
+                    guild=self.control_view.guild,
+                    birthday_service=self.control_view.birthday_service,
+                    field_name="minimum_membership_days",
+                    label="Minimum membership age",
+                    current_value=self.control_view.settings.minimum_membership_days,
+                    note="Minimum membership age updated.",
+                )
+            )
+            return
+        assert interaction.guild is not None
+        await self.control_view.settings_service.update_settings(
+            interaction.guild,
+            minimum_membership_days=int(self.values[0]),
+        )
+        await self.control_view.refresh(interaction, note="Minimum membership age updated.")
+
+
+class MembershipMentionPresetSelect(discord.ui.Select["MembershipRulesView"]):
+    def __init__(self, control_view: MembershipRulesView) -> None:
+        current = control_view.settings.mention_suppression_threshold
+        preset_values = (1, 3, 5, 10, 15, 25, 50)
+        super().__init__(
+            placeholder=f"Mention suppression threshold: {current}",
+            min_values=1,
+            max_values=1,
+            options=[
+                *[
+                    discord.SelectOption(
+                        label=str(value),
+                        value=str(value),
+                        description="Suppress mentions when a live batch reaches this size.",
+                        default=current == value,
+                    )
+                    for value in preset_values
+                ],
+                discord.SelectOption(
+                    label="Custom number",
+                    value="custom",
+                    description="Enter a specific suppression threshold.",
+                    default=current not in preset_values,
+                ),
+            ],
+            row=2,
+        )
+        self.control_view = control_view
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if self.values[0] == "custom":
+            await interaction.response.send_modal(
+                MembershipRuleNumberModal(
+                    settings_service=self.control_view.settings_service,
+                    owner_id=self.control_view.owner_id,
+                    guild=self.control_view.guild,
+                    birthday_service=self.control_view.birthday_service,
+                    field_name="mention_suppression_threshold",
+                    label="Mention suppression threshold",
+                    current_value=self.control_view.settings.mention_suppression_threshold,
+                    note="Mention suppression threshold updated.",
+                )
+            )
+            return
+        assert interaction.guild is not None
+        await self.control_view.settings_service.update_settings(
+            interaction.guild,
+            mention_suppression_threshold=int(self.values[0]),
+        )
+        await self.control_view.refresh(interaction, note="Mention suppression threshold updated.")
+
+
+class MembershipRuleNumberModal(AdminPanelModal):
+    value_input: discord.ui.TextInput[MembershipRuleNumberModal] = discord.ui.TextInput(
+        label="Value",
+        required=True,
+        max_length=4,
+    )
+
+    def __init__(
+        self,
+        *,
+        settings_service: SettingsService,
+        owner_id: int,
+        guild: discord.Guild,
+        birthday_service: BirthdayService | None,
+        field_name: Literal["minimum_membership_days", "mention_suppression_threshold"],
+        label: str,
+        current_value: int,
+        note: str,
+    ) -> None:
+        super().__init__(title=label)
+        self.settings_service = settings_service
+        self.owner_id = owner_id
+        self.guild = guild
+        self.birthday_service = birthday_service
+        self.field_name = field_name
+        self.note = note
+        self.value_input.label = label
+        self.value_input.default = str(current_value)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        try:
+            value = int(self.value_input.value)
+            if self.field_name == "minimum_membership_days":
+                await self.settings_service.update_settings(
+                    self.guild,
+                    minimum_membership_days=value,
+                )
+            else:
+                await self.settings_service.update_settings(
+                    self.guild,
+                    mention_suppression_threshold=value,
+                )
+        except (ValidationError, ValueError) as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
+        latest = await self.settings_service.get_settings(self.guild.id)
+        await interaction.response.send_message(
+            embed=build_membership_rules_embed(latest, note=self.note),
+            view=MembershipRulesView(
+                settings_service=self.settings_service,
+                settings=latest,
+                owner_id=self.owner_id,
+                guild=self.guild,
+                birthday_service=self.birthday_service,
+            ),
+            ephemeral=True,
+        )
+
+
+class QuestSettingsView(AdminPanelView):
+    def __init__(
+        self,
+        *,
+        experience_service: ExperienceService,
+        settings: GuildExperienceSettings,
+        owner_id: int,
+        guild: discord.Guild,
+    ) -> None:
+        super().__init__(timeout=600)
+        self.experience_service = experience_service
+        self.settings = settings
+        self.owner_id = owner_id
+        self.guild = guild
+        self.add_item(QuestWishTargetSelect(self))
+        self.add_item(QuestReactionTargetSelect(self))
+        self.toggle_enabled.label = "Disable live" if settings.quests_enabled else "Enable live"
+        self.toggle_checkin.label = (
+            "Disable check-in" if settings.quest_checkin_enabled else "Enable check-in"
+        )
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(
+                "These quest controls belong to a different admin.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def refresh(self, interaction: discord.Interaction, *, note: str | None = None) -> None:
+        latest = await self.experience_service.get_settings(self.guild.id)
+        await interaction.response.edit_message(
+            embed=build_quest_settings_embed(latest, note=note),
+            view=QuestSettingsView(
+                experience_service=self.experience_service,
+                settings=latest,
+                owner_id=self.owner_id,
+                guild=self.guild,
+            ),
+        )
+
+    @discord.ui.button(label="Enable live", style=discord.ButtonStyle.secondary, row=2)
+    async def toggle_enabled(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button[QuestSettingsView],
+    ) -> None:
+        await self.experience_service.update_settings(
+            self.guild.id,
+            quests_enabled=not self.settings.quests_enabled,
+        )
+        await self.refresh(
+            interaction,
+            note=(
+                "Birthday Quests enabled."
+                if not self.settings.quests_enabled
+                else "Birthday Quests disabled."
+            ),
+        )
+
+    @discord.ui.button(label="Enable check-in", style=discord.ButtonStyle.secondary, row=2)
+    async def toggle_checkin(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button[QuestSettingsView],
+    ) -> None:
+        await self.experience_service.update_settings(
+            self.guild.id,
+            quest_checkin_enabled=not self.settings.quest_checkin_enabled,
+        )
+        await self.refresh(
+            interaction,
+            note=(
+                "Quest check-in enabled."
+                if not self.settings.quest_checkin_enabled
+                else "Quest check-in disabled."
+            ),
+        )
+
+    @discord.ui.button(label="Done", style=discord.ButtonStyle.primary, row=3)
+    async def done(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button[QuestSettingsView],
+    ) -> None:
+        await interaction.response.edit_message(
+            embed=_build_return_embed(
+                "Quest controls",
+                "Return to the main Celebration Studio panel.",
+            ),
+            view=None,
+        )
+
+
+class QuestWishTargetSelect(discord.ui.Select["QuestSettingsView"]):
+    def __init__(self, control_view: QuestSettingsView) -> None:
+        current = control_view.settings.quest_wish_target
+        options = (1, 2, 3, 5, 7, 10, 15, 20, 25)
+        super().__init__(
+            placeholder=f"Wish target: {current}",
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(
+                    label=str(value),
+                    value=str(value),
+                    default=current == value,
+                )
+                for value in options
+            ],
+            row=0,
+        )
+        self.control_view = control_view
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self.control_view.experience_service.update_settings(
+            self.control_view.guild.id,
+            quest_wish_target=int(self.values[0]),
+        )
+        await self.control_view.refresh(interaction, note="Quest wish target updated.")
+
+
+class QuestReactionTargetSelect(discord.ui.Select["QuestSettingsView"]):
+    def __init__(self, control_view: QuestSettingsView) -> None:
+        current = control_view.settings.quest_reaction_target
+        options = (1, 2, 3, 5, 7, 10, 15, 20, 25)
+        super().__init__(
+            placeholder=f"Reaction target: {current}",
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(
+                    label=str(value),
+                    value=str(value),
+                    default=current == value,
+                )
+                for value in options
+            ],
+            row=1,
+        )
+        self.control_view = control_view
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self.control_view.experience_service.update_settings(
+            self.control_view.guild.id,
+            quest_reaction_target=int(self.values[0]),
+        )
+        await self.control_view.refresh(interaction, note="Quest reaction target updated.")
 
 
 class StudioSafetyChannelSelect(discord.ui.ChannelSelect["StudioSafetyView"]):
@@ -2694,191 +3260,7 @@ class TimezoneModal(AdminPanelModal, title="Set default timezone"):
         )
 
 
-class MembershipRulesModal(AdminPanelModal, title="Membership and anti-spam rules"):
-    minimum_days: discord.ui.TextInput[MembershipRulesModal] = discord.ui.TextInput(
-        label="Minimum membership age (days)",
-        required=True,
-        max_length=4,
-    )
-    mention_threshold: discord.ui.TextInput[MembershipRulesModal] = discord.ui.TextInput(
-        label="Mention suppression threshold",
-        required=True,
-        max_length=2,
-    )
-    ignore_bots: discord.ui.TextInput[MembershipRulesModal] = discord.ui.TextInput(
-        label="Ignore bot accounts (yes/no)",
-        required=True,
-        max_length=3,
-    )
-
-    def __init__(
-        self,
-        *,
-        settings_service: SettingsService,
-        settings: GuildSettings,
-        owner_id: int,
-        birthday_service: BirthdayService | None,
-    ) -> None:
-        super().__init__()
-        self.settings_service = settings_service
-        self.owner_id = owner_id
-        self.birthday_service = birthday_service
-        self.minimum_days.default = str(settings.minimum_membership_days)
-        self.mention_threshold.default = str(settings.mention_suppression_threshold)
-        self.ignore_bots.default = "yes" if settings.ignore_bots else "no"
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        if interaction.guild is None:
-            await interaction.response.send_message(
-                "This can only be used in a server.",
-                ephemeral=True,
-            )
-            return
-        try:
-            await self.settings_service.update_settings(
-                interaction.guild,
-                minimum_membership_days=int(self.minimum_days.value),
-                mention_suppression_threshold=int(self.mention_threshold.value),
-                ignore_bots=_parse_yes_no(self.ignore_bots.value, label="Ignore bot accounts"),
-            )
-        except (ValidationError, ValueError) as exc:
-            await interaction.response.send_message(str(exc), ephemeral=True)
-            return
-        latest = await self.settings_service.get_settings(interaction.guild.id)
-        await interaction.response.send_message(
-            embed=_build_return_embed(
-                "Membership rules saved",
-                "Eligibility and mention-throttling rules were updated.",
-            ),
-            view=SetupReturnView(
-                settings_service=self.settings_service,
-                birthday_service=self.birthday_service,
-                settings=latest,
-                owner_id=self.owner_id,
-                guild=interaction.guild,
-            ),
-            ephemeral=True,
-        )
-
-
-class CapsuleSettingsModal(AdminPanelModal, title="Birthday Capsule settings"):
-    enabled: discord.ui.TextInput[CapsuleSettingsModal] = discord.ui.TextInput(
-        label="Enable capsules (yes/no)",
-        required=True,
-        max_length=3,
-    )
-
-    def __init__(
-        self,
-        *,
-        experience_service: ExperienceService,
-        settings: GuildExperienceSettings,
-        owner_id: int,
-        birthday_service: BirthdayService | None,
-    ) -> None:
-        super().__init__()
-        self.experience_service = experience_service
-        self.owner_id = owner_id
-        self.birthday_service = birthday_service
-        self.enabled.default = "yes" if settings.capsules_enabled else "no"
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        if interaction.guild is None:
-            await interaction.response.send_message(
-                "This can only be used in a server.",
-                ephemeral=True,
-            )
-            return
-        saved = await self.experience_service.update_settings(
-            interaction.guild.id,
-            capsules_enabled=_parse_yes_no(self.enabled.value, label="Enable capsules"),
-        )
-        await interaction.response.send_message(
-            embed=_build_return_embed(
-                "Birthday Capsules updated",
-                (
-                    "Birthday Capsules are now enabled."
-                    if saved.capsules_enabled
-                    else "Birthday Capsules are now disabled."
-                ),
-            ),
-            ephemeral=True,
-        )
-
-
-class QuestSettingsModal(AdminPanelModal, title="Birthday Quest settings"):
-    enabled: discord.ui.TextInput[QuestSettingsModal] = discord.ui.TextInput(
-        label="Enable quests (yes/no)",
-        required=True,
-        max_length=3,
-    )
-    wish_target: discord.ui.TextInput[QuestSettingsModal] = discord.ui.TextInput(
-        label="Wish target",
-        required=True,
-        max_length=2,
-    )
-    reaction_target: discord.ui.TextInput[QuestSettingsModal] = discord.ui.TextInput(
-        label="Reaction target",
-        required=True,
-        max_length=2,
-    )
-    check_in: discord.ui.TextInput[QuestSettingsModal] = discord.ui.TextInput(
-        label="Require check-in (yes/no)",
-        required=True,
-        max_length=3,
-    )
-
-    def __init__(
-        self,
-        *,
-        experience_service: ExperienceService,
-        settings: GuildExperienceSettings,
-        owner_id: int,
-        birthday_service: BirthdayService | None,
-    ) -> None:
-        super().__init__()
-        self.experience_service = experience_service
-        self.owner_id = owner_id
-        self.birthday_service = birthday_service
-        self.enabled.default = "yes" if settings.quests_enabled else "no"
-        self.wish_target.default = str(settings.quest_wish_target)
-        self.reaction_target.default = str(settings.quest_reaction_target)
-        self.check_in.default = "yes" if settings.quest_checkin_enabled else "no"
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        if interaction.guild is None:
-            await interaction.response.send_message(
-                "This can only be used in a server.",
-                ephemeral=True,
-            )
-            return
-        saved = await self.experience_service.update_settings(
-            interaction.guild.id,
-            quests_enabled=_parse_yes_no(self.enabled.value, label="Enable quests"),
-            quest_wish_target=int(self.wish_target.value),
-            quest_reaction_target=int(self.reaction_target.value),
-            quest_checkin_enabled=_parse_yes_no(self.check_in.value, label="Require check-in"),
-        )
-        await interaction.response.send_message(
-            embed=_build_return_embed(
-                "Birthday Quests updated",
-                (
-                    f"Quests: {_format_enabled(saved.quests_enabled)} | "
-                    f"Wish target: {saved.quest_wish_target} | "
-                    f"Reaction target: {saved.quest_reaction_target} | "
-                    f"Check-in: {_format_enabled(saved.quest_checkin_enabled)}"
-                ),
-            ),
-            ephemeral=True,
-        )
-
-
 class SurpriseWeightsModal(AdminPanelModal, title="Birthday Surprise weights"):
-    enabled: discord.ui.TextInput[SurpriseWeightsModal] = discord.ui.TextInput(
-        label="Enable surprises (yes/no)",
-        required=True,
-        max_length=3,
-    )
     featured_weight: discord.ui.TextInput[SurpriseWeightsModal] = discord.ui.TextInput(
         label="Featured weight",
         required=True,
@@ -2904,7 +3286,6 @@ class SurpriseWeightsModal(AdminPanelModal, title="Birthday Surprise weights"):
         self,
         *,
         experience_service: ExperienceService,
-        settings: GuildExperienceSettings,
         rewards: tuple[GuildSurpriseReward, ...],
         owner_id: int,
         birthday_service: BirthdayService | None,
@@ -2914,7 +3295,6 @@ class SurpriseWeightsModal(AdminPanelModal, title="Birthday Surprise weights"):
         self.owner_id = owner_id
         self.birthday_service = birthday_service
         reward_map = {reward.reward_type: reward for reward in rewards}
-        self.enabled.default = "yes" if settings.surprises_enabled else "no"
         self.featured_weight.default = str(reward_map["featured"].weight)
         self.badge_weight.default = str(reward_map["badge"].weight)
         self.custom_note_weight.default = str(reward_map["custom_note"].weight)
@@ -2927,39 +3307,33 @@ class SurpriseWeightsModal(AdminPanelModal, title="Birthday Surprise weights"):
                 ephemeral=True,
             )
             return
-        enabled = _parse_yes_no(self.enabled.value, label="Enable surprises")
-        await self.experience_service.update_settings(
+        rewards = await self.experience_service.list_surprise_rewards(interaction.guild.id)
+        reward_map = {reward.reward_type: reward for reward in rewards}
+        await self.experience_service.update_surprise_rewards(
             interaction.guild.id,
-            surprises_enabled=enabled,
-        )
-        await self.experience_service.upsert_surprise_reward(
-            interaction.guild.id,
-            "featured",
-            enabled=enabled,
-            weight=int(self.featured_weight.value),
-        )
-        await self.experience_service.upsert_surprise_reward(
-            interaction.guild.id,
-            "badge",
-            enabled=enabled,
-            weight=int(self.badge_weight.value),
-        )
-        await self.experience_service.upsert_surprise_reward(
-            interaction.guild.id,
-            "custom_note",
-            enabled=enabled,
-            weight=int(self.custom_note_weight.value),
-        )
-        await self.experience_service.upsert_surprise_reward(
-            interaction.guild.id,
-            "nitro_concierge",
-            enabled=enabled,
-            weight=int(self.nitro_weight.value),
+            updates={
+                "featured": {
+                    "enabled": reward_map["featured"].enabled,
+                    "weight": int(self.featured_weight.value),
+                },
+                "badge": {
+                    "enabled": reward_map["badge"].enabled,
+                    "weight": int(self.badge_weight.value),
+                },
+                "custom_note": {
+                    "enabled": reward_map["custom_note"].enabled,
+                    "weight": int(self.custom_note_weight.value),
+                },
+                "nitro_concierge": {
+                    "enabled": reward_map["nitro_concierge"].enabled,
+                    "weight": int(self.nitro_weight.value),
+                },
+            },
         )
         await interaction.response.send_message(
             embed=_build_return_embed(
                 "Birthday Surprises updated",
-                "Surprise weights and live status were updated.",
+                "Surprise weights were updated.",
             ),
             ephemeral=True,
         )
@@ -3021,34 +3395,31 @@ class SurpriseLabelsModal(AdminPanelModal, title="Birthday Surprise labels"):
             return
         rewards = await self.experience_service.list_surprise_rewards(interaction.guild.id)
         reward_map = {reward.reward_type: reward for reward in rewards}
-        await self.experience_service.upsert_surprise_reward(
+        await self.experience_service.update_surprise_rewards(
             interaction.guild.id,
-            "featured",
-            enabled=reward_map["featured"].enabled,
-            weight=reward_map["featured"].weight,
-            label=self.featured_label.value,
-        )
-        await self.experience_service.upsert_surprise_reward(
-            interaction.guild.id,
-            "badge",
-            enabled=reward_map["badge"].enabled,
-            weight=reward_map["badge"].weight,
-            label=self.badge_label.value,
-        )
-        await self.experience_service.upsert_surprise_reward(
-            interaction.guild.id,
-            "custom_note",
-            enabled=reward_map["custom_note"].enabled,
-            weight=reward_map["custom_note"].weight,
-            label=self.custom_note_label.value,
-            note_text=self.custom_note_text.value,
-        )
-        await self.experience_service.upsert_surprise_reward(
-            interaction.guild.id,
-            "nitro_concierge",
-            enabled=reward_map["nitro_concierge"].enabled,
-            weight=reward_map["nitro_concierge"].weight,
-            label=self.nitro_label.value,
+            updates={
+                "featured": {
+                    "enabled": reward_map["featured"].enabled,
+                    "weight": reward_map["featured"].weight,
+                    "label": self.featured_label.value,
+                },
+                "badge": {
+                    "enabled": reward_map["badge"].enabled,
+                    "weight": reward_map["badge"].weight,
+                    "label": self.badge_label.value,
+                },
+                "custom_note": {
+                    "enabled": reward_map["custom_note"].enabled,
+                    "weight": reward_map["custom_note"].weight,
+                    "label": self.custom_note_label.value,
+                    "note_text": self.custom_note_text.value or None,
+                },
+                "nitro_concierge": {
+                    "enabled": reward_map["nitro_concierge"].enabled,
+                    "weight": reward_map["nitro_concierge"].weight,
+                    "label": self.nitro_label.value,
+                },
+            },
         )
         await interaction.response.send_message(
             embed=_build_return_embed(
@@ -3692,6 +4063,7 @@ class StudioMediaView(AdminPanelView):
             view=MessageTemplateView(
                 settings_service=self.settings_service,
                 experience_service=experience_service,
+                experience_settings=experience_settings,
                 settings=latest,
                 announcement_surfaces=latest_surfaces,
                 owner_id=self.owner_id,
@@ -3853,18 +4225,28 @@ class ServerAnniversaryControlView(AdminPanelView):
         interaction: discord.Interaction,
         _: discord.ui.Button[ServerAnniversaryControlView],
     ) -> None:
-        latest, _latest_surfaces, server_anniversary, _recurring_events = (
+        latest, _latest_surfaces, server_anniversary, recurring_events = (
             await self._latest_context()
         )
-        await interaction.response.send_modal(
-            ServerAnniversaryDateModal(
+        state = _server_anniversary_state(guild=self.guild, celebration=server_anniversary)
+        await interaction.response.edit_message(
+            embed=build_server_anniversary_date_picker_embed(
+                guild=self.guild,
+                celebration=server_anniversary,
+                selected_month=state.month,
+                selected_day=state.day,
+            ),
+            view=ServerAnniversaryDatePickerView(
                 settings_service=self.settings_service,
                 birthday_service=self.birthday_service,
                 settings=latest,
                 owner_id=self.owner_id,
                 guild=self.guild,
                 celebration=server_anniversary,
-            )
+                recurring_events=recurring_events,
+                selected_month=state.month,
+                selected_day=state.day,
+            ),
         )
 
     @discord.ui.button(label="Clear channel", style=discord.ButtonStyle.secondary, row=2)
@@ -3947,6 +4329,7 @@ class ServerAnniversaryControlView(AdminPanelView):
             view=MessageTemplateView(
                 settings_service=self.settings_service,
                 experience_service=experience_service,
+                experience_settings=experience_settings,
                 settings=latest,
                 announcement_surfaces=latest_surfaces,
                 owner_id=self.owner_id,
@@ -3956,6 +4339,226 @@ class ServerAnniversaryControlView(AdminPanelView):
                 server_anniversary=server_anniversary,
                 recurring_events=recurring_events,
             ),
+        )
+
+
+class ServerAnniversaryDatePickerView(AdminPanelView):
+    def __init__(
+        self,
+        *,
+        settings_service: SettingsService,
+        birthday_service: BirthdayService | None,
+        settings: GuildSettings,
+        owner_id: int,
+        guild: discord.Guild,
+        celebration: RecurringCelebration | None,
+        recurring_events: tuple[RecurringCelebration, ...],
+        selected_month: int | None,
+        selected_day: int | None,
+    ) -> None:
+        super().__init__(timeout=600)
+        self.settings_service = settings_service
+        self.birthday_service = birthday_service
+        self.settings = settings
+        self.owner_id = owner_id
+        self.guild = guild
+        self.celebration = celebration
+        self.recurring_events = recurring_events
+        self.selected_month = selected_month
+        self.selected_day = selected_day
+        self.add_item(ServerAnniversaryMonthSelect(self))
+        self.add_item(ServerAnniversaryDaySelect(self))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(
+                "These server-anniversary controls belong to a different admin.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def _latest_context(
+        self,
+    ) -> tuple[
+        GuildSettings,
+        dict[AnnouncementSurfaceKind, AnnouncementSurfaceSettings],
+        RecurringCelebration | None,
+        tuple[RecurringCelebration, ...],
+    ]:
+        latest = await self.settings_service.get_settings(self.guild.id)
+        latest_surfaces = await self.settings_service.get_announcement_surfaces(self.guild.id)
+        server_anniversary, recurring_events = await _load_studio_context(
+            self.guild,
+            self.birthday_service,
+        )
+        return latest, latest_surfaces, server_anniversary, recurring_events
+
+    async def refresh(
+        self,
+        interaction: discord.Interaction,
+        *,
+        selected_month: int | None = None,
+        selected_day: int | None = None,
+        note: str | None = None,
+    ) -> None:
+        latest, _latest_surfaces, server_anniversary, recurring_events = (
+            await self._latest_context()
+        )
+        effective_month = (
+            selected_month if selected_month is not None else self.selected_month
+        )
+        effective_day = selected_day if selected_day is not None else self.selected_day
+        await interaction.response.edit_message(
+            embed=build_server_anniversary_date_picker_embed(
+                guild=self.guild,
+                celebration=server_anniversary,
+                selected_month=effective_month,
+                selected_day=effective_day,
+                note=note,
+            ),
+            view=ServerAnniversaryDatePickerView(
+                settings_service=self.settings_service,
+                birthday_service=self.birthday_service,
+                settings=latest,
+                owner_id=self.owner_id,
+                guild=self.guild,
+                celebration=server_anniversary,
+                recurring_events=recurring_events,
+                selected_month=effective_month,
+                selected_day=effective_day,
+            ),
+        )
+
+    @discord.ui.button(label="Save custom date", style=discord.ButtonStyle.primary, row=2)
+    async def save(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button[ServerAnniversaryDatePickerView],
+    ) -> None:
+        if self.birthday_service is None:
+            await interaction.response.send_message(
+                "Server anniversary tools are not available in this panel.",
+                ephemeral=True,
+            )
+            return
+        try:
+            existing = await self.birthday_service.get_server_anniversary(self.guild.id)
+            await self.birthday_service.upsert_server_anniversary(
+                guild_id=self.guild.id,
+                guild_created_at_utc=self.guild.created_at,
+                override_month=self.selected_month,
+                override_day=self.selected_day,
+                channel_id=existing.channel_id if existing is not None else None,
+                template=existing.template if existing is not None else None,
+                enabled=existing.enabled if existing is not None else False,
+                use_guild_created_date=False,
+            )
+        except ValidationError as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
+        await interaction.response.edit_message(
+            embed=_build_return_embed(
+                "Server anniversary updated",
+                "Custom server-anniversary date saved.",
+            ),
+            view=ServerAnniversaryReturnView(
+                settings_service=self.settings_service,
+                birthday_service=self.birthday_service,
+                owner_id=self.owner_id,
+                guild=self.guild,
+            ),
+        )
+
+    @discord.ui.button(label="Back to controls", style=discord.ButtonStyle.secondary, row=2)
+    async def back_to_controls(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button[ServerAnniversaryDatePickerView],
+    ) -> None:
+        latest, latest_surfaces, server_anniversary, recurring_events = await self._latest_context()
+        await interaction.response.edit_message(
+            embed=build_server_anniversary_control_embed(
+                latest,
+                announcement_surfaces=latest_surfaces,
+                guild=self.guild,
+                celebration=server_anniversary,
+            ),
+            view=ServerAnniversaryControlView(
+                settings_service=self.settings_service,
+                birthday_service=self.birthday_service,
+                settings=latest,
+                owner_id=self.owner_id,
+                guild=self.guild,
+                celebration=server_anniversary,
+                recurring_events=recurring_events,
+            ),
+        )
+
+
+class ServerAnniversaryMonthSelect(discord.ui.Select["ServerAnniversaryDatePickerView"]):
+    def __init__(self, control_view: ServerAnniversaryDatePickerView) -> None:
+        super().__init__(
+            placeholder=(
+                f"Month: {month_name[control_view.selected_month]}"
+                if control_view.selected_month is not None
+                else "Select month"
+            ),
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(
+                    label=month_name[month],
+                    value=str(month),
+                    default=control_view.selected_month == month,
+                )
+                for month in range(1, 13)
+            ],
+            row=0,
+        )
+        self.control_view = control_view
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        month = int(self.values[0])
+        selected_day = self.control_view.selected_day
+        if selected_day is not None:
+            max_day = monthrange(2024 if month == 2 else 2025, month)[1]
+            selected_day = min(selected_day, max_day)
+        await self.control_view.refresh(
+            interaction,
+            selected_month=month,
+            selected_day=selected_day,
+        )
+
+
+class ServerAnniversaryDaySelect(discord.ui.Select["ServerAnniversaryDatePickerView"]):
+    def __init__(self, control_view: ServerAnniversaryDatePickerView) -> None:
+        month = control_view.selected_month or 1
+        max_day = monthrange(2024 if month == 2 else 2025, month)[1]
+        super().__init__(
+            placeholder=(
+                f"Day: {control_view.selected_day}"
+                if control_view.selected_day is not None
+                else "Select day"
+            ),
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(
+                    label=str(day),
+                    value=str(day),
+                    default=control_view.selected_day == day,
+                )
+                for day in range(1, max_day + 1)
+            ],
+            row=1,
+        )
+        self.control_view = control_view
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self.control_view.refresh(
+            interaction,
+            selected_day=int(self.values[0]),
         )
 
 
@@ -4082,81 +4685,6 @@ class ServerAnniversaryReturnView(AdminPanelView):
                 celebration=server_anniversary,
                 recurring_events=recurring_events,
             ),
-        )
-
-
-class ServerAnniversaryDateModal(AdminPanelModal, title="Set custom server anniversary date"):
-    month_input: discord.ui.TextInput[ServerAnniversaryDateModal] = discord.ui.TextInput(
-        label="Month",
-        required=True,
-        max_length=2,
-        placeholder="3",
-    )
-    day_input: discord.ui.TextInput[ServerAnniversaryDateModal] = discord.ui.TextInput(
-        label="Day",
-        required=True,
-        max_length=2,
-        placeholder="25",
-    )
-
-    def __init__(
-        self,
-        *,
-        settings_service: SettingsService,
-        birthday_service: BirthdayService | None,
-        settings: GuildSettings,
-        owner_id: int,
-        guild: discord.Guild,
-        celebration: RecurringCelebration | None,
-    ) -> None:
-        super().__init__()
-        self.settings_service = settings_service
-        self.birthday_service = birthday_service
-        self.settings = settings
-        self.owner_id = owner_id
-        self.guild = guild
-        state = _server_anniversary_state(guild=guild, celebration=celebration)
-        if state.month is not None:
-            self.month_input.default = str(state.month)
-        if state.day is not None:
-            self.day_input.default = str(state.day)
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        if self.birthday_service is None:
-            await interaction.response.send_message(
-                "Server anniversary tools are not available in this panel.",
-                ephemeral=True,
-            )
-            return
-        try:
-            month = _parse_optional_int(self.month_input.value, label="Month")
-            day = _parse_optional_int(self.day_input.value, label="Day")
-            existing = await self.birthday_service.get_server_anniversary(self.guild.id)
-            await self.birthday_service.upsert_server_anniversary(
-                guild_id=self.guild.id,
-                guild_created_at_utc=self.guild.created_at,
-                override_month=month,
-                override_day=day,
-                channel_id=existing.channel_id if existing is not None else None,
-                template=existing.template if existing is not None else None,
-                enabled=existing.enabled if existing is not None else False,
-                use_guild_created_date=False,
-            )
-        except ValidationError as exc:
-            await interaction.response.send_message(str(exc), ephemeral=True)
-            return
-        await interaction.response.send_message(
-            embed=_build_return_embed(
-                "Server anniversary updated",
-                "Custom server-anniversary date saved.",
-            ),
-            view=ServerAnniversaryReturnView(
-                settings_service=self.settings_service,
-                birthday_service=self.birthday_service,
-                owner_id=self.owner_id,
-                guild=self.guild,
-            ),
-            ephemeral=True,
         )
 
 
@@ -4447,7 +4975,7 @@ def _build_preview_status_embed(
     if readiness.details:
         budget.add_line_fields("Details", readiness.details, inline=False)
     route_lines = (
-        ("Configured route: n/a", "Effective route: Private DM")
+        ("Route: private DM only", "Route source: direct DM flow")
         if kind == "birthday_dm"
         else _surface_route_lines(
             resolved_surface

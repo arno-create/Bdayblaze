@@ -24,8 +24,8 @@ def test_build_help_embed_mentions_operator_flows() -> None:
         field for field in embed.fields if field.name == "Anniversary placeholders"
     )
     assert "Media Tools" in safety_field.value
-    assert "Regular webpages" in safety_field.value
-    assert "configured route/image/thumbnail" in safety_field.value
+    assert "live route, media source, and health" in safety_field.value
+    assert "unsafe url patterns" in safety_field.value.lower()
     assert "shared birthday announcement post" in safety_field.value
     assert "{anniversary.years}" in anniversary_field.value
     assert "{server_anniversary.years_since_creation}" in anniversary_field.value

@@ -1,23 +1,26 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 import discord
 
 from bdayblaze.domain.announcement_surfaces import (
-    describe_resolved_field,
     resolve_announcement_surface,
 )
 from bdayblaze.domain.birthday_logic import validate_timezone
-from bdayblaze.domain.media_validation import (
-    assess_media_url,
-    strip_validated_direct_media_marker,
-)
 from bdayblaze.domain.models import (
     AnnouncementSurfaceKind,
     HealthIssue,
     ResolvedAnnouncementSurface,
     SchedulerMetrics,
+)
+from bdayblaze.domain.operator_summary import (
+    media_health_line,
+    media_line,
+    media_source_line,
+    route_line,
+    route_source_line,
 )
 from bdayblaze.repositories.postgres import PostgresRepository
 from bdayblaze.services.diagnostics import (
@@ -442,20 +445,17 @@ class HealthService:
 
 
 def _surface_channel_note(surface: ResolvedAnnouncementSurface) -> str:
-    configured, effective = describe_resolved_field(
-        surface.channel,
-        label="route",
-        surface_kind=surface.surface_kind,
-        value_formatter=lambda channel_id: f"<#{channel_id}>",
+    return (
+        f"{route_line(surface.channel, surface_kind=surface.surface_kind)}. "
+        f"{route_source_line(surface.channel, surface_kind=surface.surface_kind)}."
     )
-    return f"{configured}. {effective}."
 
 
 def _surface_media_note(surface: ResolvedAnnouncementSurface) -> str:
     return (
-        "Configured and effective media are resolved per field. "
         f"{_surface_media_field_note(surface, field_name='image')} "
-        f"{_surface_media_field_note(surface, field_name='thumbnail')}"
+        f"{_surface_media_field_note(surface, field_name='thumbnail')} "
+        f"{media_health_line(surface)}. {media_source_line(surface)}."
     )
 
 
@@ -465,18 +465,12 @@ def _surface_media_field_note(
     field_name: str,
 ) -> str:
     field = surface.image if field_name == "image" else surface.thumbnail
-    configured, effective = describe_resolved_field(
-        field,
-        label=field_name,
-        surface_kind=surface.surface_kind,
-        value_formatter=lambda value: _format_media_value(value),
+    label: Literal["image", "thumbnail"] = "image" if field_name == "image" else "thumbnail"
+    return (
+        media_line(
+            field,
+            label=label,
+            surface_kind=surface.surface_kind,
+        )
+        + "."
     )
-    return f"{configured}. {effective}."
-
-
-def _format_media_value(value: str) -> str:
-    assessment = assess_media_url(value, label="Media")
-    if assessment is None:
-        return "Not set"
-    display_url = strip_validated_direct_media_marker(assessment.normalized_url)
-    return f"{assessment.status_label()} | {display_url or ''}"

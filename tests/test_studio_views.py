@@ -7,10 +7,20 @@ from types import SimpleNamespace
 import pytest
 
 from bdayblaze.discord.ui.setup import (
+    MembershipAgePresetSelect,
+    MembershipIgnoreBotsSelect,
+    MembershipMentionPresetSelect,
+    MembershipRulesView,
     MessageTemplateView,
+    QuestReactionTargetSelect,
+    QuestSettingsView,
+    QuestWishTargetSelect,
     ServerAnniversaryChannelSelect,
     ServerAnniversaryControlView,
+    ServerAnniversaryDatePickerView,
     ServerAnniversaryDateSourceSelect,
+    ServerAnniversaryDaySelect,
+    ServerAnniversaryMonthSelect,
     SetupView,
     _build_studio_preview_pair,
     build_media_tools_embed,
@@ -187,6 +197,58 @@ async def test_server_anniversary_control_view_uses_native_controls() -> None:
 
 
 @pytest.mark.asyncio
+async def test_membership_rules_view_uses_native_select_controls() -> None:
+    view = MembershipRulesView(
+        settings_service=object(),  # type: ignore[arg-type]
+        settings=GuildSettings.default(1),
+        owner_id=42,
+        guild=_guild(),  # type: ignore[arg-type]
+        birthday_service=object(),  # type: ignore[arg-type]
+    )
+
+    assert any(isinstance(child, MembershipIgnoreBotsSelect) for child in view.children)
+    assert any(isinstance(child, MembershipAgePresetSelect) for child in view.children)
+    assert any(isinstance(child, MembershipMentionPresetSelect) for child in view.children)
+
+
+@pytest.mark.asyncio
+async def test_quest_settings_view_uses_native_select_controls() -> None:
+    view = QuestSettingsView(
+        experience_service=object(),  # type: ignore[arg-type]
+        settings=replace(
+            GuildExperienceSettings.default(1),
+            quests_enabled=True,
+            quest_checkin_enabled=False,
+        ),
+        owner_id=42,
+        guild=_guild(),  # type: ignore[arg-type]
+    )
+
+    assert any(isinstance(child, QuestWishTargetSelect) for child in view.children)
+    assert any(isinstance(child, QuestReactionTargetSelect) for child in view.children)
+    assert view.toggle_enabled.label == "Disable live"
+    assert view.toggle_checkin.label == "Enable check-in"
+
+
+@pytest.mark.asyncio
+async def test_server_anniversary_date_picker_view_uses_month_day_selects() -> None:
+    view = ServerAnniversaryDatePickerView(
+        settings_service=object(),  # type: ignore[arg-type]
+        birthday_service=object(),  # type: ignore[arg-type]
+        settings=GuildSettings.default(1),
+        owner_id=42,
+        guild=_guild(),  # type: ignore[arg-type]
+        celebration=_server_anniversary(),
+        recurring_events=(),
+        selected_month=2,
+        selected_day=29,
+    )
+
+    assert any(isinstance(child, ServerAnniversaryMonthSelect) for child in view.children)
+    assert any(isinstance(child, ServerAnniversaryDaySelect) for child in view.children)
+
+
+@pytest.mark.asyncio
 async def test_birthday_dm_section_calls_out_theme_only_visuals() -> None:
     view = MessageTemplateView(
         settings_service=object(),  # type: ignore[arg-type]
@@ -256,20 +318,23 @@ def test_media_tools_embed_explains_probe_results() -> None:
     values = "\n".join(fields.values())
 
     assert fields["Updated"] == "No changes were saved. Your current saved media is unchanged."
+    assert "Route: <#123> (custom)" in fields["Live surface"]
+    assert "Image: direct GIF (custom)" in fields["Live surface"]
+    assert "Thumbnail: direct image (custom)" in fields["Live surface"]
     assert "Blocked saves never clear the currently saved media." in fields["Save protection"]
-    assert "Configured image:" in fields["Configured surface media"]
-    assert "Configured thumbnail:" in fields["Configured surface media"]
-    assert "https://cdn.example.com/current-banner.gif" in fields["Configured surface media"]
+    assert "Media source: custom" in fields["Inheritance and defaults"]
+    assert (
+        "Birthday announcement is the root default surface."
+        in fields["Inheritance and defaults"]
+    )
+    assert "https://cdn.example.com/current-banner.gif" not in fields["Live surface"]
     assert (
         "https://tenor.com/view/funny-cat-happy-birthday-123456"
-        not in fields["Configured surface media"]
+        not in fields["Live surface"]
     )
-    assert "Effective image:" in fields["Effective live media"]
-    assert "Effective thumbnail:" in fields["Effective live media"]
     assert "https://tenor.com/view/funny-cat-happy-birthday-123456" in fields["Latest validation"]
     assert "Webpage link rejected" in values
-    assert "Direct media accepted" in values
-    assert "current saved media remains live" in fields["Validation flow"]
+    assert "currently saved media" in fields["Save protection"]
     assert "For Tenor, use the direct media file URL, not the page link." in values
     assert "Google image results: wrapper links are webpages, not direct media files." in values
 
@@ -290,7 +355,7 @@ async def test_message_template_view_shows_global_behavior_toggle() -> None:
 
     labels = [getattr(child, "label", "") for child in view.children]
 
-    assert "Behavior: Quiet" in labels
+    assert "Style: Quiet" in labels
 
 
 def test_setup_embed_shows_effective_source_for_inherited_surfaces() -> None:
@@ -302,16 +367,16 @@ def test_setup_embed_shows_effective_source_for_inherited_surfaces() -> None:
     )
 
     anniversary_field = next(
-        field for field in embed.fields if field.name == "\U0001F389 Anniversary routing"
+        field for field in embed.fields if field.name == "\U0001F389 Member anniversaries"
     )
     server_field = next(
-        field for field in embed.fields if field.name == "\U0001F3F0 Server anniversary defaults"
+        field for field in embed.fields if field.name == "\U0001F4C5 Annual celebrations"
     )
 
-    assert "Inherited from Birthday announcement" in anniversary_field.value
-    assert "Configured image: Not set" in anniversary_field.value
-    assert "Effective thumbnail:" in anniversary_field.value
-    assert "Event-level channel overrides still win" in server_field.value
+    assert "Route: <#123> (inherits birthday default)" in anniversary_field.value
+    assert "Image: direct GIF (inherits birthday default)" in anniversary_field.value
+    assert "Thumbnail: direct image (inherits birthday default)" in anniversary_field.value
+    assert "Saved event-level channel overrides still win" in server_field.value
 
 
 def test_message_template_embed_help_calls_out_anniversary_placeholder_validity() -> None:
@@ -356,8 +421,11 @@ async def test_studio_preview_uses_explicit_surface_selection() -> None:
     status_fields = {field.name: field.value for field in status_embed.fields}
 
     assert status_fields["Preview surface"] == "Member anniversary"
-    assert "Configured route:" in status_fields["Routing and mentions"]
-    assert "Effective route:" in status_fields["Routing and mentions"]
-    assert "Configured image:" in status_fields["Media and visuals"]
-    assert "Configured thumbnail:" in status_fields["Media and visuals"]
+    assert "Route: <#456> (custom)" in status_fields["Routing and mentions"]
+    assert "Route source: custom" in status_fields["Routing and mentions"]
+    assert "Image: direct GIF (inherits birthday default)" in status_fields["Media and visuals"]
+    assert (
+        "Thumbnail: direct image (inherits birthday default)"
+        in status_fields["Media and visuals"]
+    )
     assert "Happy anniversary" in (preview_embed.description or "")

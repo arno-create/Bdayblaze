@@ -21,8 +21,9 @@ def build_help_embed() -> discord.Embed:
         name="Getting started",
         value=(
             "1. Save your date with `/birthday set`.\n"
-            "2. Server admins should open `/birthday studio`.\n"
-            "3. Use `/birthday setup` for routing, timezone, and safety rules.\n"
+            "2. Server admins should open `/birthday setup` for routing, timezone, "
+            "and safety rules.\n"
+            "3. Use `/birthday studio` for copy, style, previews, and celebration design.\n"
             "4. Use `/birthday test-message` before going live."
         ),
         inline=False,
@@ -50,8 +51,10 @@ def build_help_embed() -> discord.Embed:
     budget.add_field(
         name="Admin commands",
         value=(
-            "`/birthday studio` is the main admin control surface.\n"
-            "`/birthday setup` handles channel, timezone, and role safety.\n"
+            "`/birthday setup` handles delivery basics: routes, timezone, eligibility, "
+            "and safety.\n"
+            "`/birthday studio` handles celebration design: copy, Quiet vs Party style, "
+            "previews, and annual-event polish.\n"
             "`/birthday test-message` Send a private operator dry run.\n"
             "`/birthday analytics` shows compact server analytics.\n"
             "`/birthday surprise queue|fulfill` manages manual Nitro concierge records.\n"
@@ -67,10 +70,10 @@ def build_help_embed() -> discord.Embed:
         name="Studio media and safety",
         value=(
             "Use `/birthday studio` -> Media Tools for shared image and thumbnail URLs.\n"
-            "Direct media URLs can preview as embeds. Regular webpages are shown as webpage URLs "
-            "and unsupported files are called out separately instead of being silently dropped.\n"
-            "Setup, Studio, and preview panels now show configured route/image/thumbnail values "
-            "separately from the effective resolved values and source.\n"
+            "Main Studio surfaces lead with live route, media source, and health instead of raw "
+            "resolver traces.\n"
+            "Direct media can preview as embeds. Regular webpages and unsupported files are "
+            "called out clearly instead of being silently dropped.\n"
             "Birthday Quests can optionally count reactions on the shared birthday announcement "
             "post without using Message Content.\n"
             "Studio also blocks obvious profanity, NSFW wording, slurs, harassment-style text, "

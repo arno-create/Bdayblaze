@@ -64,6 +64,7 @@ class FakeExperienceRepository:
             ),
         ]
         self.rewards: list[GuildSurpriseReward] = []
+        self.batch_reward_writes: list[list[GuildSurpriseReward]] = []
 
     async def fetch_guild_experience_settings(
         self,
@@ -92,6 +93,14 @@ class FakeExperienceRepository:
         ]
         self.rewards.append(reward)
         return reward
+
+    async def upsert_guild_surprise_rewards(
+        self,
+        rewards: list[GuildSurpriseReward],
+    ) -> list[GuildSurpriseReward]:
+        self.batch_reward_writes.append(list(rewards))
+        self.rewards = list(rewards)
+        return list(rewards)
 
     async def fetch_member_birthday(self, guild_id: int, user_id: int) -> MemberBirthday | None:
         if user_id != self.birthday.user_id:
@@ -499,3 +508,51 @@ async def test_fulfill_nitro_raises_for_missing_record() -> None:
             admin_user_id=5,
             delivered=True,
         )
+
+
+@pytest.mark.asyncio
+async def test_update_surprise_rewards_batches_atomic_reward_updates() -> None:
+    repository = FakeExperienceRepository()
+    service = ExperienceService(repository)  # type: ignore[arg-type]
+
+    updated = await service.update_surprise_rewards(
+        1,
+        updates={
+            "featured": {"enabled": True, "weight": 5},
+            "badge": {"enabled": False, "weight": 0},
+            "custom_note": {
+                "enabled": True,
+                "weight": 3,
+                "label": "Manual surprise",
+                "note_text": "Hand-picked reward",
+            },
+            "nitro_concierge": {"enabled": True, "weight": 1},
+        },
+    )
+
+    assert len(repository.batch_reward_writes) == 1
+    assert [reward.reward_type for reward in repository.batch_reward_writes[0]] == [
+        "featured",
+        "badge",
+        "custom_note",
+        "nitro_concierge",
+    ]
+    custom_note = next(reward for reward in updated if reward.reward_type == "custom_note")
+    assert custom_note.label == "Manual surprise"
+    assert custom_note.note_text == "Hand-picked reward"
+
+
+@pytest.mark.asyncio
+async def test_update_surprise_rewards_rejects_invalid_weight_before_writing() -> None:
+    repository = FakeExperienceRepository()
+    service = ExperienceService(repository)  # type: ignore[arg-type]
+
+    with pytest.raises(ValidationError, match="Surprise weight must be between 0 and 1000."):
+        await service.update_surprise_rewards(
+            1,
+            updates={
+                "featured": {"weight": 2001},
+            },
+        )
+
+    assert repository.batch_reward_writes == []
