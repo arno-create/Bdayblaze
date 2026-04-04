@@ -15,3 +15,11 @@ def test_surface_migration_creates_table_and_backfills_legacy_routes_media() -> 
     assert "announcement_thumbnail_url" in sql
     assert "anniversary_channel_id" in sql
     assert "ON CONFLICT (guild_id, surface_kind) DO NOTHING" in sql
+
+
+def test_processing_index_migration_adds_partial_processing_started_index() -> None:
+    sql = Path("migrations/010_processing_event_index.sql").read_text(encoding="utf-8")
+
+    assert "CREATE INDEX IF NOT EXISTS celebration_events_processing_started_idx" in sql
+    assert "ON celebration_events (processing_started_at_utc)" in sql
+    assert "WHERE state = 'processing'" in sql

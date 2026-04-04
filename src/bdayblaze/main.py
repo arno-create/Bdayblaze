@@ -53,8 +53,14 @@ async def _build_container(settings: Settings, runtime_status: RuntimeStatus) ->
             runtime_status.startup_phase = "migrations_completed"
             logger.info("migrations_completed", applied=applied)
         repository = PostgresRepository(pool)
-        birthday_service = BirthdayService(repository)
-        experience_service = ExperienceService(repository)
+        birthday_service = BirthdayService(
+            repository,
+            recovery_grace_hours=settings.recovery_grace_hours,
+        )
+        experience_service = ExperienceService(
+            repository,
+            recovery_grace_hours=settings.recovery_grace_hours,
+        )
         settings_service = SettingsService(repository)
         studio_audit_logger = StudioAuditLogger(settings_service)
         metrics = SchedulerMetrics()
@@ -70,6 +76,7 @@ async def _build_container(settings: Settings, runtime_status: RuntimeStatus) ->
         health_service = HealthService(
             repository,
             metrics,
+            runtime_status=runtime_status,
             recovery_grace_hours=settings.recovery_grace_hours,
             scheduler_max_sleep_seconds=settings.scheduler_max_sleep_seconds,
         )

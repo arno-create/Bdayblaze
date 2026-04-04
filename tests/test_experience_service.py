@@ -37,6 +37,7 @@ class FakeExperienceRepository:
         self.saved_wish: BirthdayWish | None = None
         self.removed_wish: BirthdayWish | None = None
         self.current_celebration: BirthdayCelebration | None = None
+        self.pending_occurrences: dict[int, datetime] = {}
         self.reaction_refresh_calls: list[tuple[int, int, int]] = []
         self.reaction_disable_calls: list[tuple[int, int]] = []
         self.timeline_entries: list[TimelineEntry] = [
@@ -109,6 +110,19 @@ class FakeExperienceRepository:
 
     async def fetch_guild_settings(self, guild_id: int) -> GuildSettings | None:
         return self.guild_settings
+
+    async def fetch_pending_birthday_occurrences(
+        self,
+        guild_id: int,
+        user_ids: list[int],
+        *,
+        since_utc: datetime,
+    ) -> dict[int, datetime]:
+        return {
+            user_id: occurrence_at_utc
+            for user_id, occurrence_at_utc in self.pending_occurrences.items()
+            if user_id in user_ids and occurrence_at_utc >= since_utc
+        }
 
     async def upsert_birthday_wish(self, **kwargs: object) -> BirthdayWish:
         self.saved_wish = BirthdayWish(
@@ -383,6 +397,55 @@ async def test_build_timeline_includes_matching_counts_and_streak_for_self() -> 
     assert timeline.same_day_count == 2
     assert timeline.month_total_count == 7
     assert timeline.zodiac_label == "Aries"
+
+
+@pytest.mark.asyncio
+async def test_build_timeline_marks_recovering_occurrence_after_local_day_ends() -> None:
+    repository = FakeExperienceRepository()
+    repository.pending_occurrences[42] = datetime(2026, 3, 25, tzinfo=UTC)
+    repository.current_celebration = BirthdayCelebration(
+        id=12,
+        guild_id=1,
+        user_id=42,
+        occurrence_start_at_utc=datetime(2026, 3, 25, tzinfo=UTC),
+        late_delivery=True,
+        announcement_message_id=777,
+        capsule_state="pending_public",
+        capsule_message_id=None,
+        revealed_wish_count=3,
+        quest_enabled=True,
+        quest_wish_target=3,
+        quest_wish_goal_met=True,
+        quest_reaction_target=5,
+        quest_reaction_count=5,
+        quest_reaction_goal_met=True,
+        quest_checkin_required=False,
+        quest_checked_in_at_utc=None,
+        quest_completed_at_utc=None,
+        featured_birthday=False,
+        surprise_reward_type=None,
+        surprise_reward_label=None,
+        surprise_note_text=None,
+        surprise_selected_at_utc=None,
+        nitro_fulfillment_status=None,
+        nitro_fulfilled_by_user_id=None,
+        nitro_fulfilled_at_utc=None,
+        created_at_utc=datetime(2026, 3, 25, tzinfo=UTC),
+        updated_at_utc=datetime(2026, 3, 26, tzinfo=UTC),
+    )
+    service = ExperienceService(repository)  # type: ignore[arg-type]
+
+    timeline = await service.build_timeline(
+        guild_id=1,
+        target_user_id=42,
+        viewer_user_id=42,
+        admin_override=False,
+        now_utc=datetime(2026, 3, 26, 6, tzinfo=UTC),
+    )
+
+    assert timeline.display_state.status == "recovering"
+    assert timeline.active_celebration is not None
+    assert timeline.active_celebration.late_delivery is True
 
 
 @pytest.mark.asyncio

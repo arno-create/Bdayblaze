@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from bdayblaze.domain.birthday_display import resolve_birthday_display_state
 from bdayblaze.domain.birthday_logic import (
     anniversary_month_day,
     celebration_end_at_utc,
@@ -75,6 +76,50 @@ def test_anniversary_month_day_uses_server_timezone() -> None:
 
 def test_membership_age_days_returns_none_when_join_date_missing() -> None:
     assert membership_age_days(None, now_utc=datetime(2026, 3, 24, tzinfo=UTC)) is None
+
+
+def test_birthday_display_state_is_active_during_local_birthday_window() -> None:
+    display_state = resolve_birthday_display_state(
+        birth_month=3,
+        birth_day=24,
+        timezone_name="UTC",
+        scheduler_cursor_at_utc=datetime(2027, 3, 24, tzinfo=UTC),
+        now_utc=datetime(2026, 3, 24, 12, tzinfo=UTC),
+        recovery_grace=timedelta(hours=36),
+    )
+
+    assert display_state.status == "active"
+    assert display_state.relevant_occurrence_at_utc == datetime(2026, 3, 24, tzinfo=UTC)
+
+
+def test_birthday_display_state_uses_pending_occurrence_for_recovery_window() -> None:
+    display_state = resolve_birthday_display_state(
+        birth_month=3,
+        birth_day=24,
+        timezone_name="UTC",
+        scheduler_cursor_at_utc=datetime(2027, 3, 24, tzinfo=UTC),
+        now_utc=datetime(2026, 3, 25, 11, tzinfo=UTC),
+        recovery_grace=timedelta(hours=36),
+        pending_occurrence_at_utc=datetime(2026, 3, 24, tzinfo=UTC),
+    )
+
+    assert display_state.status == "recovering"
+    assert display_state.relevant_occurrence_at_utc == datetime(2026, 3, 24, tzinfo=UTC)
+    assert display_state.next_future_occurrence_at_utc == datetime(2027, 3, 24, tzinfo=UTC)
+
+
+def test_birthday_display_state_handles_feb_29_normalization() -> None:
+    display_state = resolve_birthday_display_state(
+        birth_month=2,
+        birth_day=29,
+        timezone_name="UTC",
+        scheduler_cursor_at_utc=datetime(2025, 2, 28, tzinfo=UTC),
+        now_utc=datetime(2025, 1, 15, tzinfo=UTC),
+        recovery_grace=timedelta(hours=36),
+    )
+
+    assert display_state.status == "upcoming"
+    assert display_state.relevant_occurrence_at_utc == datetime(2025, 2, 28, tzinfo=UTC)
 
 
 @pytest.mark.asyncio

@@ -7,9 +7,14 @@ from types import SimpleNamespace
 import pytest
 
 from bdayblaze.discord.cogs.birthday import (
+    _build_birthday_embed,
     _build_preview_embed,
+    _build_timeline_embed,
+    _describe_next_birthday,
+    _format_birthday_list_line,
     _remove_active_birthday_role_if_needed,
     _require_ready_delivery,
+    _timeline_is_active_now,
     _visible_only_for_scope,
 )
 from bdayblaze.domain.announcement_template import server_anniversary_years_since_creation
@@ -17,6 +22,10 @@ from bdayblaze.domain.media_validation import mark_validated_direct_media_url
 from bdayblaze.domain.models import (
     AnnouncementDeliveryReadiness,
     AnnouncementSurfaceSettings,
+    BirthdayBrowseEntry,
+    BirthdayDisplayState,
+    BirthdayPreview,
+    BirthdayTimeline,
     GuildSettings,
     MemberBirthday,
     RecurringCelebration,
@@ -437,3 +446,106 @@ def test_visible_only_for_scope_rejects_non_admin_all_scope() -> None:
 
     with pytest.raises(ValidationError, match="Only admins"):
         _visible_only_for_scope(interaction, "all")  # type: ignore[arg-type]
+
+
+def test_build_birthday_embed_shows_active_and_next_scheduled_fields() -> None:
+    birthday = FakeBirthdayService().birthday
+    display_state = BirthdayDisplayState(
+        status="active",
+        relevant_occurrence_at_utc=datetime(2026, 3, 24, tzinfo=UTC),
+        next_future_occurrence_at_utc=datetime(2027, 3, 24, tzinfo=UTC),
+        celebration_ends_at_utc=datetime(2026, 3, 25, tzinfo=UTC),
+    )
+
+    embed = _build_birthday_embed(
+        title="Birthday",
+        description="Profile",
+        birthday=birthday,
+        display_state=display_state,
+        settings=GuildSettings.default(1),
+    )
+
+    fields = {field.name: field.value for field in embed.fields}
+    assert fields["Celebration status"] == "Active now"
+    assert "Started" in fields["Current celebration"]
+    assert "Next scheduled celebration" in fields
+
+
+def test_format_birthday_list_line_marks_recovering_entries() -> None:
+    member = FakeMember(42, FakeRole(55))
+    entry = BirthdayBrowseEntry(
+        preview=BirthdayPreview(
+            user_id=42,
+            birth_month=3,
+            birth_day=24,
+            next_occurrence_at_utc=datetime(2027, 3, 24, tzinfo=UTC),
+            effective_timezone="UTC",
+            profile_visibility="server_visible",
+        ),
+        display_state=BirthdayDisplayState(
+            status="recovering",
+            relevant_occurrence_at_utc=datetime(2026, 3, 24, tzinfo=UTC),
+            next_future_occurrence_at_utc=datetime(2027, 3, 24, tzinfo=UTC),
+        ),
+    )
+
+    line = _format_birthday_list_line(entry, member, order="upcoming")
+
+    assert "recovering from" in line
+
+
+def test_describe_next_birthday_prefers_active_state_over_future_cursor() -> None:
+    member = FakeMember(42, FakeRole(55))
+    entry = BirthdayBrowseEntry(
+        preview=BirthdayPreview(
+            user_id=42,
+            birth_month=3,
+            birth_day=24,
+            next_occurrence_at_utc=datetime(2027, 3, 24, tzinfo=UTC),
+            effective_timezone="UTC",
+            profile_visibility="server_visible",
+        ),
+        display_state=BirthdayDisplayState(
+            status="active",
+            relevant_occurrence_at_utc=datetime(2026, 3, 24, tzinfo=UTC),
+            next_future_occurrence_at_utc=datetime(2027, 3, 24, tzinfo=UTC),
+            celebration_ends_at_utc=datetime(2026, 3, 25, tzinfo=UTC),
+        ),
+    )
+
+    description = _describe_next_birthday(entry, member)
+
+    assert "current birthday" in description
+    assert "active now" in description
+
+
+def test_build_timeline_embed_uses_recovering_description() -> None:
+    timeline = BirthdayTimeline(
+        birthday=FakeBirthdayService().birthday,
+        active_celebration=None,
+        display_state=BirthdayDisplayState(
+            status="recovering",
+            relevant_occurrence_at_utc=datetime(2026, 3, 24, tzinfo=UTC),
+            next_future_occurrence_at_utc=datetime(2027, 3, 24, tzinfo=UTC),
+        ),
+        celebration_count=2,
+        celebration_streak=1,
+        wishes_received_count=3,
+        quest_badge_count=1,
+        surprise_count=0,
+        featured_count=0,
+        next_countdown_at_utc=datetime(2026, 3, 24, tzinfo=UTC),
+        same_day_count=1,
+        month_total_count=2,
+        zodiac_label="Aries",
+        entries=(),
+    )
+
+    embed = _build_timeline_embed(
+        SimpleNamespace(display_name="Jamie"),
+        timeline,
+        active_now=False,
+    )
+
+    assert "Late recovery is still pending" in embed.description
+    assert _timeline_is_active_now(timeline) is False

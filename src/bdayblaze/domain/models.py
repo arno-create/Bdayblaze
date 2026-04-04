@@ -7,6 +7,7 @@ from typing import Any, Generic, Literal, TypeVar
 CelebrationMode = Literal["quiet", "party"]
 AnnouncementTheme = Literal["classic", "festive", "minimal", "cute", "elegant", "gaming"]
 ProfileVisibility = Literal["private", "server_visible"]
+BirthdayDisplayStatus = Literal["active", "recovering", "upcoming"]
 CelebrationKind = Literal["custom", "server_anniversary"]
 WishState = Literal["queued", "revealed", "removed", "moderated"]
 CapsuleState = Literal[
@@ -357,6 +358,20 @@ class BirthdayPreview:
 
 
 @dataclass(slots=True, frozen=True)
+class BirthdayDisplayState:
+    status: BirthdayDisplayStatus
+    relevant_occurrence_at_utc: datetime
+    next_future_occurrence_at_utc: datetime
+    celebration_ends_at_utc: datetime | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class BirthdayBrowseEntry:
+    preview: BirthdayPreview
+    display_state: BirthdayDisplayState
+
+
+@dataclass(slots=True, frozen=True)
 class AnnouncementRecipientSnapshot:
     user_id: int
     birth_month: int
@@ -467,6 +482,7 @@ class BirthdayImportPreview:
 class SchedulerMetrics:
     last_iteration_at_utc: datetime | None = None
     last_success_at_utc: datetime | None = None
+    last_activity_at_utc: datetime | None = None
     last_error_code: str | None = None
     recovery_completed: bool = False
     iterations: int = 0
@@ -509,6 +525,7 @@ class TimelineEntry:
 class BirthdayTimeline:
     birthday: MemberBirthday
     active_celebration: BirthdayCelebration | None
+    display_state: BirthdayDisplayState
     celebration_count: int
     celebration_streak: int
     wishes_received_count: int

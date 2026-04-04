@@ -30,12 +30,14 @@ from bdayblaze.domain.announcement_template import (
     server_anniversary_years_since_creation,
 )
 from bdayblaze.domain.announcement_theme import announcement_theme_label
-from bdayblaze.domain.birthday_logic import LATE_CELEBRATION_NOTE, is_birthday_active_now
+from bdayblaze.domain.birthday_logic import LATE_CELEBRATION_NOTE
 from bdayblaze.domain.media_validation import assess_media_url
 from bdayblaze.domain.models import (
     AnnouncementSurfaceKind,
     AnnouncementSurfaceSettings,
+    BirthdayBrowseEntry,
     BirthdayCelebration,
+    BirthdayDisplayState,
     BirthdayPreview,
     BirthdayQuestStatus,
     BirthdayTimeline,
@@ -160,11 +162,17 @@ class BirthdayGroup(
             return
 
         settings = await self._settings_service.get_settings(interaction.guild.id)
+        display_state = await self._birthday_service.resolve_birthday_display_state(
+            interaction.guild.id,
+            birthday,
+            settings=settings,
+        )
         await interaction.followup.send(
             embed=_build_birthday_embed(
                 title="Birthday saved",
                 description="Your birthday stays stored only for this server.",
                 birthday=birthday,
+                display_state=display_state,
                 settings=settings,
             ),
             ephemeral=True,
@@ -190,19 +198,20 @@ class BirthdayGroup(
         assert interaction.guild is not None
         await interaction.response.defer(ephemeral=True)
         try:
-            birthday = await self._birthday_service.get_birthday(
+            birthday, settings, display_state = await self._birthday_service.get_birthday_display(
                 interaction.guild.id,
                 interaction.user.id,
+                missing_message="You have not registered a birthday in this server yet.",
             )
         except NotFoundError as exc:
             await interaction.followup.send(str(exc), ephemeral=True)
             return
-        settings = await self._settings_service.get_settings(interaction.guild.id)
         await interaction.followup.send(
             embed=_build_birthday_embed(
                 title="Your birthday profile",
                 description="This record is server-scoped and privacy-first by default.",
                 birthday=birthday,
+                display_state=display_state,
                 settings=settings,
             ),
             ephemeral=True,
@@ -234,18 +243,16 @@ class BirthdayGroup(
         assert interaction.guild is not None
         await interaction.response.defer(ephemeral=True)
         fetch_limit = min(max(limit * 3, limit), 50)
-        upcoming = await self._birthday_service.list_upcoming_birthdays(
+        entries = await self._birthday_service.list_browsable_birthdays(
             interaction.guild.id,
-            fetch_limit,
+            limit=fetch_limit,
+            order_by_upcoming=True,
             visible_only=True,
         )
-        resolved = await _resolve_birthday_members(interaction.guild, upcoming)
+        resolved = await _resolve_birthday_entry_members(interaction.guild, entries)
         lines = [
-            (
-                f"{member.mention} - {preview.birth_month:02d}/{preview.birth_day:02d} - "
-                f"{discord.utils.format_dt(preview.next_occurrence_at_utc, 'R')}"
-            )
-            for preview, member in resolved[:limit]
+            _format_birthday_list_line(entry, member, order="upcoming")
+            for entry, member in resolved[:limit]
         ]
         if not lines:
             await interaction.followup.send(
@@ -261,7 +268,7 @@ class BirthdayGroup(
         )
         _set_resolution_footer(
             embed,
-            total_candidates=len(upcoming),
+            total_candidates=len(entries),
             shown_count=len(lines),
             resolved_count=len(resolved),
             requested_limit=limit,
@@ -317,27 +324,23 @@ class BirthdayGroup(
     async def next_birthday(self, interaction: discord.Interaction) -> None:
         assert interaction.guild is not None
         await interaction.response.defer(ephemeral=True)
-        upcoming = await self._birthday_service.list_upcoming_birthdays(
+        entries = await self._birthday_service.list_browsable_birthdays(
             interaction.guild.id,
-            12,
+            limit=12,
+            order_by_upcoming=True,
             visible_only=True,
         )
-        resolved = await _resolve_birthday_members(interaction.guild, upcoming)
+        resolved = await _resolve_birthday_entry_members(interaction.guild, entries)
         if not resolved:
             await interaction.followup.send(
                 "No visible upcoming birthdays are registered in this server yet.",
                 ephemeral=True,
             )
             return
-        preview, member = resolved[0]
+        entry, member = resolved[0]
         embed = discord.Embed(
             title="Next birthday",
-            description=(
-                f"{member.mention} is next on "
-                f"{preview.birth_month:02d}/{preview.birth_day:02d}.\n"
-                "Celebration starts "
-                f"{discord.utils.format_dt(preview.next_occurrence_at_utc, 'R')}."
-            ),
+            description=_describe_next_birthday(entry, member),
             color=discord.Color.blurple(),
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
@@ -362,14 +365,14 @@ class BirthdayGroup(
         visible_only = _visible_only_for_scope(interaction, scope)
         settings = await self._settings_service.get_settings(interaction.guild.id)
         selected_month = month or _current_month(settings.default_timezone)
-        previews = await self._birthday_service.list_birthdays_for_month(
+        entries = await self._birthday_service.list_browsable_birthdays(
             interaction.guild.id,
             month=selected_month,
             limit=_PUBLIC_RESULT_LIMIT + 6,
             order_by_upcoming=False,
             visible_only=visible_only,
         )
-        resolved = await _resolve_birthday_members(interaction.guild, previews)
+        resolved = await _resolve_birthday_entry_members(interaction.guild, entries)
         shown = resolved[:_PUBLIC_RESULT_LIMIT]
         if not shown:
             await interaction.followup.send(
@@ -377,7 +380,7 @@ class BirthdayGroup(
                 ephemeral=True,
             )
             return
-        lines = [f"{preview.birth_day:02d} - {member.mention}" for preview, member in shown]
+        lines = [f"{entry.preview.birth_day:02d} - {member.mention}" for entry, member in shown]
         embed = discord.Embed(
             title=f"Birthdays in {month_name[selected_month]}",
             description="\n".join(lines),
@@ -399,7 +402,7 @@ class BirthdayGroup(
             )
         _set_resolution_footer(
             embed,
-            total_candidates=len(previews),
+            total_candidates=len(entries),
             shown_count=len(lines),
             resolved_count=len(resolved),
             requested_limit=_PUBLIC_RESULT_LIMIT,
@@ -670,12 +673,11 @@ class BirthdayGroup(
                 viewer_user_id=interaction.user.id,
                 admin_override=_is_manage_guild(interaction),
             )
-        settings = await self._settings_service.get_settings(interaction.guild.id)
         await interaction.followup.send(
             embed=_build_timeline_embed(
                 target,
                 timeline,
-                active_now=_timeline_is_active_now(timeline, settings),
+                active_now=_timeline_is_active_now(timeline),
             ),
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
@@ -929,28 +931,23 @@ class BirthdayGroup(
         await interaction.response.defer(ephemeral=True)
         visible_only = _visible_only_for_scope(interaction, scope)
         fetch_limit = min(limit + 6, _ADMIN_RESULT_LIMIT + 6)
-        if month is None:
-            previews = await self._birthday_service.list_birthdays(
-                interaction.guild.id,
-                limit=fetch_limit,
-                order_by_upcoming=order == "upcoming",
-                visible_only=visible_only,
-            )
-            title = (
+        entries = await self._birthday_service.list_browsable_birthdays(
+            interaction.guild.id,
+            month=month,
+            limit=fetch_limit,
+            order_by_upcoming=order == "upcoming",
+            visible_only=visible_only,
+        )
+        title = (
+            f"Saved birthdays in {month_name[month]}"
+            if month is not None
+            else (
                 "Saved birthdays by next celebration"
                 if order == "upcoming"
                 else "Saved birthdays by calendar date"
             )
-        else:
-            previews = await self._birthday_service.list_birthdays_for_month(
-                interaction.guild.id,
-                month=month,
-                limit=fetch_limit,
-                order_by_upcoming=order == "upcoming",
-                visible_only=visible_only,
-            )
-            title = f"Saved birthdays in {month_name[month]}"
-        resolved = await _resolve_birthday_members(interaction.guild, previews)
+        )
+        resolved = await _resolve_birthday_entry_members(interaction.guild, entries)
         shown = resolved[:limit]
         if not shown:
             await interaction.followup.send(
@@ -959,7 +956,7 @@ class BirthdayGroup(
             )
             return
         lines = [
-            _format_birthday_list_line(preview, member, order=order) for preview, member in shown
+            _format_birthday_list_line(entry, member, order=order) for entry, member in shown
         ]
         embed = discord.Embed(
             title=title,
@@ -969,7 +966,7 @@ class BirthdayGroup(
         )
         _set_resolution_footer(
             embed,
-            total_candidates=len(previews),
+            total_candidates=len(entries),
             shown_count=len(lines),
             resolved_count=len(resolved),
             requested_limit=limit,
@@ -1061,7 +1058,7 @@ class BirthdayGroup(
         assert interaction.guild is not None
         await interaction.response.defer(ephemeral=True)
         try:
-            birthday = await self._birthday_service.require_birthday(
+            birthday, settings, display_state = await self._birthday_service.get_birthday_display(
                 interaction.guild.id,
                 member.id,
                 missing_message=(
@@ -1071,12 +1068,12 @@ class BirthdayGroup(
         except NotFoundError as exc:
             await interaction.followup.send(str(exc), ephemeral=True)
             return
-        settings = await self._settings_service.get_settings(interaction.guild.id)
         await interaction.followup.send(
             embed=_build_birthday_embed(
                 title=f"{member.display_name}'s birthday",
                 description="This stored record is scoped to the current server.",
                 birthday=birthday,
+                display_state=display_state,
                 settings=settings,
             ),
             ephemeral=True,
@@ -1124,11 +1121,17 @@ class BirthdayGroup(
             await interaction.followup.send(str(exc), ephemeral=True)
             return
         settings = await self._settings_service.get_settings(interaction.guild.id)
+        display_state = await self._birthday_service.resolve_birthday_display_state(
+            interaction.guild.id,
+            birthday,
+            settings=settings,
+        )
         await interaction.followup.send(
             embed=_build_birthday_embed(
                 title=f"Birthday saved for {member.display_name}",
                 description="This record stays scoped to the current server.",
                 birthday=birthday,
+                display_state=display_state,
                 settings=settings,
             ),
             ephemeral=True,
@@ -1767,6 +1770,7 @@ def _build_birthday_embed(
     title: str,
     description: str,
     birthday: MemberBirthday,
+    display_state: BirthdayDisplayState,
     settings: GuildSettings,
 ) -> discord.Embed:
     embed = BudgetedEmbed.create(
@@ -1793,11 +1797,52 @@ def _build_birthday_embed(
         inline=True,
     )
     embed.add_field(
-        name="Next celebration",
-        value=discord.utils.format_dt(birthday.next_occurrence_at_utc, "F"),
-        inline=False,
+        name="Celebration status",
+        value=_birthday_status_label(display_state),
+        inline=True,
     )
+    if display_state.status == "upcoming":
+        embed.add_field(
+            name="Next celebration",
+            value=discord.utils.format_dt(display_state.relevant_occurrence_at_utc, "F"),
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name="Current celebration",
+            value=_birthday_current_celebration_value(display_state),
+            inline=False,
+        )
+        embed.add_field(
+            name="Next scheduled celebration",
+            value=discord.utils.format_dt(display_state.next_future_occurrence_at_utc, "F"),
+            inline=False,
+        )
     return embed.build()
+
+
+def _birthday_status_label(display_state: BirthdayDisplayState) -> str:
+    return {
+        "active": "Active now",
+        "recovering": "Late recovery pending",
+        "upcoming": "Upcoming",
+    }[display_state.status]
+
+
+def _birthday_current_celebration_value(display_state: BirthdayDisplayState) -> str:
+    if display_state.status == "active":
+        lines = [
+            f"Started {discord.utils.format_dt(display_state.relevant_occurrence_at_utc, 'F')}",
+        ]
+        if display_state.celebration_ends_at_utc is not None:
+            lines.append(
+                f"Ends {discord.utils.format_dt(display_state.celebration_ends_at_utc, 'R')}"
+            )
+        return "\n".join(lines)
+    return (
+        "Recovery is still pending for "
+        f"{discord.utils.format_dt(display_state.relevant_occurrence_at_utc, 'F')}."
+    )
 
 
 def _build_import_preview_embed(preview: object, applied: bool = False) -> discord.Embed:
@@ -2238,18 +2283,81 @@ async def _resolve_birthday_members(
     ]
 
 
+async def _resolve_birthday_entry_members(
+    guild: discord.Guild,
+    entries: list[BirthdayBrowseEntry],
+) -> list[tuple[BirthdayBrowseEntry, discord.Member]]:
+    resolved_members = await resolve_guild_members(
+        guild,
+        (entry.preview.user_id for entry in entries),
+    )
+    by_user_id = {user_id: member for user_id, member in resolved_members}
+    return [
+        (entry, member)
+        for entry in entries
+        if (member := by_user_id.get(entry.preview.user_id)) is not None
+    ]
+
+
 def _format_birthday_list_line(
-    preview: BirthdayPreview,
+    entry: BirthdayBrowseEntry,
     member: discord.Member,
     *,
     order: Literal["calendar", "upcoming"],
 ) -> str:
+    preview = entry.preview
     if order == "upcoming":
-        return (
-            f"{member.mention} - {preview.birth_month:02d}/{preview.birth_day:02d} - "
-            f"{discord.utils.format_dt(preview.next_occurrence_at_utc, 'R')}"
-        )
+        return _format_birthday_upcoming_line(entry, member)
     return f"{preview.birth_month:02d}/{preview.birth_day:02d} - {member.mention}"
+
+
+def _format_birthday_upcoming_line(
+    entry: BirthdayBrowseEntry,
+    member: discord.Member,
+) -> str:
+    preview = entry.preview
+    display_state = entry.display_state
+    if display_state.status == "active":
+        detail = "active now"
+    elif display_state.status == "recovering":
+        detail = (
+            "recovering from "
+            f"{discord.utils.format_dt(display_state.relevant_occurrence_at_utc, 'R')}"
+        )
+    else:
+        detail = discord.utils.format_dt(display_state.relevant_occurrence_at_utc, "R")
+    return (
+        f"{member.mention} - {preview.birth_month:02d}/{preview.birth_day:02d} - {detail}"
+    )
+
+
+def _describe_next_birthday(entry: BirthdayBrowseEntry, member: discord.Member) -> str:
+    preview = entry.preview
+    display_state = entry.display_state
+    if display_state.status == "active":
+        ends_at = (
+            f" and ends {discord.utils.format_dt(display_state.celebration_ends_at_utc, 'R')}"
+            if display_state.celebration_ends_at_utc is not None
+            else ""
+        )
+        return (
+            f"{member.mention} is the current birthday on "
+            f"{preview.birth_month:02d}/{preview.birth_day:02d}.\n"
+            f"Celebration is active now{ends_at}."
+        )
+    if display_state.status == "recovering":
+        return (
+            f"{member.mention} is the current birthday on "
+            f"{preview.birth_month:02d}/{preview.birth_day:02d}.\n"
+            "Late recovery is still pending from "
+            f"{discord.utils.format_dt(display_state.relevant_occurrence_at_utc, 'R')}."
+        )
+    return (
+        f"{member.mention} is next on "
+        f"{preview.birth_month:02d}/{preview.birth_day:02d}.\n"
+        "Celebration starts "
+        f"{discord.utils.format_dt(display_state.relevant_occurrence_at_utc, 'R')}."
+    )
 
 
 def _set_resolution_footer(
@@ -2461,10 +2569,25 @@ def _build_timeline_embed(
     *,
     active_now: bool,
 ) -> discord.Embed:
-    description = (
-        "Celebration is live today."
-        if active_now
-        else f"Next birthday: {discord.utils.format_dt(timeline.next_countdown_at_utc, 'R')}"
+    if active_now:
+        description = "Celebration is live today."
+    elif timeline.display_state.status == "recovering":
+        description = (
+            "Late recovery is still pending for "
+            f"{discord.utils.format_dt(timeline.display_state.relevant_occurrence_at_utc, 'R')}."
+        )
+    else:
+        description = (
+            "Next birthday: "
+            f"{discord.utils.format_dt(timeline.next_countdown_at_utc, 'R')}"
+        )
+    recovering_reference = discord.utils.format_dt(
+        timeline.display_state.relevant_occurrence_at_utc,
+        "R",
+    )
+    next_scheduled_reference = discord.utils.format_dt(
+        timeline.display_state.next_future_occurrence_at_utc,
+        "R",
     )
     embed = BudgetedEmbed.create(
         title=f"{target.display_name}'s Birthday Timeline",
@@ -2488,11 +2611,18 @@ def _build_timeline_embed(
     active = timeline.active_celebration
     if active is not None:
         current_lines = [
-            "\U0001F382 Status: celebrating right now"
-            if active_now
-            else (
-                f"\U0001F382 Countdown: "
-                f"{discord.utils.format_dt(timeline.next_countdown_at_utc, 'R')}"
+            (
+                "\U0001F382 Status: celebrating right now"
+                if active_now
+                else (
+                    "\U0001F382 Status: recovery in progress from "
+                    f"{recovering_reference}"
+                )
+                if timeline.display_state.status == "recovering"
+                else (
+                    f"\U0001F382 Countdown: "
+                    f"{discord.utils.format_dt(timeline.next_countdown_at_utc, 'R')}"
+                )
             ),
             f"\U0001F4E6 Capsule: {_capsule_state_label(active)}",
             (
@@ -2535,6 +2665,16 @@ def _build_timeline_embed(
         if active.late_delivery:
             current_lines.append(f"\u23F0 {LATE_CELEBRATION_NOTE}")
         embed.add_line_fields("Current celebration", tuple(current_lines), inline=False)
+    elif timeline.display_state.status == "recovering":
+        embed.add_line_fields(
+            "Current celebration",
+            (
+                "Status: late recovery pending",
+                f"Occurred {recovering_reference}",
+                f"Next scheduled birthday {next_scheduled_reference}",
+            ),
+            inline=False,
+        )
     extras = [
         f"Wishes received: {timeline.wishes_received_count}",
         f"Quest badges: {timeline.quest_badge_count}",
@@ -2688,13 +2828,8 @@ async def _refresh_live_quest_progress(
     )
 
 
-def _timeline_is_active_now(timeline: BirthdayTimeline, settings: GuildSettings) -> bool:
-    return is_birthday_active_now(
-        birth_month=timeline.birthday.birth_month,
-        birth_day=timeline.birthday.birth_day,
-        timezone_name=timeline.birthday.effective_timezone(settings),
-        now_utc=datetime.now(UTC),
-    )
+def _timeline_is_active_now(timeline: BirthdayTimeline) -> bool:
+    return timeline.display_state.status == "active"
 
 
 def _is_manage_guild(interaction: discord.Interaction) -> bool:

@@ -1052,6 +1052,55 @@ class PostgresRepository:
         assert isinstance(count, int)
         return count
 
+    async def fetch_pending_birthday_occurrences(
+        self,
+        guild_id: int,
+        user_ids: list[int],
+        *,
+        since_utc: datetime,
+    ) -> dict[int, datetime]:
+        if not user_ids:
+            return {}
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(
+                """
+                SELECT
+                    user_id,
+                    MAX(
+                        COALESCE(
+                            (payload->>'occurrence_start_at_utc')::timestamptz,
+                            scheduled_for_utc
+                        )
+                    ) AS occurrence_start_at_utc
+                FROM celebration_events
+                WHERE guild_id = $1
+                  AND user_id = ANY($2::bigint[])
+                  AND state IN ('pending', 'processing')
+                  AND event_kind IN (
+                      'announcement',
+                      'birthday_dm',
+                      'role_start',
+                      'capsule_reveal'
+                  )
+                  AND (
+                      scheduled_for_utc >= $3
+                      OR (
+                          payload ? 'occurrence_start_at_utc'
+                          AND (payload->>'occurrence_start_at_utc')::timestamptz >= $3
+                      )
+                  )
+                GROUP BY user_id
+                """,
+                guild_id,
+                user_ids,
+                since_utc,
+            )
+        return {
+            int(row["user_id"]): row["occurrence_start_at_utc"]
+            for row in rows
+            if row["occurrence_start_at_utc"] is not None
+        }
+
     async def list_upcoming_birthdays(
         self,
         guild_id: int,
@@ -1740,6 +1789,7 @@ class PostgresRepository:
                             payload={
                                 "channel_id": row["birthday_surface_channel_id"],
                                 "batch_token": batch_token,
+                                "occurrence_start_at_utc": current_occurrence.isoformat(),
                                 "celebration_mode": row["celebration_mode"],
                                 "announcement_theme": row["announcement_theme"],
                                 "template": row["announcement_template"]
@@ -1773,6 +1823,7 @@ class PostgresRepository:
                             event_kind="birthday_dm",
                             scheduled_for_utc=current_occurrence,
                             payload={
+                                "occurrence_start_at_utc": current_occurrence.isoformat(),
                                 "celebration_mode": row["celebration_mode"],
                                 "announcement_theme": row["announcement_theme"],
                                 "template": row["birthday_dm_template"] or DEFAULT_DM_TEMPLATE,
@@ -1798,6 +1849,7 @@ class PostgresRepository:
                             scheduled_for_utc=current_occurrence,
                             payload={
                                 "role_id": role_id,
+                                "occurrence_start_at_utc": current_occurrence.isoformat(),
                                 "eligibility_role_id": row["eligibility_role_id"],
                                 "ignore_bots": row["ignore_bots"],
                                 "minimum_membership_days": row["minimum_membership_days"],
@@ -2822,10 +2874,12 @@ class PostgresRepository:
                     FROM member_birthdays
                     WHERE guild_id = $1
                       AND timezone_override IS NULL
+                      AND next_occurrence_at_utc > $2
                       AND next_role_removal_at_utc IS NULL
                     FOR UPDATE
                     """,
                     guild_id,
+                    now_utc,
                 )
                 for row in birthday_rows:
                     next_occurrence = next_occurrence_at_utc(
@@ -2852,9 +2906,11 @@ class PostgresRepository:
                     SELECT *
                     FROM tracked_member_anniversaries
                     WHERE guild_id = $1
+                      AND next_occurrence_at_utc > $2
                     FOR UPDATE
                     """,
                     guild_id,
+                    now_utc,
                 )
                 for row in anniversary_rows:
                     month, day = anniversary_month_day(row["joined_at_utc"], default_timezone)
@@ -2882,9 +2938,11 @@ class PostgresRepository:
                     SELECT *
                     FROM recurring_celebrations
                     WHERE guild_id = $1
+                      AND next_occurrence_at_utc > $2
                     FOR UPDATE
                     """,
                     guild_id,
+                    now_utc,
                 )
                 for row in recurring_rows:
                     next_occurrence = next_occurrence_at_utc(

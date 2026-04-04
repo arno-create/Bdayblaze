@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 from typing import TypedDict
 
+from bdayblaze.domain.birthday_display import resolve_birthday_display_state
 from bdayblaze.domain.birthday_logic import (
     current_celebration_window_utc,
     is_birthday_active_now,
@@ -70,8 +71,14 @@ UNSET = _UnsetType()
 
 
 class ExperienceService:
-    def __init__(self, repository: PostgresRepository) -> None:
+    def __init__(
+        self,
+        repository: PostgresRepository,
+        *,
+        recovery_grace_hours: int = 36,
+    ) -> None:
         self._repository = repository
+        self._recovery_grace = timedelta(hours=recovery_grace_hours)
 
     async def get_settings(self, guild_id: int) -> GuildExperienceSettings:
         stored = await self._repository.fetch_guild_experience_settings(guild_id)
@@ -419,11 +426,31 @@ class ExperienceService:
         ):
             raise ValidationError("That member keeps their birthday private in this server.")
         effective_now = now_utc or datetime.now(UTC)
+        pending_occurrences = await self._repository.fetch_pending_birthday_occurrences(
+            guild_id,
+            [target_user_id],
+            since_utc=effective_now - self._recovery_grace,
+        )
+        display_state = resolve_birthday_display_state(
+            birth_month=birthday.birth_month,
+            birth_day=birthday.birth_day,
+            timezone_name=birthday.effective_timezone(guild_settings),
+            scheduler_cursor_at_utc=birthday.next_occurrence_at_utc,
+            now_utc=effective_now,
+            recovery_grace=self._recovery_grace,
+            pending_occurrence_at_utc=pending_occurrences.get(target_user_id),
+        )
         active_celebration = await self._current_celebration(
             guild_id,
             target_user_id,
             now_utc=effective_now,
         )
+        if active_celebration is None and display_state.status == "recovering":
+            active_celebration = await self._repository.fetch_birthday_celebration(
+                guild_id,
+                target_user_id,
+                display_state.relevant_occurrence_at_utc,
+            )
         celebration_count, wishes_received_count, quest_badge_count, surprise_count = (
             await self._repository.fetch_birthday_timeline_stats(guild_id, target_user_id)
         )
@@ -450,19 +477,11 @@ class ExperienceService:
             birthday.birth_month,
             visible_only=visible_only,
         )
-        active_window = current_celebration_window_utc(
-            birth_month=birthday.birth_month,
-            birth_day=birthday.birth_day,
-            timezone_name=birthday.effective_timezone(guild_settings),
-            now_utc=effective_now,
-        )
-        next_countdown_at_utc = (
-            active_window[0] if active_window is not None else birthday.next_occurrence_at_utc
-        )
         show_zodiac = admin_override or target_user_id == viewer_user_id
         return BirthdayTimeline(
             birthday=birthday,
             active_celebration=active_celebration,
+            display_state=display_state,
             celebration_count=celebration_count,
             celebration_streak=_celebration_streak(
                 streak_scan,
@@ -472,7 +491,7 @@ class ExperienceService:
             quest_badge_count=quest_badge_count,
             surprise_count=surprise_count,
             featured_count=featured_count,
-            next_countdown_at_utc=next_countdown_at_utc,
+            next_countdown_at_utc=display_state.relevant_occurrence_at_utc,
             same_day_count=max(0, same_day_count - 1),
             month_total_count=max(0, month_total_count - 1),
             zodiac_label=(

@@ -13,6 +13,7 @@ from bdayblaze.domain.models import (
     AnnouncementSurfaceKind,
     HealthIssue,
     ResolvedAnnouncementSurface,
+    RuntimeStatus,
     SchedulerMetrics,
 )
 from bdayblaze.domain.operator_summary import (
@@ -39,11 +40,13 @@ class HealthService:
         repository: PostgresRepository,
         metrics: SchedulerMetrics,
         *,
+        runtime_status: RuntimeStatus,
         recovery_grace_hours: int,
         scheduler_max_sleep_seconds: int,
     ) -> None:
         self._repository = repository
         self._metrics = metrics
+        self._runtime_status = runtime_status
         self._recovery_grace_hours = recovery_grace_hours
         self._scheduler_max_sleep_seconds = scheduler_max_sleep_seconds
 
@@ -342,28 +345,19 @@ class HealthService:
         stale_window = timedelta(seconds=max(self._scheduler_max_sleep_seconds * 2, 600))
         backlog = await self._repository.fetch_scheduler_backlog(now_utc, stale_window)
 
-        oldest_due = min(
-            [
-                ts
-                for ts in [
-                    backlog.oldest_due_birthday_utc,
-                    backlog.oldest_due_anniversary_utc,
-                    backlog.oldest_due_recurring_utc,
-                    backlog.oldest_due_role_removal_utc,
-                    backlog.oldest_due_event_utc,
-                ]
-                if ts is not None
-            ],
-            default=None,
-        )
-        if oldest_due is not None:
+        oldest_due_source = _oldest_due_source(backlog)
+        if oldest_due_source is not None:
+            oldest_due_label, oldest_due = oldest_due_source
             lag = now_utc - oldest_due
             if lag > timedelta(hours=self._recovery_grace_hours):
                 issues.append(
                     HealthIssue(
                         severity="error",
                         code="scheduler_recovery_window_exceeded",
-                        summary="Scheduler backlog is older than the configured recovery window.",
+                        summary=(
+                            "Scheduler backlog for "
+                            f"{oldest_due_label} is older than the configured recovery window."
+                        ),
                         action=(
                             "Inspect the worker, then manually reconcile missed celebrations "
                             "before resuming."
@@ -375,7 +369,7 @@ class HealthService:
                     HealthIssue(
                         severity="warning",
                         code="scheduler_lag",
-                        summary="Scheduler work is running behind.",
+                        summary=f"Scheduler work is running behind on {oldest_due_label}.",
                         action="Keep the bot online and re-check after the backlog clears.",
                     )
                 )
@@ -386,40 +380,83 @@ class HealthService:
                     severity="warning",
                     code="stale_processing_events",
                     summary=(
-                        "Some celebration events were left mid-processing and had to be recovered."
+                        f"{backlog.stale_processing_count} celebration event(s) are stuck in "
+                        "processing and waiting to be reclaimed."
                     ),
-                    action="Review logs for Discord API errors and confirm celebrations completed.",
-                )
-            )
-
-        if self._metrics.last_iteration_at_utc is None:
-            issues.append(
-                HealthIssue(
-                    severity="warning",
-                    code="scheduler_not_started",
-                    summary="Scheduler has not recorded a run yet.",
-                    action="Wait for startup to finish, then re-run /birthday health.",
-                )
-            )
-        elif now_utc - self._metrics.last_iteration_at_utc > stale_window:
-            issues.append(
-                HealthIssue(
-                    severity="warning",
-                    code="scheduler_stalled",
-                    summary="Scheduler heartbeat is stale.",
-                    action="Restart the bot process and verify database connectivity.",
+                    action="Review recent scheduler failures and confirm stuck deliveries clear.",
                 )
             )
 
         if not self._metrics.recovery_completed:
             issues.append(
                 HealthIssue(
-                    severity="info",
-                    code="recovery_incomplete",
-                    summary="Startup recovery has not completed yet.",
-                    action="Re-run /birthday health after the bot has been online for a minute.",
+                    severity=(
+                        "error"
+                        if self._runtime_status.scheduler_recovery_failed_at_utc is not None
+                        else "info"
+                    ),
+                    code=(
+                        "scheduler_recovery_failed"
+                        if self._runtime_status.scheduler_recovery_failed_at_utc is not None
+                        else "recovery_incomplete"
+                    ),
+                    summary=(
+                        "Scheduler startup recovery failed."
+                        if self._runtime_status.scheduler_recovery_failed_at_utc is not None
+                        else (
+                            "Scheduler startup recovery is still running."
+                            if self._runtime_status.scheduler_recovery_started_at_utc is not None
+                            else "Scheduler startup recovery has not started yet."
+                        )
+                    ),
+                    action=(
+                        "Review startup logs, then restart the bot after the failure is fixed."
+                        if self._runtime_status.scheduler_recovery_failed_at_utc is not None
+                        else "Re-run /birthday health after the bot has been online for a minute."
+                    ),
                 )
             )
+
+        last_activity = self._metrics.last_activity_at_utc or self._metrics.last_iteration_at_utc
+        if self._metrics.recovery_completed:
+            if last_activity is None:
+                issues.append(
+                    HealthIssue(
+                        severity="warning",
+                        code="scheduler_not_started",
+                        summary="Scheduler has not recorded loop activity yet.",
+                        action="Review startup logs and verify the scheduler runner started.",
+                    )
+                )
+            elif now_utc - last_activity > stale_window:
+                issues.append(
+                    HealthIssue(
+                        severity="error",
+                        code="scheduler_stalled",
+                        summary="Scheduler loop heartbeat is stale.",
+                        action="Restart the bot process and verify database connectivity.",
+                    )
+                )
+            elif (
+                self._metrics.last_error_code is not None
+                and (
+                    self._metrics.last_success_at_utc is None
+                    or now_utc - self._metrics.last_success_at_utc > stale_window
+                )
+            ):
+                issues.append(
+                    HealthIssue(
+                        severity="warning",
+                        code="scheduler_failing",
+                        summary=(
+                            "Scheduler loop is active but has not completed successfully recently."
+                        ),
+                        action=(
+                            "Review scheduler logs for repeated failures and confirm backlog stops "
+                            "growing."
+                        ),
+                    )
+                )
 
         recent_issues = await self._repository.list_recent_delivery_issues(
             guild.id,
@@ -442,6 +479,24 @@ class HealthService:
             )
 
         return issues
+
+
+def _oldest_due_source(backlog: object) -> tuple[str, datetime] | None:
+    candidates = [
+        ("birthdays", getattr(backlog, "oldest_due_birthday_utc", None)),
+        ("anniversaries", getattr(backlog, "oldest_due_anniversary_utc", None)),
+        ("recurring events", getattr(backlog, "oldest_due_recurring_utc", None)),
+        ("role removals", getattr(backlog, "oldest_due_role_removal_utc", None)),
+        ("pending event delivery", getattr(backlog, "oldest_due_event_utc", None)),
+    ]
+    due_candidates = [
+        (label, due_at)
+        for label, due_at in candidates
+        if isinstance(due_at, datetime)
+    ]
+    if not due_candidates:
+        return None
+    return min(due_candidates, key=lambda candidate: candidate[1])
 
 
 def _surface_channel_note(surface: ResolvedAnnouncementSurface) -> str:

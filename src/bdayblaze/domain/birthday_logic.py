@@ -120,9 +120,18 @@ def is_birthday_active_now(
 
 
 def active_window_candidate_birthdays(now_utc: datetime) -> tuple[tuple[int, int], ...]:
+    return relevant_window_candidate_birthdays(now_utc, recovery_grace=timedelta(0))
+
+
+def relevant_window_candidate_birthdays(
+    now_utc: datetime,
+    *,
+    recovery_grace: timedelta,
+) -> tuple[tuple[int, int], ...]:
     candidate_pairs: set[tuple[int, int]] = set()
-    for offset_days in (-1, 0, 1):
-        candidate_date = (now_utc + timedelta(days=offset_days)).date()
+    candidate_date = (now_utc - recovery_grace - timedelta(days=1)).date()
+    final_date = (now_utc + timedelta(days=1)).date()
+    while candidate_date <= final_date:
         candidate_pairs.add((candidate_date.month, candidate_date.day))
         if (
             candidate_date.month == 2
@@ -130,6 +139,7 @@ def active_window_candidate_birthdays(now_utc: datetime) -> tuple[tuple[int, int
             and not isleap(candidate_date.year)
         ):
             candidate_pairs.add((2, 29))
+        candidate_date += timedelta(days=1)
     return tuple(sorted(candidate_pairs))
 
 

@@ -3,22 +3,31 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from bdayblaze.domain.announcement_template import validate_announcement_template
+from bdayblaze.domain.birthday_display import (
+    birthday_display_sort_key,
+    resolve_birthday_display_state,
+)
 from bdayblaze.domain.birthday_logic import (
     active_window_candidate_birthdays,
     anniversary_month_day,
+    current_celebration_window_utc,
     is_birthday_active_now,
     next_occurrence_at_utc,
+    relevant_window_candidate_birthdays,
     validate_birth_date,
     validate_timezone,
 )
 from bdayblaze.domain.models import (
+    BirthdayBrowseEntry,
+    BirthdayDisplayState,
     BirthdayImportError,
     BirthdayImportPreview,
     BirthdayImportRow,
     BirthdayPreview,
+    GuildSettings,
     MemberBirthday,
     ProfileVisibility,
     RecurringCelebration,
@@ -40,8 +49,14 @@ _IMPORT_HEADERS = (
 
 
 class BirthdayService:
-    def __init__(self, repository: PostgresRepository) -> None:
+    def __init__(
+        self,
+        repository: PostgresRepository,
+        *,
+        recovery_grace_hours: int = 36,
+    ) -> None:
         self._repository = repository
+        self._recovery_grace = timedelta(hours=recovery_grace_hours)
 
     async def set_birthday(
         self,
@@ -133,6 +148,106 @@ class BirthdayService:
             raise NotFoundError(missing_message)
         return deleted
 
+    async def get_birthday_display(
+        self,
+        guild_id: int,
+        user_id: int,
+        *,
+        missing_message: str,
+        now_utc: datetime | None = None,
+    ) -> tuple[MemberBirthday, GuildSettings, BirthdayDisplayState]:
+        birthday = await self.require_birthday(
+            guild_id,
+            user_id,
+            missing_message=missing_message,
+        )
+        settings = await self._fetch_settings(guild_id)
+        display_state = await self.resolve_birthday_display_state(
+            guild_id,
+            birthday,
+            settings=settings,
+            now_utc=now_utc,
+        )
+        return birthday, settings, display_state
+
+    async def resolve_birthday_display_state(
+        self,
+        guild_id: int,
+        birthday: MemberBirthday,
+        *,
+        settings: GuildSettings | None = None,
+        now_utc: datetime | None = None,
+    ) -> BirthdayDisplayState:
+        effective_now = now_utc or datetime.now(UTC)
+        effective_settings = settings or await self._fetch_settings(guild_id)
+        pending_occurrences = await self._repository.fetch_pending_birthday_occurrences(
+            guild_id,
+            [birthday.user_id],
+            since_utc=effective_now - self._recovery_grace,
+        )
+        return resolve_birthday_display_state(
+            birth_month=birthday.birth_month,
+            birth_day=birthday.birth_day,
+            timezone_name=birthday.effective_timezone(effective_settings),
+            scheduler_cursor_at_utc=birthday.next_occurrence_at_utc,
+            now_utc=effective_now,
+            recovery_grace=self._recovery_grace,
+            pending_occurrence_at_utc=pending_occurrences.get(birthday.user_id),
+        )
+
+    async def list_browsable_birthdays(
+        self,
+        guild_id: int,
+        *,
+        limit: int,
+        order_by_upcoming: bool,
+        visible_only: bool,
+        month: int | None = None,
+        now_utc: datetime | None = None,
+    ) -> list[BirthdayBrowseEntry]:
+        effective_now = now_utc or datetime.now(UTC)
+        if order_by_upcoming:
+            previews = await self._list_upcoming_candidate_previews(
+                guild_id,
+                limit=limit,
+                visible_only=visible_only,
+                month=month,
+                now_utc=effective_now,
+            )
+            entries = await self._resolve_browse_entries(
+                guild_id,
+                previews,
+                now_utc=effective_now,
+            )
+            entries.sort(
+                key=lambda entry: (
+                    *birthday_display_sort_key(entry.display_state),
+                    entry.preview.user_id,
+                )
+            )
+            return entries[:limit]
+
+        if month is not None:
+            previews = await self._repository.list_birthdays_for_month(
+                guild_id,
+                month,
+                limit,
+                order_by_upcoming=False,
+                visible_only=visible_only,
+            )
+        else:
+            previews = await self._repository.list_birthdays(
+                guild_id,
+                limit,
+                order_by_upcoming=False,
+                visible_only=visible_only,
+            )
+        return await self._resolve_browse_entries(
+            guild_id,
+            previews,
+            now_utc=effective_now,
+        )
+
     async def list_upcoming_birthdays(
         self,
         guild_id: int,
@@ -203,7 +318,7 @@ class BirthdayService:
                 now_utc=effective_now,
             )
         ]
-        active.sort(key=lambda preview: preview.next_occurrence_at_utc)
+        active.sort(key=lambda preview: _active_window_start(preview, now_utc=effective_now))
         return active[:limit]
 
     async def list_birthday_twins(
@@ -346,6 +461,82 @@ class BirthdayService:
         limit: int = 5000,
     ) -> list[int]:
         return await self._repository.list_member_birthday_user_ids(guild_id, limit=limit)
+
+    async def _list_upcoming_candidate_previews(
+        self,
+        guild_id: int,
+        *,
+        limit: int,
+        visible_only: bool,
+        month: int | None,
+        now_utc: datetime,
+    ) -> list[BirthdayPreview]:
+        future_limit = min(max(limit * 4, limit + 6), 120)
+        if month is None:
+            future_candidates = await self._repository.list_upcoming_birthdays(
+                guild_id,
+                future_limit,
+                visible_only=visible_only,
+            )
+        else:
+            future_candidates = await self._repository.list_birthdays_for_month(
+                guild_id,
+                month,
+                future_limit,
+                order_by_upcoming=True,
+                visible_only=visible_only,
+            )
+        relevant_candidates = await self._repository.list_birthdays_for_month_day_pairs(
+            guild_id,
+            relevant_window_candidate_birthdays(
+                now_utc,
+                recovery_grace=self._recovery_grace,
+            ),
+            min(max(limit * 12, limit + 20), 250),
+            visible_only=visible_only,
+        )
+        merged: dict[int, BirthdayPreview] = {}
+        for preview in future_candidates:
+            if month is None or preview.birth_month == month:
+                merged.setdefault(preview.user_id, preview)
+        for preview in relevant_candidates:
+            if month is None or preview.birth_month == month:
+                merged.setdefault(preview.user_id, preview)
+        return list(merged.values())
+
+    async def _resolve_browse_entries(
+        self,
+        guild_id: int,
+        previews: list[BirthdayPreview],
+        *,
+        now_utc: datetime,
+    ) -> list[BirthdayBrowseEntry]:
+        if not previews:
+            return []
+        pending_occurrences = await self._repository.fetch_pending_birthday_occurrences(
+            guild_id,
+            [preview.user_id for preview in previews],
+            since_utc=now_utc - self._recovery_grace,
+        )
+        return [
+            BirthdayBrowseEntry(
+                preview=preview,
+                display_state=resolve_birthday_display_state(
+                    birth_month=preview.birth_month,
+                    birth_day=preview.birth_day,
+                    timezone_name=preview.effective_timezone,
+                    scheduler_cursor_at_utc=preview.next_occurrence_at_utc,
+                    now_utc=now_utc,
+                    recovery_grace=self._recovery_grace,
+                    pending_occurrence_at_utc=pending_occurrences.get(preview.user_id),
+                ),
+            )
+            for preview in previews
+        ]
+
+    async def _fetch_settings(self, guild_id: int) -> GuildSettings:
+        settings = await self._repository.fetch_guild_settings(guild_id)
+        return settings or GuildSettings.default(guild_id)
 
     async def sync_member_anniversary(
         self,
@@ -610,6 +801,17 @@ def _validate_profile_visibility(value: str) -> ProfileVisibility:
     if value not in _VALID_VISIBILITY_VALUES:
         raise ValidationError("Visibility must be 'private' or 'server_visible'.")
     return value  # type: ignore[return-value]
+
+
+def _active_window_start(preview: BirthdayPreview, *, now_utc: datetime) -> datetime:
+    window = current_celebration_window_utc(
+        birth_month=preview.birth_month,
+        birth_day=preview.birth_day,
+        timezone_name=preview.effective_timezone,
+        now_utc=now_utc,
+    )
+    assert window is not None
+    return window[0]
 
 
 def _build_import_apply_token(guild_id: int, csv_text: str) -> str:

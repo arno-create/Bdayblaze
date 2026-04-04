@@ -221,6 +221,9 @@ class BirthdaySchedulerService:
     async def run_iteration(self, now_utc: datetime | None = None) -> int:
         current = now_utc or datetime.now(UTC)
         total_claimed = 0
+        await self._repository.requeue_stale_processing_events(
+            current - self._stale_processing_after
+        )
         for _ in range(10):
             await self._skip_stale_birthdays(current)
             await self._repository.skip_stale_start_events(current - self._recovery_grace)
@@ -257,6 +260,7 @@ class BirthdaySchedulerService:
 
         self._metrics.last_iteration_at_utc = current
         self._metrics.last_success_at_utc = current
+        self._metrics.last_activity_at_utc = current
         self._metrics.last_error_code = None
         self._metrics.iterations += 1
         self._metrics.last_claimed_events = total_claimed
@@ -666,6 +670,9 @@ class BirthdaySchedulerService:
 
 
 class BirthdaySchedulerRunner:
+    _fallback_sleep_seconds = 15.0
+    _max_recent_errors = 20
+
     def __init__(self, service: BirthdaySchedulerService, runtime_status: RuntimeStatus) -> None:
         self._service = service
         self._runtime_status = runtime_status
@@ -680,11 +687,20 @@ class BirthdaySchedulerRunner:
     async def stop(self) -> None:
         self._stop_event.set()
         if self._task is not None:
-            await self._task
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                self._logger.exception("scheduler_runner_stopped_after_failure")
+            finally:
+                self._task = None
 
     async def _run_loop(self) -> None:
         try:
-            self._runtime_status.scheduler_recovery_started_at_utc = datetime.now(UTC)
+            recovery_started_at = datetime.now(UTC)
+            self._mark_activity(recovery_started_at)
+            self._runtime_status.scheduler_recovery_started_at_utc = recovery_started_at
             self._runtime_status.startup_phase = "scheduler_recovery"
             self._logger.info("scheduler_recovery_started")
             await self._service.recover()
@@ -692,25 +708,37 @@ class BirthdaySchedulerRunner:
             self._runtime_status.startup_phase = "scheduler_running"
             self._logger.info("scheduler_recovery_completed")
         except Exception as exc:
-            self._service._metrics.last_error_code = type(exc).__name__
-            self._service._metrics.recent_errors.append(type(exc).__name__)
+            self._record_failure(exc)
             self._runtime_status.scheduler_recovery_failed_at_utc = datetime.now(UTC)
             self._runtime_status.startup_phase = "scheduler_recovery_failed"
             self._logger.exception("scheduler_recovery_failed", error_code=type(exc).__name__)
         while not self._stop_event.is_set():
             now_utc = datetime.now(UTC)
+            self._mark_activity(now_utc)
+            sleep_for = self._fallback_sleep_seconds
             try:
                 await self._service.run_iteration(now_utc)
+                sleep_for = await self._service.next_sleep_seconds(datetime.now(UTC))
             except Exception as exc:
-                self._service._metrics.last_error_code = type(exc).__name__
-                self._service._metrics.recent_errors.append(type(exc).__name__)
+                self._record_failure(exc)
                 self._logger.exception("scheduler_iteration_failed", error_code=type(exc).__name__)
-            sleep_for = await self._service.next_sleep_seconds(datetime.now(UTC))
             try:
                 await asyncio.wait_for(self._stop_event.wait(), timeout=sleep_for)
             except TimeoutError:
                 continue
         self._logger.info("scheduler_runner_stopped")
+
+    def _mark_activity(self, at_utc: datetime) -> None:
+        self._service._metrics.last_activity_at_utc = at_utc
+
+    def _record_failure(self, exc: Exception) -> None:
+        error_code = type(exc).__name__
+        metrics = self._service._metrics
+        metrics.last_error_code = error_code
+        metrics.last_activity_at_utc = datetime.now(UTC)
+        metrics.recent_errors.append(error_code)
+        if len(metrics.recent_errors) > self._max_recent_errors:
+            del metrics.recent_errors[:-self._max_recent_errors]
 
 
 def _optional_str(value: object | None) -> str | None:

@@ -141,3 +141,27 @@ def test_http_health_reports_error_when_scheduler_recovery_failed() -> None:
     assert status_code == "503 Service Unavailable"
     assert payload["status"] == "error"
     assert payload["scheduler_recovery_completed"] is False
+
+
+def test_http_health_reports_degraded_when_scheduler_is_alive_but_not_succeeding() -> None:
+    metrics = SchedulerMetrics(
+        recovery_completed=True,
+        last_activity_at_utc=datetime.now(UTC),
+        last_success_at_utc=datetime.now(UTC) - timedelta(minutes=20),
+        last_error_code="TimeoutError",
+    )
+    runtime_status = _runtime_status()
+    runtime_status.bot_ready_at_utc = datetime.now(UTC)
+    server = HttpHealthServer(
+        metrics=metrics,
+        runtime_status=runtime_status,
+        host="127.0.0.1",
+        port=8080,
+        scheduler_max_sleep_seconds=300,
+    )
+
+    status_code, payload = server._build_response("/healthz")
+
+    assert status_code == "503 Service Unavailable"
+    assert payload["status"] == "degraded"
+    assert payload["scheduler_last_activity_at_utc"] is not None

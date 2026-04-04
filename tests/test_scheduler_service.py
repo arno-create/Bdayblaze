@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 
 import pytest
@@ -9,10 +10,12 @@ from bdayblaze.domain.models import (
     AnnouncementBatchClaim,
     BirthdayWish,
     CelebrationEvent,
+    RuntimeStatus,
     SchedulerMetrics,
 )
 from bdayblaze.services.scheduler import (
     AnnouncementSendResult,
+    BirthdaySchedulerRunner,
     BirthdaySchedulerService,
     DirectSendResult,
     GatewayPermanentError,
@@ -29,6 +32,7 @@ class FakeSchedulerRepository:
         self.pending_batches = pending_batches
         self.batch_claim = batch_claim
         self._claim_pending_calls = 0
+        self.requeue_processing_calls = 0
         self.completed_calls: list[tuple[list[int], int | None, str | None]] = []
         self.skipped_calls: list[tuple[list[int], str]] = []
         self.single_skipped_calls: list[tuple[int, str]] = []
@@ -38,6 +42,7 @@ class FakeSchedulerRepository:
         self.revealed_wishes: list[BirthdayWish] = []
 
     async def requeue_stale_processing_events(self, stale_before_utc: datetime) -> int:
+        self.requeue_processing_calls += 1
         return 0
 
     async def claim_due_birthdays(self, now_utc: datetime, batch_size: int) -> int:
@@ -217,6 +222,42 @@ class FakeGateway:
 
     async def remove_birthday_role(self, **kwargs: object) -> str:
         return self.role_status
+
+
+class FakeRunnerService:
+    def __init__(
+        self,
+        *,
+        iteration_error: Exception | None = None,
+        sleep_error: Exception | None = None,
+        sleep_seconds: float = 0.01,
+    ) -> None:
+        self._metrics = SchedulerMetrics()
+        self.iteration_error = iteration_error
+        self.sleep_error = sleep_error
+        self.sleep_seconds = sleep_seconds
+        self.run_calls = 0
+        self.sleep_calls = 0
+
+    async def recover(self, now_utc: datetime | None = None) -> None:
+        self._metrics.recovery_completed = True
+
+    async def run_iteration(self, now_utc: datetime | None = None) -> int:
+        self.run_calls += 1
+        if self.iteration_error is not None:
+            raise self.iteration_error
+        current = now_utc or datetime.now(UTC)
+        self._metrics.last_iteration_at_utc = current
+        self._metrics.last_success_at_utc = current
+        self._metrics.last_activity_at_utc = current
+        self._metrics.last_error_code = None
+        return 0
+
+    async def next_sleep_seconds(self, now_utc: datetime | None = None) -> float:
+        self.sleep_calls += 1
+        if self.sleep_error is not None:
+            raise self.sleep_error
+        return self.sleep_seconds
 
 
 def _announcement_batch(
@@ -628,3 +669,56 @@ async def test_scheduler_skips_role_end_when_member_is_missing() -> None:
 
     assert claimed == 1
     assert repository.single_skipped_calls == [(10, "member_missing")]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_run_iteration_requeues_stale_processing_during_steady_state() -> None:
+    repository = FakeSchedulerRepository(
+        pending_batches={},
+        batch_claim=AnnouncementBatchClaim(status="claimed", batch=None),
+    )
+    service = BirthdaySchedulerService(
+        repository,  # type: ignore[arg-type]
+        FakeGateway(),  # type: ignore[arg-type]
+        SchedulerMetrics(),
+        batch_size=25,
+        recovery_grace_hours=36,
+        scheduler_max_sleep_seconds=300,
+    )
+
+    await service.run_iteration(datetime(2026, 3, 24, tzinfo=UTC))
+
+    assert repository.requeue_processing_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_scheduler_runner_survives_sleep_calculation_failure() -> None:
+    service = FakeRunnerService(sleep_error=ValueError("sleep failed"))
+    runner = BirthdaySchedulerRunner(
+        service,  # type: ignore[arg-type]
+        RuntimeStatus(process_started_at_utc=datetime.now(UTC)),
+    )
+
+    runner.start()
+    await asyncio.sleep(0.02)
+
+    assert runner._task is not None
+    assert runner._task.done() is False
+    assert service._metrics.last_error_code == "ValueError"
+    assert service._metrics.last_activity_at_utc is not None
+
+    await runner.stop()
+
+
+def test_scheduler_runner_caps_recent_errors() -> None:
+    service = FakeRunnerService()
+    runner = BirthdaySchedulerRunner(
+        service,  # type: ignore[arg-type]
+        RuntimeStatus(process_started_at_utc=datetime.now(UTC)),
+    )
+
+    for _ in range(25):
+        runner._record_failure(RuntimeError("boom"))
+
+    assert len(service._metrics.recent_errors) == 20
+    assert service._metrics.recent_errors == ["RuntimeError"] * 20

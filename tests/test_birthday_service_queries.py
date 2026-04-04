@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from bdayblaze.domain.models import BirthdayPreview, MemberBirthday
+from bdayblaze.domain.models import BirthdayPreview, GuildSettings, MemberBirthday
 from bdayblaze.services.birthday_service import BirthdayService
 from bdayblaze.services.errors import NotFoundError
 
@@ -12,11 +12,18 @@ from bdayblaze.services.errors import NotFoundError
 class FakeQueryRepository:
     def __init__(self) -> None:
         self.birthday: MemberBirthday | None = None
+        self.guild_settings = GuildSettings.default(1)
         self.month_day_results: list[BirthdayPreview] = []
         self.month_results: list[BirthdayPreview] = []
         self.list_results: list[BirthdayPreview] = []
+        self.upcoming_results: list[BirthdayPreview] = []
+        self.pending_occurrences: dict[int, datetime] = {}
         self.requested_pairs: tuple[tuple[int, int], ...] | None = None
         self.last_visible_only: bool | None = None
+
+    async def fetch_guild_settings(self, guild_id: int) -> GuildSettings | None:
+        assert guild_id == 1
+        return self.guild_settings
 
     async def fetch_member_birthday(self, guild_id: int, user_id: int) -> MemberBirthday | None:
         if (
@@ -50,6 +57,20 @@ class FakeQueryRepository:
         self.last_visible_only = visible_only
         return self.month_day_results[:limit]
 
+    async def fetch_pending_birthday_occurrences(
+        self,
+        guild_id: int,
+        user_ids: list[int],
+        *,
+        since_utc: datetime,
+    ) -> dict[int, datetime]:
+        assert guild_id == 1
+        return {
+            user_id: occurrence_at_utc
+            for user_id, occurrence_at_utc in self.pending_occurrences.items()
+            if user_id in user_ids and occurrence_at_utc >= since_utc
+        }
+
     async def list_birthdays_for_month(
         self,
         guild_id: int,
@@ -72,6 +93,16 @@ class FakeQueryRepository:
     ) -> list[BirthdayPreview]:
         self.last_visible_only = visible_only
         return self.list_results[:limit]
+
+    async def list_upcoming_birthdays(
+        self,
+        guild_id: int,
+        limit: int,
+        *,
+        visible_only: bool,
+    ) -> list[BirthdayPreview]:
+        self.last_visible_only = visible_only
+        return self.upcoming_results[:limit]
 
     async def count_birthdays_by_day_for_month(
         self,
@@ -221,3 +252,80 @@ async def test_remove_member_birthday_uses_custom_missing_message() -> None:
 
     with pytest.raises(NotFoundError, match="admin remove"):
         await service.remove_member_birthday(1, 42, missing_message="Missing from admin remove.")
+
+
+@pytest.mark.asyncio
+async def test_list_browsable_birthdays_prioritizes_active_birthdays_over_future_cursor() -> None:
+    repository = FakeQueryRepository()
+    repository.upcoming_results = [
+        _preview(user_id=7, month=4, day=1, timezone="UTC"),
+    ]
+    repository.month_day_results = [
+        _preview(user_id=42, month=3, day=24, timezone="UTC"),
+    ]
+    service = BirthdayService(repository)  # type: ignore[arg-type]
+
+    entries = await service.list_browsable_birthdays(
+        1,
+        limit=10,
+        order_by_upcoming=True,
+        visible_only=True,
+        now_utc=datetime(2026, 3, 24, 12, tzinfo=UTC),
+    )
+
+    assert [entry.preview.user_id for entry in entries] == [42, 7]
+    assert [entry.display_state.status for entry in entries] == ["active", "upcoming"]
+
+
+@pytest.mark.asyncio
+async def test_list_browsable_birthdays_marks_recovering_occurrence_after_claim() -> None:
+    repository = FakeQueryRepository()
+    repository.upcoming_results = [
+        _preview(user_id=7, month=4, day=1, timezone="UTC"),
+    ]
+    repository.month_day_results = [
+        _preview(user_id=42, month=3, day=24, timezone="UTC"),
+    ]
+    repository.pending_occurrences[42] = datetime(2026, 3, 24, tzinfo=UTC)
+    service = BirthdayService(repository)  # type: ignore[arg-type]
+
+    entries = await service.list_browsable_birthdays(
+        1,
+        limit=10,
+        order_by_upcoming=True,
+        visible_only=True,
+        now_utc=datetime(2026, 3, 25, 11, tzinfo=UTC),
+    )
+
+    assert entries[0].preview.user_id == 42
+    assert entries[0].display_state.status == "recovering"
+
+
+@pytest.mark.asyncio
+async def test_list_browsable_birthdays_marks_unclaimed_overdue_cursor_as_recovering() -> None:
+    repository = FakeQueryRepository()
+    repository.upcoming_results = [
+        _preview(user_id=7, month=4, day=1, timezone="UTC"),
+    ]
+    repository.month_day_results = [
+        BirthdayPreview(
+            user_id=42,
+            birth_month=3,
+            birth_day=24,
+            next_occurrence_at_utc=datetime(2026, 3, 24, tzinfo=UTC),
+            effective_timezone="UTC",
+            profile_visibility="server_visible",
+        )
+    ]
+    service = BirthdayService(repository)  # type: ignore[arg-type]
+
+    entries = await service.list_browsable_birthdays(
+        1,
+        limit=10,
+        order_by_upcoming=True,
+        visible_only=True,
+        now_utc=datetime(2026, 3, 25, 6, tzinfo=UTC),
+    )
+
+    assert entries[0].preview.user_id == 42
+    assert entries[0].display_state.status == "recovering"

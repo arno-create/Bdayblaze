@@ -108,7 +108,9 @@ class HttpHealthServer:
                 detail,
             )
         return (
-            "503 Service Unavailable" if detail["status"] == "error" else "200 OK",
+            "503 Service Unavailable"
+            if detail["status"] in {"error", "degraded"}
+            else "200 OK",
             detail,
         )
 
@@ -116,7 +118,10 @@ class HttpHealthServer:
         stale_window = timedelta(seconds=max(self.scheduler_max_sleep_seconds * 2, 600))
         now_utc = datetime.now(UTC)
         last_iteration = self.metrics.last_iteration_at_utc
-        heartbeat_stale = last_iteration is None or now_utc - last_iteration > stale_window
+        last_activity = self.metrics.last_activity_at_utc or last_iteration
+        last_success = self.metrics.last_success_at_utc
+        heartbeat_stale = last_activity is None or now_utc - last_activity > stale_window
+        success_stale = last_success is None or now_utc - last_success > stale_window
 
         if self.runtime_status.migrations_failed_at_utc is not None:
             status = "error"
@@ -132,6 +137,8 @@ class HttpHealthServer:
             status = "starting"
         elif heartbeat_stale:
             status = "error"
+        elif self.metrics.last_error_code is not None and success_stale:
+            status = "degraded"
         else:
             status = "ready"
 
@@ -144,6 +151,12 @@ class HttpHealthServer:
             "scheduler_iterations": self.metrics.iterations,
             "scheduler_last_iteration_at_utc": (
                 last_iteration.isoformat() if last_iteration is not None else None
+            ),
+            "scheduler_last_activity_at_utc": (
+                last_activity.isoformat() if last_activity is not None else None
+            ),
+            "scheduler_last_success_at_utc": (
+                last_success.isoformat() if last_success is not None else None
             ),
             "scheduler_last_error_code": self.metrics.last_error_code,
             "scheduler_last_claimed_events": self.metrics.last_claimed_events,
