@@ -45,14 +45,14 @@ If a server uses other product surfaces, Bdayblaze may also store:
 
 The following flows are designed to stay private to the admin using them:
 
-- `/birthday studio`
-- `/birthday setup`
-- `/birthday test-message`
-- `/birthday analytics`
-- `/birthday health`
-- `/birthday import`
-- `/birthday export`
-- `/birthday member ...`
+- `/birthdayadmin studio`
+- `/birthdayadmin setup`
+- `/birthdayadmin test-message`
+- `/birthdayadmin analytics`
+- `/birthdayadmin health`
+- `/birthdayadmin import`
+- `/birthdayadmin export`
+- `/birthdayadmin member ...`
 
 These flows are intended for operator control, previewing, diagnostics, and maintenance rather than public server output.
 
@@ -102,7 +102,7 @@ The audit log intentionally excludes raw blocked template text, raw blocked URLs
   - `timezone_override`
   - `visibility`
 - Members can delete their own record with `/birthday remove`.
-- Admins can remove records privately with `/birthday member remove`.
+- Admins can remove records privately with `/birthdayadmin member remove`.
 - Exported CSV files should be treated as personal data by the server administrators who request them.
 
 ## What Bdayblaze does not do

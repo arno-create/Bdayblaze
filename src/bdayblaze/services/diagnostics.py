@@ -340,7 +340,7 @@ def build_presentation_diagnostics(
                     code=f"{code}_needs_validation",
                     summary=assessment.summary,
                     action=(
-                        "Open `/birthday studio`, use Media Tools, and validate the saved URL."
+                        "Open `/birthdayadmin studio`, use Media Tools, and validate the saved URL."
                     ),
                 )
             )
@@ -352,7 +352,7 @@ def build_presentation_diagnostics(
                     code=code,
                     summary=assessment.summary,
                     action=(
-                        "Open `/birthday studio`, then clear or replace the saved media URL."
+                        "Open `/birthdayadmin studio`, then clear or replace the saved media URL."
                     ),
                 )
             )
@@ -428,7 +428,7 @@ def classify_discord_http_failure(
             return DiscordHttpFailure(
                 code="invalid_media_url",
                 summary="Discord rejected the current image or thumbnail URL.",
-                action="Open `/birthday studio`, then clear or replace the saved media URL.",
+                action="Open `/birthdayadmin studio`, then clear or replace the saved media URL.",
                 permanent=True,
             )
         summary = {
@@ -477,7 +477,7 @@ def describe_delivery_error_code(
     if error_code == "invalid_media_url":
         return (
             "A saved image or thumbnail URL was rejected by Discord.",
-            "Open `/birthday studio`, clear or replace the media URL, then rerun preview.",
+            "Open `/birthdayadmin studio`, clear or replace the media URL, then rerun preview.",
         )
     if error_code in {"invalid_announcement_payload", "invalid_birthday_dm_payload"}:
         label = {

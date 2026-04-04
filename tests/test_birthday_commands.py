@@ -4,9 +4,12 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import discord
 import pytest
 
 from bdayblaze.discord.cogs.birthday import (
+    BirthdayAdminGroup,
+    BirthdayGroup,
     _build_birthday_embed,
     _build_preview_embed,
     _build_timeline_embed,
@@ -549,3 +552,108 @@ def test_build_timeline_embed_uses_recovering_description() -> None:
 
     assert "Late recovery is still pending" in embed.description
     assert _timeline_is_active_now(timeline) is False
+
+
+def _cog() -> tuple[BirthdayGroup, BirthdayAdminGroup]:
+    stub = object()
+    return (
+        BirthdayGroup(stub, stub, stub, stub, stub),  # type: ignore[arg-type]
+        BirthdayAdminGroup(stub, stub, stub, stub, stub),  # type: ignore[arg-type]
+    )
+
+
+def _command(group: object, name: str) -> object:
+    for command in group.app_command.commands:  # type: ignore[attr-defined]
+        if command.name == name:
+            return command
+    raise AssertionError(f"Command {name!r} was not registered")
+
+
+def _subcommand(group: object, group_name: str, command_name: str) -> object:
+    subgroup = _command(group, group_name)
+    for command in subgroup.commands:
+        if command.name == command_name:
+            return command
+    raise AssertionError(f"Subcommand {group_name!r} {command_name!r} was not registered")
+
+
+def test_public_and_admin_roots_expose_separate_namespaces() -> None:
+    public, admin = _cog()
+
+    public_names = {command.name for command in public.app_command.commands}
+    admin_names = {command.name for command in admin.app_command.commands}
+
+    assert public.app_command.name == "birthday"
+    assert admin.app_command.name == "birthdayadmin"
+    assert {
+        "analytics",
+        "setup",
+        "studio",
+        "test-message",
+        "export",
+        "import",
+        "health",
+        "member",
+        "anniversary",
+        "event",
+        "surprise",
+    }.isdisjoint(public_names)
+    assert {
+        "month",
+        "list",
+        "timeline",
+        "analytics",
+        "setup",
+        "studio",
+        "test-message",
+        "export",
+        "import",
+        "health",
+        "member",
+        "anniversary",
+        "event",
+        "surprise",
+        "wish",
+        "capsule",
+    }.issubset(admin_names)
+
+
+def test_admin_root_requires_manage_guild_by_default() -> None:
+    _, admin = _cog()
+
+    assert admin.app_command.guild_only is True
+    assert isinstance(admin.app_command.default_permissions, discord.Permissions)
+    assert admin.app_command.default_permissions.manage_guild is True
+
+
+def test_public_root_strips_admin_only_parameters_and_admin_root_keeps_them() -> None:
+    public, admin = _cog()
+
+    public_month = _command(public, "month")
+    public_list = _command(public, "list")
+    public_timeline = _command(public, "timeline")
+    public_wish_remove = _subcommand(public, "wish", "remove")
+    public_capsule_preview = _subcommand(public, "capsule", "preview")
+
+    admin_month = _command(admin, "month")
+    admin_list = _command(admin, "list")
+    admin_timeline = _command(admin, "timeline")
+    admin_wish_remove = _subcommand(admin, "wish", "remove")
+    admin_capsule_preview = _subcommand(admin, "capsule", "preview")
+
+    assert [parameter.name for parameter in public_month.parameters] == ["month"]
+    assert [parameter.name for parameter in public_list.parameters] == ["month", "limit", "order"]
+    assert [parameter.name for parameter in public_timeline.parameters] == ["member"]
+    assert [parameter.name for parameter in public_wish_remove.parameters] == ["member"]
+    assert [parameter.name for parameter in public_capsule_preview.parameters] == []
+
+    assert [parameter.name for parameter in admin_month.parameters] == ["month", "scope"]
+    assert [parameter.name for parameter in admin_list.parameters] == [
+        "month",
+        "limit",
+        "order",
+        "scope",
+    ]
+    assert [parameter.name for parameter in admin_timeline.parameters] == ["member"]
+    assert [parameter.name for parameter in admin_wish_remove.parameters] == ["member", "author"]
+    assert [parameter.name for parameter in admin_capsule_preview.parameters] == ["member"]

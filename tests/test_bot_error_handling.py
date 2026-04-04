@@ -44,7 +44,7 @@ class FakeFollowup:
 
 def _interaction(*, manage_guild: bool, done: bool = False) -> SimpleNamespace:
     return SimpleNamespace(
-        command=SimpleNamespace(qualified_name="birthday studio"),
+        command=SimpleNamespace(qualified_name="birthdayadmin studio"),
         guild_id=123,
         user=SimpleNamespace(
             id=456,

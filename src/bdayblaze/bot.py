@@ -9,7 +9,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bdayblaze.container import ServiceContainer
-from bdayblaze.discord.cogs.birthday import BirthdayGroup
+from bdayblaze.discord.cogs.birthday import BirthdayAdminGroup, BirthdayGroup
 from bdayblaze.discord.cogs.info import InfoCog
 from bdayblaze.logging import get_logger, redact_identifier
 from bdayblaze.services.diagnostics import classify_discord_http_failure
@@ -47,6 +47,15 @@ class BdayblazeBot(commands.Bot):
         self.tree.error(self.on_app_command_error)
         await self.add_cog(
             BirthdayGroup(
+                birthday_service=self.container.birthday_service,
+                experience_service=self.container.experience_service,
+                settings_service=self.container.settings_service,
+                health_service=self.container.health_service,
+                studio_audit_logger=self.container.studio_audit_logger,
+            )
+        )
+        await self.add_cog(
+            BirthdayAdminGroup(
                 birthday_service=self.container.birthday_service,
                 experience_service=self.container.experience_service,
                 settings_service=self.container.settings_service,

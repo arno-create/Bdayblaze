@@ -21,10 +21,10 @@ def build_help_embed() -> discord.Embed:
         name="Getting started",
         value=(
             "1. Save your date with `/birthday set`.\n"
-            "2. Server admins should open `/birthday setup` for routing, timezone, "
+            "2. Server admins should open `/birthdayadmin setup` for routing, timezone, "
             "and safety rules.\n"
-            "3. Use `/birthday studio` for copy, style, previews, and celebration design.\n"
-            "4. Use `/birthday test-message` before going live."
+            "3. Use `/birthdayadmin studio` for copy, style, previews, and celebration design.\n"
+            "4. Use `/birthdayadmin test-message` before going live."
         ),
         inline=False,
     )
@@ -38,38 +38,42 @@ def build_help_embed() -> discord.Embed:
             "`/birthday today` Show birthdays currently active under bot celebration logic.\n"
             "`/birthday next` See the nearest upcoming birthday.\n"
             "`/birthday upcoming` Browse upcoming visible birthdays.\n"
-            "`/birthday month` Browse birthdays for a month.\n"
+            "`/birthday month` Browse visible birthdays for a month.\n"
             "`/birthday twins` Find members who share your month and day.\n"
-            "`/birthday timeline` View your birthday profile and celebration timeline.\n"
-            "`/birthday wish add|list|remove` manage Birthday Capsule wishes.\n"
-            "`/birthday capsule preview` previews your capsule privately.\n"
+            "`/birthday timeline` View your timeline or a visible member's profile.\n"
+            "`/birthday wish add|list|remove` manage your Birthday Capsule wishes.\n"
+            "`/birthday capsule preview` previews your own capsule privately.\n"
             "`/birthday quest status|check-in` tracks Birthday Quest progress.\n"
-            "`/birthday list` remains available for private browsing."
+            "`/birthday list` privately browses visible birthdays."
         ),
         inline=False,
     )
     budget.add_field(
         name="Admin commands",
         value=(
-            "`/birthday setup` handles delivery basics: routes, timezone, eligibility, "
+            "Admin tools moved to `/birthdayadmin ...` so regular members only see the public "
+            "`/birthday` surface.\n"
+            "`/birthdayadmin setup` handles delivery basics: routes, timezone, eligibility, "
             "and safety.\n"
-            "`/birthday studio` handles celebration design: copy, Quiet vs Party style, "
+            "`/birthdayadmin studio` handles celebration design: copy, Quiet vs Party style, "
             "previews, and annual-event polish.\n"
-            "`/birthday test-message` Send a private operator dry run.\n"
-            "`/birthday analytics` shows compact server analytics.\n"
-            "`/birthday surprise queue|fulfill` manages manual Nitro concierge records.\n"
-            "`/birthday member ...` View, set, or remove another member's record.\n"
-            "`/birthday export` and `/birthday import` manage CSV backup and restore.\n"
-            "`/birthday anniversary ...` manages tracked join anniversaries.\n"
-            "`/birthday event ...` manages recurring annual celebrations.\n"
-            "`/birthday health` Check permissions, config, and scheduler health."
+            "`/birthdayadmin test-message` Send a private operator dry run.\n"
+            "`/birthdayadmin analytics` shows compact server analytics.\n"
+            "`/birthdayadmin surprise queue|fulfill` manages manual Nitro concierge records.\n"
+            "`/birthdayadmin member ...` View, set, or remove another member's record.\n"
+            "`/birthdayadmin export` and `/birthdayadmin import` manage CSV backup and restore.\n"
+            "`/birthdayadmin anniversary ...` manages tracked join anniversaries.\n"
+            "`/birthdayadmin event ...` manages recurring annual celebrations.\n"
+            "`/birthdayadmin month|list|timeline|wish remove|capsule preview` cover private "
+            "admin browsing and moderation.\n"
+            "`/birthdayadmin health` Check permissions, config, and scheduler health."
         ),
         inline=False,
     )
     budget.add_field(
         name="Studio media and safety",
         value=(
-            "Use `/birthday studio` -> Media Tools for shared image and thumbnail URLs.\n"
+            "Use `/birthdayadmin studio` -> Media Tools for shared image and thumbnail URLs.\n"
             "Main Studio surfaces lead with live route, media source, and health instead of raw "
             "resolver traces.\n"
             "Direct media can preview as embeds. Regular webpages and unsupported files are "
@@ -134,7 +138,7 @@ def build_about_embed() -> discord.Embed:
         name="Deletion path",
         value=(
             "Members can delete their own stored birthday with `/birthday remove`. "
-            "Admins can also remove records privately with `/birthday member remove`. "
+            "Admins can also remove records privately with `/birthdayadmin member remove`. "
             "CSV import/export is admin-only and delivered privately."
         ),
         inline=False,
@@ -151,8 +155,8 @@ def build_about_embed() -> discord.Embed:
     budget.add_field(
         name="Health and uptime",
         value=(
-            "Use `/birthday health` for server-specific issues. On hosted deployments, monitor "
-            "`/readyz` for readiness and `/healthz` for detailed runtime state."
+            "Use `/birthdayadmin health` for server-specific issues. On hosted deployments, "
+            "monitor `/readyz` for readiness and `/healthz` for detailed runtime state."
         ),
         inline=False,
     )

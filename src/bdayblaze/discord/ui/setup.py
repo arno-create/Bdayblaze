@@ -1086,10 +1086,10 @@ def build_message_template_embed(
         budget.add_field(
             name="\U0001F4CB Managing events",
             value=(
-                "Use `/birthday event add`, `/birthday event edit`, and `/birthday event list` "
-                "to manage the yearly calendar.\n"
-                "Use `/birthday test-message surface:recurring_event` with an event id to dry-run "
-                "the exact live render."
+                "Use `/birthdayadmin event add`, `/birthdayadmin event edit`, and "
+                "`/birthdayadmin event list` to manage the yearly calendar.\n"
+                "Use `/birthdayadmin test-message surface:recurring_event` with an event id to "
+                "dry-run the exact live render."
             ),
             inline=False,
         )
@@ -2006,10 +2006,10 @@ class MessageTemplateView(AdminPanelView):
             return
         if self.section == "events":
             await interaction.response.send_message(
-                "Manage custom annual events with `/birthday event add`, "
-                "`/birthday event edit`, and `/birthday event list`.\n"
-                "Use `/birthday test-message` with `surface: recurring_event` and an event id "
-                "to dry-run one.",
+                "Manage custom annual events with `/birthdayadmin event add`, "
+                "`/birthdayadmin event edit`, and `/birthdayadmin event list`.\n"
+                "Use `/birthdayadmin test-message` with `surface: recurring_event` and an "
+                "event id to dry-run one.",
                 ephemeral=True,
             )
             return

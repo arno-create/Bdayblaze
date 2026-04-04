@@ -16,6 +16,8 @@ def test_help_page_exists_and_covers_core_product_topics() -> None:
     assert "Everything admins and members need" in help_html
     assert 'href="#media"' in help_html
     assert "Route and media behavior" in help_html
+    assert "/birthdayadmin setup" in help_html
+    assert "/birthdayadmin test-message" in help_html
     assert "{anniversary.years}" in help_html
     assert "{server_anniversary.years_since_creation}" in help_html
     assert "https://discord.com/servers/inevitable-friendship-1322933864360050688" in help_html
@@ -36,6 +38,8 @@ def test_homepage_and_legal_pages_link_help_and_use_real_banner_asset() -> None:
     assert "banner.png" not in index_html
     assert "banner.png" not in privacy_html
     assert "banner.png" not in terms_html
+    assert "/birthdayadmin" in index_html
+    assert "/birthdayadmin member remove" in privacy_html
 
 
 def test_sitemap_and_readme_include_help_page() -> None:
@@ -45,3 +49,4 @@ def test_sitemap_and_readme_include_help_page() -> None:
     assert "https://arno-create.github.io/Bdayblaze/help/" in sitemap_xml
     assert "[Help and FAQ](https://arno-create.github.io/Bdayblaze/help/)" in readme
     assert "assets/banner.jpg" in readme
+    assert "/birthdayadmin setup" in readme

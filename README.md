@@ -68,13 +68,19 @@ Members:
 
 Admins:
 
-- `/birthday studio`, `/birthday setup`, `/birthday test-message`
-- `/birthday analytics`, `/birthday health`
-- `/birthday surprise queue|fulfill`
-- `/birthday member view|set|remove`
-- `/birthday anniversary settings|sync`
-- `/birthday event add|edit|list|remove`
-- `/birthday import`, `/birthday export`
+- `/birthdayadmin studio`, `/birthdayadmin setup`, `/birthdayadmin test-message`
+- `/birthdayadmin analytics`, `/birthdayadmin health`
+- `/birthdayadmin surprise queue|fulfill`
+- `/birthdayadmin member view|set|remove`
+- `/birthdayadmin anniversary settings|sync`
+- `/birthdayadmin event add|edit|list|remove`
+- `/birthdayadmin month`, `/birthdayadmin list`, `/birthdayadmin timeline`
+- `/birthdayadmin wish remove`, `/birthdayadmin capsule preview`
+- `/birthdayadmin import`, `/birthdayadmin export`
+
+Admin migration note:
+
+- Admin tools now live under `/birthdayadmin ...` so the public `/birthday ...` picker stays member-facing and admin tools can be hidden from regular members at the root level.
 
 ## Deployment notes
 

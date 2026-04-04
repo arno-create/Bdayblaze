@@ -60,7 +60,8 @@ class HealthService:
                     code="missing_config",
                     summary="Server setup is still using defaults.",
                     action=(
-                        "Run /birthday setup to configure timezone, channels, and delivery rules."
+                        "Run /birthdayadmin setup to configure timezone, channels, "
+                        "and delivery rules."
                     ),
                 )
             )
@@ -81,7 +82,7 @@ class HealthService:
                         severity="error",
                         code="invalid_timezone",
                         summary="The saved default timezone is invalid.",
-                        action="Open /birthday setup and save a valid IANA timezone.",
+                        action="Open /birthdayadmin setup and save a valid IANA timezone.",
                     )
                 )
 
@@ -412,7 +413,8 @@ class HealthService:
                     action=(
                         "Review startup logs, then restart the bot after the failure is fixed."
                         if self._runtime_status.scheduler_recovery_failed_at_utc is not None
-                        else "Re-run /birthday health after the bot has been online for a minute."
+                        else "Re-run /birthdayadmin health after the bot has been "
+                        "online for a minute."
                     ),
                 )
             )

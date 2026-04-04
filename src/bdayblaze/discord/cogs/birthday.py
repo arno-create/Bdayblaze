@@ -69,40 +69,7 @@ _ADMIN_RESULT_LIMIT = 20
 _IMPORT_SIZE_CAP_BYTES = 128 * 1024
 
 
-class BirthdayGroup(
-    commands.GroupCog,
-    group_name="birthday",
-    group_description="Manage your birthday and server birthday settings",
-):
-    member = app_commands.Group(
-        name="member",
-        description="Privately manage another member's birthday record.",
-    )
-    anniversary = app_commands.Group(
-        name="anniversary",
-        description="Manage join-anniversary settings and sync.",
-    )
-    event = app_commands.Group(
-        name="event",
-        description="Manage recurring annual celebrations.",
-    )
-    wish = app_commands.Group(
-        name="wish",
-        description="Queue or manage Birthday Capsule wishes.",
-    )
-    capsule = app_commands.Group(
-        name="capsule",
-        description="Preview Birthday Capsule state privately.",
-    )
-    quest = app_commands.Group(
-        name="quest",
-        description="Check Birthday Quest progress and check in.",
-    )
-    surprise = app_commands.Group(
-        name="surprise",
-        description="Manage Birthday Surprise fulfillment.",
-    )
-
+class _BirthdayCogBase:
     def __init__(
         self,
         birthday_service: BirthdayService,
@@ -117,6 +84,26 @@ class BirthdayGroup(
         self._settings_service = settings_service
         self._health_service = health_service
         self._studio_audit_logger = studio_audit_logger
+
+
+class BirthdayGroup(
+    _BirthdayCogBase,
+    commands.GroupCog,
+    group_name="birthday",
+    group_description="Manage your birthday and browse server celebrations",
+):
+    wish = app_commands.Group(
+        name="wish",
+        description="Queue or manage your Birthday Capsule wishes.",
+    )
+    capsule = app_commands.Group(
+        name="capsule",
+        description="Preview your Birthday Capsule privately.",
+    )
+    quest = app_commands.Group(
+        name="quest",
+        description="Check Birthday Quest progress and check in.",
+    )
 
     @app_commands.command(
         name="set",
@@ -347,22 +334,19 @@ class BirthdayGroup(
 
     @app_commands.command(
         name="month",
-        description="Browse birthdays registered for a month in this server.",
+        description="Browse visible birthdays registered for a month in this server.",
     )
     @app_commands.describe(
         month="Month number to browse. Defaults to the current month in the server timezone.",
-        scope="Admins can choose all saved birthdays; everyone else uses visible birthdays only.",
     )
     @app_commands.guild_only()
     async def month_birthdays(
         self,
         interaction: discord.Interaction,
         month: app_commands.Range[int, 1, 12] | None = None,
-        scope: Literal["visible", "all"] = "visible",
     ) -> None:
         assert interaction.guild is not None
         await interaction.response.defer(ephemeral=True)
-        visible_only = _visible_only_for_scope(interaction, scope)
         settings = await self._settings_service.get_settings(interaction.guild.id)
         selected_month = month or _current_month(settings.default_timezone)
         entries = await self._birthday_service.list_browsable_birthdays(
@@ -370,13 +354,13 @@ class BirthdayGroup(
             month=selected_month,
             limit=_PUBLIC_RESULT_LIMIT + 6,
             order_by_upcoming=False,
-            visible_only=visible_only,
+            visible_only=True,
         )
         resolved = await _resolve_birthday_entry_members(interaction.guild, entries)
         shown = resolved[:_PUBLIC_RESULT_LIMIT]
         if not shown:
             await interaction.followup.send(
-                f"No birthdays matched {month_name[selected_month]} for that scope.",
+                f"No visible birthdays matched {month_name[selected_month]}.",
                 ephemeral=True,
             )
             return
@@ -389,7 +373,7 @@ class BirthdayGroup(
         leaderboard = await self._birthday_service.month_leaderboard(
             interaction.guild.id,
             month=selected_month,
-            visible_only=visible_only,
+            visible_only=True,
         )
         if leaderboard:
             embed.add_field(
@@ -518,60 +502,39 @@ class BirthdayGroup(
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    @wish.command(name="remove", description="Remove an unrevealed birthday wish.")
-    @app_commands.describe(
-        member="Member whose capsule wish should be removed",
-        author="Admin only: remove a specific author's queued wish",
-    )
+    @wish.command(name="remove", description="Remove your unrevealed birthday wish.")
+    @app_commands.describe(member="Member whose capsule wish should be removed")
     @app_commands.guild_only()
     async def wish_remove(
         self,
         interaction: discord.Interaction,
         member: discord.Member,
-        author: discord.Member | None = None,
     ) -> None:
         assert interaction.guild is not None
         await interaction.response.defer(ephemeral=True)
-        is_admin = _is_manage_guild(interaction)
-        if author is not None and not is_admin:
-            raise ValidationError("Only server admins can remove someone else's queued wish.")
         await self._experience_service.remove_wish(
             guild_id=interaction.guild.id,
             actor_user_id=interaction.user.id,
             target_user_id=member.id,
-            author_user_id=author.id if author is not None else None,
-            moderated=author is not None,
+            author_user_id=None,
+            moderated=False,
         )
-        if author is None:
-            message = f"Removed your queued wish for {member.mention}."
-        else:
-            message = f"Removed {author.mention}'s queued wish for {member.mention}."
         await interaction.followup.send(
-            message,
+            f"Removed your queued wish for {member.mention}.",
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    @capsule.command(name="preview", description="Preview a Birthday Capsule privately.")
-    @app_commands.describe(
-        member="Defaults to you. Admins can preview another member's queued or unlocked capsule.",
-    )
+    @capsule.command(name="preview", description="Preview your Birthday Capsule privately.")
     @app_commands.guild_only()
-    async def capsule_preview(
-        self,
-        interaction: discord.Interaction,
-        member: discord.Member | None = None,
-    ) -> None:
+    async def capsule_preview(self, interaction: discord.Interaction) -> None:
         assert interaction.guild is not None
         await interaction.response.defer(ephemeral=True)
-        target = member or interaction.user
-        is_admin = _is_manage_guild(interaction)
-        if target.id != interaction.user.id and not is_admin:
-            raise ValidationError("You can only preview your own Birthday Capsule.")
+        target = interaction.user
         celebration, wishes, queued_count = await self._experience_service.list_capsule_preview(
             guild_id=interaction.guild.id,
             target_user_id=target.id,
-            include_private_queued=is_admin,
+            include_private_queued=False,
         )
         resolved = await resolve_guild_members(
             interaction.guild,
@@ -585,7 +548,7 @@ class BirthdayGroup(
                 wishes=wishes,
                 queued_count=queued_count,
                 authors_by_id=authors_by_id,
-                viewer_is_admin=is_admin,
+                viewer_is_admin=False,
             ),
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
@@ -646,7 +609,7 @@ class BirthdayGroup(
         description="View a birthday profile, countdown, and celebration timeline.",
     )
     @app_commands.describe(
-        member="Defaults to you. Private profiles stay private unless you manage the server.",
+        member="Defaults to you. Other members must be visible in this server.",
     )
     @app_commands.guild_only()
     async def timeline(
@@ -661,7 +624,7 @@ class BirthdayGroup(
             guild_id=interaction.guild.id,
             target_user_id=target.id,
             viewer_user_id=interaction.user.id,
-            admin_override=_is_manage_guild(interaction),
+            admin_override=False,
         )
         if await _refresh_live_quest_progress(
             interaction,
@@ -671,7 +634,303 @@ class BirthdayGroup(
                 guild_id=interaction.guild.id,
                 target_user_id=target.id,
                 viewer_user_id=interaction.user.id,
-                admin_override=_is_manage_guild(interaction),
+                admin_override=False,
+            )
+        await interaction.followup.send(
+            embed=_build_timeline_embed(
+                target,
+                timeline,
+                active_now=_timeline_is_active_now(timeline),
+            ),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @app_commands.command(
+        name="list",
+        description="Privately browse visible birthdays for this server.",
+    )
+    @app_commands.describe(
+        month="Optional month filter",
+        limit="How many birthdays to show",
+        order="Choose calendar order or upcoming order",
+    )
+    @app_commands.guild_only()
+    async def list_birthdays(
+        self,
+        interaction: discord.Interaction,
+        month: app_commands.Range[int, 1, 12] | None = None,
+        limit: app_commands.Range[int, 1, _ADMIN_RESULT_LIMIT] = 10,
+        order: Literal["calendar", "upcoming"] = "calendar",
+    ) -> None:
+        assert interaction.guild is not None
+        await interaction.response.defer(ephemeral=True)
+        fetch_limit = min(limit + 6, _ADMIN_RESULT_LIMIT + 6)
+        entries = await self._birthday_service.list_browsable_birthdays(
+            interaction.guild.id,
+            month=month,
+            limit=fetch_limit,
+            order_by_upcoming=order == "upcoming",
+            visible_only=True,
+        )
+        title = (
+            f"Visible birthdays in {month_name[month]}"
+            if month is not None
+            else (
+                "Visible birthdays by next celebration"
+                if order == "upcoming"
+                else "Visible birthdays by calendar date"
+            )
+        )
+        resolved = await _resolve_birthday_entry_members(interaction.guild, entries)
+        shown = resolved[:limit]
+        if not shown:
+            await interaction.followup.send(
+                "No visible birthdays matched that filter.",
+                ephemeral=True,
+            )
+            return
+        lines = [
+            _format_birthday_list_line(entry, member, order=order) for entry, member in shown
+        ]
+        embed = discord.Embed(
+            title=title,
+            description="\n".join(lines),
+            color=discord.Color.blurple(),
+            timestamp=datetime.now(UTC),
+        )
+        _set_resolution_footer(
+            embed,
+            total_candidates=len(entries),
+            shown_count=len(lines),
+            resolved_count=len(resolved),
+            requested_limit=limit,
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @app_commands.command(
+        name="privacy",
+        description="Explain what birthday data is stored and where.",
+    )
+    @app_commands.guild_only()
+    async def privacy(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_message(
+            embed=_build_privacy_embed(),
+            ephemeral=True,
+        )
+
+
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.guild_only()
+class BirthdayAdminGroup(
+    _BirthdayCogBase,
+    commands.GroupCog,
+    group_name="birthdayadmin",
+    group_description="Admin birthday setup, diagnostics, and private management tools",
+):
+    member = app_commands.Group(
+        name="member",
+        description="Privately manage another member's birthday record.",
+    )
+    anniversary = app_commands.Group(
+        name="anniversary",
+        description="Manage join-anniversary settings and sync.",
+    )
+    event = app_commands.Group(
+        name="event",
+        description="Manage recurring annual celebrations.",
+    )
+    surprise = app_commands.Group(
+        name="surprise",
+        description="Manage Birthday Surprise fulfillment.",
+    )
+    wish = app_commands.Group(
+        name="wish",
+        description="Moderate Birthday Capsule wishes.",
+    )
+    capsule = app_commands.Group(
+        name="capsule",
+        description="Preview a member's Birthday Capsule privately.",
+    )
+
+    @app_commands.command(
+        name="month",
+        description="Browse birthdays registered for a month in this server.",
+    )
+    @app_commands.describe(
+        month="Month number to browse. Defaults to the current month in the server timezone.",
+        scope="Choose visible birthdays only or all saved birthdays.",
+    )
+    @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.guild_only()
+    async def month_birthdays(
+        self,
+        interaction: discord.Interaction,
+        month: app_commands.Range[int, 1, 12] | None = None,
+        scope: Literal["visible", "all"] = "all",
+    ) -> None:
+        assert interaction.guild is not None
+        await interaction.response.defer(ephemeral=True)
+        visible_only = _visible_only_for_scope(interaction, scope)
+        settings = await self._settings_service.get_settings(interaction.guild.id)
+        selected_month = month or _current_month(settings.default_timezone)
+        entries = await self._birthday_service.list_browsable_birthdays(
+            interaction.guild.id,
+            month=selected_month,
+            limit=_PUBLIC_RESULT_LIMIT + 6,
+            order_by_upcoming=False,
+            visible_only=visible_only,
+        )
+        resolved = await _resolve_birthday_entry_members(interaction.guild, entries)
+        shown = resolved[:_PUBLIC_RESULT_LIMIT]
+        if not shown:
+            scope_label = "visible birthdays" if visible_only else "saved birthdays"
+            await interaction.followup.send(
+                f"No {scope_label} matched {month_name[selected_month]} for that scope.",
+                ephemeral=True,
+            )
+            return
+        lines = [f"{entry.preview.birth_day:02d} - {member.mention}" for entry, member in shown]
+        embed = discord.Embed(
+            title=(
+                f"Visible birthdays in {month_name[selected_month]}"
+                if visible_only
+                else f"Saved birthdays in {month_name[selected_month]}"
+            ),
+            description="\n".join(lines),
+            color=discord.Color.blurple(),
+        )
+        leaderboard = await self._birthday_service.month_leaderboard(
+            interaction.guild.id,
+            month=selected_month,
+            visible_only=visible_only,
+        )
+        if leaderboard:
+            embed.add_field(
+                name="Busiest dates",
+                value="\n".join(
+                    f"{selected_month:02d}/{day:02d} - {count} member(s)"
+                    for day, count in leaderboard
+                ),
+                inline=False,
+            )
+        _set_resolution_footer(
+            embed,
+            total_candidates=len(entries),
+            shown_count=len(lines),
+            resolved_count=len(resolved),
+            requested_limit=_PUBLIC_RESULT_LIMIT,
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @app_commands.command(
+        name="list",
+        description="Privately browse saved birthdays for this server.",
+    )
+    @app_commands.describe(
+        month="Optional month filter",
+        limit="How many birthdays to show",
+        order="Choose calendar order or upcoming order",
+        scope="Choose visible birthdays only or all saved birthdays.",
+    )
+    @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.guild_only()
+    async def list_birthdays(
+        self,
+        interaction: discord.Interaction,
+        month: app_commands.Range[int, 1, 12] | None = None,
+        limit: app_commands.Range[int, 1, _ADMIN_RESULT_LIMIT] = 10,
+        order: Literal["calendar", "upcoming"] = "calendar",
+        scope: Literal["visible", "all"] = "all",
+    ) -> None:
+        assert interaction.guild is not None
+        await interaction.response.defer(ephemeral=True)
+        visible_only = _visible_only_for_scope(interaction, scope)
+        fetch_limit = min(limit + 6, _ADMIN_RESULT_LIMIT + 6)
+        entries = await self._birthday_service.list_browsable_birthdays(
+            interaction.guild.id,
+            month=month,
+            limit=fetch_limit,
+            order_by_upcoming=order == "upcoming",
+            visible_only=visible_only,
+        )
+        title = (
+            (
+                f"Visible birthdays in {month_name[month]}"
+                if visible_only
+                else f"Saved birthdays in {month_name[month]}"
+            )
+            if month is not None
+            else (
+                "Visible birthdays by next celebration"
+                if order == "upcoming" and visible_only
+                else "Visible birthdays by calendar date"
+                if visible_only
+                else "Saved birthdays by next celebration"
+                if order == "upcoming"
+                else "Saved birthdays by calendar date"
+            )
+        )
+        resolved = await _resolve_birthday_entry_members(interaction.guild, entries)
+        shown = resolved[:limit]
+        if not shown:
+            await interaction.followup.send(
+                "No visible birthdays matched that filter."
+                if visible_only
+                else "No saved birthdays matched that filter.",
+                ephemeral=True,
+            )
+            return
+        lines = [
+            _format_birthday_list_line(entry, member, order=order) for entry, member in shown
+        ]
+        embed = discord.Embed(
+            title=title,
+            description="\n".join(lines),
+            color=discord.Color.blurple(),
+            timestamp=datetime.now(UTC),
+        )
+        _set_resolution_footer(
+            embed,
+            total_candidates=len(entries),
+            shown_count=len(lines),
+            resolved_count=len(resolved),
+            requested_limit=limit,
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @app_commands.command(
+        name="timeline",
+        description="View any member's birthday profile, countdown, and celebration timeline.",
+    )
+    @app_commands.describe(
+        member="Defaults to you. Admin timelines can include private birthday records.",
+    )
+    @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.guild_only()
+    async def timeline(
+        self,
+        interaction: discord.Interaction,
+        member: discord.Member | None = None,
+    ) -> None:
+        assert interaction.guild is not None
+        await interaction.response.defer(ephemeral=True)
+        target = member or interaction.user
+        timeline = await self._experience_service.build_timeline(
+            guild_id=interaction.guild.id,
+            target_user_id=target.id,
+            viewer_user_id=interaction.user.id,
+            admin_override=True,
+        )
+        if await _refresh_live_quest_progress(
+            interaction,
+            timeline.active_celebration,
+        ):
+            timeline = await self._experience_service.build_timeline(
+                guild_id=interaction.guild.id,
+                target_user_id=target.id,
+                viewer_user_id=interaction.user.id,
+                admin_override=True,
             )
         await interaction.followup.send(
             embed=_build_timeline_embed(
@@ -724,7 +983,7 @@ class BirthdayGroup(
         description="Mark a manual Nitro concierge record as delivered or not delivered.",
     )
     @app_commands.describe(
-        celebration_id="Celebration ID shown in /birthday surprise queue",
+        celebration_id="Celebration ID shown in /birthdayadmin surprise queue",
         status="Manual fulfillment result",
     )
     @app_commands.checks.has_permissions(manage_guild=True)
@@ -909,71 +1168,6 @@ class BirthdayGroup(
         )
 
     @app_commands.command(
-        name="list",
-        description="Privately browse saved birthdays for this server.",
-    )
-    @app_commands.describe(
-        month="Optional month filter",
-        limit="How many birthdays to show",
-        order="Choose calendar order or upcoming order",
-        scope="Visible birthdays for everyone, or all birthdays for admins.",
-    )
-    @app_commands.guild_only()
-    async def list_birthdays(
-        self,
-        interaction: discord.Interaction,
-        month: app_commands.Range[int, 1, 12] | None = None,
-        limit: app_commands.Range[int, 1, _ADMIN_RESULT_LIMIT] = 10,
-        order: Literal["calendar", "upcoming"] = "calendar",
-        scope: Literal["visible", "all"] = "visible",
-    ) -> None:
-        assert interaction.guild is not None
-        await interaction.response.defer(ephemeral=True)
-        visible_only = _visible_only_for_scope(interaction, scope)
-        fetch_limit = min(limit + 6, _ADMIN_RESULT_LIMIT + 6)
-        entries = await self._birthday_service.list_browsable_birthdays(
-            interaction.guild.id,
-            month=month,
-            limit=fetch_limit,
-            order_by_upcoming=order == "upcoming",
-            visible_only=visible_only,
-        )
-        title = (
-            f"Saved birthdays in {month_name[month]}"
-            if month is not None
-            else (
-                "Saved birthdays by next celebration"
-                if order == "upcoming"
-                else "Saved birthdays by calendar date"
-            )
-        )
-        resolved = await _resolve_birthday_entry_members(interaction.guild, entries)
-        shown = resolved[:limit]
-        if not shown:
-            await interaction.followup.send(
-                "No saved birthdays matched that filter.",
-                ephemeral=True,
-            )
-            return
-        lines = [
-            _format_birthday_list_line(entry, member, order=order) for entry, member in shown
-        ]
-        embed = discord.Embed(
-            title=title,
-            description="\n".join(lines),
-            color=discord.Color.blurple(),
-            timestamp=datetime.now(UTC),
-        )
-        _set_resolution_footer(
-            embed,
-            total_candidates=len(entries),
-            shown_count=len(lines),
-            resolved_count=len(resolved),
-            requested_limit=limit,
-        )
-        await interaction.followup.send(embed=embed, ephemeral=True)
-
-    @app_commands.command(
         name="export",
         description="Export this server's birthdays as a private CSV.",
     )
@@ -1042,6 +1236,75 @@ class BirthdayGroup(
         await interaction.followup.send(
             embed=_build_import_preview_embed(preview, applied=True),
             ephemeral=True,
+        )
+
+    @wish.command(name="remove", description="Remove an unrevealed birthday wish privately.")
+    @app_commands.describe(
+        member="Member whose capsule wish should be removed",
+        author="Optional author whose queued wish should be removed",
+    )
+    @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.guild_only()
+    async def wish_remove(
+        self,
+        interaction: discord.Interaction,
+        member: discord.Member,
+        author: discord.Member | None = None,
+    ) -> None:
+        assert interaction.guild is not None
+        await interaction.response.defer(ephemeral=True)
+        await self._experience_service.remove_wish(
+            guild_id=interaction.guild.id,
+            actor_user_id=interaction.user.id,
+            target_user_id=member.id,
+            author_user_id=author.id if author is not None else None,
+            moderated=author is not None,
+        )
+        if author is None:
+            message = f"Removed your queued wish for {member.mention}."
+        else:
+            message = f"Removed {author.mention}'s queued wish for {member.mention}."
+        await interaction.followup.send(
+            message,
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @capsule.command(name="preview", description="Preview a Birthday Capsule privately.")
+    @app_commands.describe(
+        member="Defaults to you. Admin previews can include another member's queued capsule.",
+    )
+    @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.guild_only()
+    async def capsule_preview(
+        self,
+        interaction: discord.Interaction,
+        member: discord.Member | None = None,
+    ) -> None:
+        assert interaction.guild is not None
+        await interaction.response.defer(ephemeral=True)
+        target = member or interaction.user
+        celebration, wishes, queued_count = await self._experience_service.list_capsule_preview(
+            guild_id=interaction.guild.id,
+            target_user_id=target.id,
+            include_private_queued=True,
+        )
+        resolved = await resolve_guild_members(
+            interaction.guild,
+            [wish.author_user_id for wish in wishes],
+        )
+        authors_by_id = {user_id: author for user_id, author in resolved}
+        await interaction.followup.send(
+            embed=_build_capsule_preview_embed(
+                target,
+                celebration=celebration,
+                wishes=wishes,
+                queued_count=queued_count,
+                authors_by_id=authors_by_id,
+                viewer_is_admin=True,
+            ),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
         )
 
     @member.command(
@@ -1498,19 +1761,6 @@ class BirthdayGroup(
             embed=_build_health_embed(issues),
             ephemeral=True,
         )
-
-    @app_commands.command(
-        name="privacy",
-        description="Explain what birthday data is stored and where.",
-    )
-    @app_commands.guild_only()
-    async def privacy(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_message(
-            embed=_build_privacy_embed(),
-            ephemeral=True,
-        )
-
-
 class ConfirmBirthdayDeletionView(discord.ui.View):
     def __init__(self, birthday_service: BirthdayService, owner_id: int) -> None:
         super().__init__(timeout=300)
@@ -1724,7 +1974,7 @@ def _build_recurring_event_list_embed(
     embed.add_field(
         name="Preview path",
         value=(
-            "Use `/birthday test-message` with `surface: recurring_event` and the event id "
+            "Use `/birthdayadmin test-message` with `surface: recurring_event` and the event id "
             "to dry-run the current saved render."
         ),
         inline=False,
@@ -1867,7 +2117,7 @@ def _build_import_preview_embed(preview: object, applied: bool = False) -> disco
             name="Apply token",
             value=(
                 f"`{preview.apply_token}`\n"
-                "Re-run `/birthday import` with the same CSV and this token "
+                "Re-run `/birthdayadmin import` with the same CSV and this token "
                 "to apply the valid rows."
             ),
             inline=False,

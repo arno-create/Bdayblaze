@@ -10,13 +10,15 @@ def test_build_help_embed_mentions_operator_flows() -> None:
 
     assert "Bdayblaze Help" in (embed.title or "")
     assert any(field.name == "Getting started" for field in embed.fields)
-    assert "/birthday test-message" in embed.fields[0].value
-    assert "/birthday studio" in embed.fields[0].value
+    assert "/birthdayadmin test-message" in embed.fields[0].value
+    assert "/birthdayadmin studio" in embed.fields[0].value
     user_field = next(field for field in embed.fields if field.name == "User commands")
     assert "/birthday privacy" in user_field.value
+    assert "/birthday capsule preview" in user_field.value
     admin_field = next(field for field in embed.fields if field.name == "Admin commands")
-    assert "/birthday import" in admin_field.value
-    assert "/birthday anniversary ..." in admin_field.value
+    assert "/birthdayadmin import" in admin_field.value
+    assert "/birthdayadmin anniversary ..." in admin_field.value
+    assert "moved to `/birthdayadmin ...`" in admin_field.value
     safety_field = next(
         field for field in embed.fields if field.name == "Studio media and safety"
     )
@@ -48,9 +50,12 @@ def test_build_about_embed_uses_package_metadata(monkeypatch) -> None:
     health_field = next(
         field for field in embed.fields if field.name == "Health and uptime"
     )
+    deletion_field = next(field for field in embed.fields if field.name == "Deletion path")
     assert "1.2.3" in version_field.value
     assert "https://example.com/repo" in version_field.value
     assert "/readyz" in health_field.value
+    assert "/birthdayadmin health" in health_field.value
+    assert "/birthdayadmin member remove" in deletion_field.value
 
 
 def test_build_about_embed_handles_missing_package_metadata(monkeypatch) -> None:
