@@ -1,8 +1,97 @@
 (() => {
+  document.documentElement.classList.add("js-ready");
+
   const year = String(new Date().getFullYear());
   for (const node of document.querySelectorAll("[data-year]")) {
     node.textContent = year;
   }
+
+  const mobileHeaderBoundary = window.matchMedia("(max-width: 840px)");
+
+  const closeHeaderMenu = (toggle, menu) => {
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.setAttribute("aria-label", "Open site menu");
+    menu.classList.remove("is-open");
+  };
+
+  const openHeaderMenu = (toggle, menu) => {
+    toggle.setAttribute("aria-expanded", "true");
+    toggle.setAttribute("aria-label", "Close site menu");
+    menu.classList.add("is-open");
+  };
+
+  for (const header of document.querySelectorAll(".site-header")) {
+    const toggle = header.querySelector(".menu-toggle");
+    const menu = header.querySelector(".header-menu");
+
+    if (!(toggle instanceof HTMLButtonElement) || !(menu instanceof HTMLElement)) {
+      continue;
+    }
+
+    closeHeaderMenu(toggle, menu);
+
+    toggle.addEventListener("click", () => {
+      const isOpen = toggle.getAttribute("aria-expanded") === "true";
+      if (isOpen) {
+        closeHeaderMenu(toggle, menu);
+        return;
+      }
+
+      openHeaderMenu(toggle, menu);
+    });
+
+    header.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+
+      if (target.closest(".site-nav a, .header-actions a")) {
+        closeHeaderMenu(toggle, menu);
+      }
+    });
+
+    document.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
+      }
+
+      if (!header.contains(target)) {
+        closeHeaderMenu(toggle, menu);
+      }
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") {
+        return;
+      }
+
+      if (toggle.getAttribute("aria-expanded") !== "true") {
+        return;
+      }
+
+      closeHeaderMenu(toggle, menu);
+      toggle.focus();
+    });
+  }
+
+  mobileHeaderBoundary.addEventListener("change", (event) => {
+    if (event.matches) {
+      return;
+    }
+
+    for (const header of document.querySelectorAll(".site-header")) {
+      const toggle = header.querySelector(".menu-toggle");
+      const menu = header.querySelector(".header-menu");
+
+      if (!(toggle instanceof HTMLButtonElement) || !(menu instanceof HTMLElement)) {
+        continue;
+      }
+
+      closeHeaderMenu(toggle, menu);
+    }
+  });
 
   const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const revealNodes = Array.from(document.querySelectorAll("[data-reveal]"));

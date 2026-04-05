@@ -167,6 +167,7 @@ main {
   justify-content: space-between;
   gap: 1.2rem;
   min-height: 5rem;
+  position: relative;
 }
 
 .brand-lockup {
@@ -187,12 +188,23 @@ main {
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.22);
 }
 
+.header-menu {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-left: auto;
+}
+
 .site-nav,
 .header-actions,
 .footer-links {
   display: flex;
   align-items: center;
   gap: 1rem;
+}
+
+.header-actions {
+  justify-content: flex-end;
 }
 
 .site-nav {
@@ -223,6 +235,58 @@ main {
 .text-link:hover,
 .inline-link:hover {
   color: var(--accent-strong);
+}
+
+.menu-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 3rem;
+  height: 3rem;
+  margin-left: auto;
+  flex: 0 0 auto;
+  border: 1px solid rgba(255, 211, 138, 0.24);
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at top, rgba(255, 190, 122, 0.18), transparent 70%),
+    rgba(255, 154, 77, 0.08);
+  color: var(--accent-strong);
+  cursor: pointer;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.2);
+  transition:
+    transform 180ms ease,
+    border-color 180ms ease,
+    background 180ms ease,
+    box-shadow 180ms ease,
+    color 180ms ease;
+}
+
+.menu-toggle:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 211, 138, 0.38);
+  background:
+    radial-gradient(circle at top, rgba(255, 190, 122, 0.24), transparent 72%),
+    rgba(255, 154, 77, 0.13);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.24);
+}
+
+.menu-toggle[aria-expanded="true"] {
+  color: var(--accent-strong);
+  border-color: rgba(255, 211, 138, 0.32);
+  background: rgba(255, 154, 77, 0.14);
+}
+
+.menu-toggle-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+}
+
+.menu-toggle-dots span {
+  width: 0.32rem;
+  height: 0.32rem;
+  border-radius: 999px;
+  background: currentColor;
 }
 
 .button {
@@ -920,38 +984,69 @@ main {
 }
 
 @media (max-width: 840px) {
-  .site-nav {
-    order: 3;
-    width: 100%;
-    justify-content: flex-start;
-    overflow-x: auto;
-    gap: 0.65rem;
-    padding-bottom: 0.3rem;
-    white-space: nowrap;
-  }
-
   .header-inner {
-    flex-wrap: wrap;
-    align-items: flex-start;
-    row-gap: 0.85rem;
-    padding: 0.9rem 0;
+    min-height: 4.5rem;
+    padding: 0.75rem 0;
   }
 
-  .site-nav a {
-    flex: 0 0 auto;
-    padding: 0.55rem 0.8rem;
+  .js-ready .menu-toggle {
+    display: inline-flex;
+  }
+
+  .js-ready .header-menu {
+    position: absolute;
+    top: calc(100% - 0.15rem);
+    right: 0;
+    z-index: 30;
+    width: min(17.5rem, calc(100vw - 1rem));
+    display: grid;
+    gap: 0.75rem;
+    margin-left: 0;
+    padding: 0.9rem;
+    border: 1px solid rgba(255, 220, 182, 0.12);
+    border-radius: 1.35rem;
+    background:
+      radial-gradient(circle at top right, rgba(255, 185, 112, 0.14), transparent 38%),
+      linear-gradient(145deg, rgba(30, 12, 12, 0.96), rgba(12, 4, 5, 0.94));
+    box-shadow: 0 28px 80px rgba(0, 0, 0, 0.34);
+    transform-origin: top right;
+  }
+
+  .js-ready .header-menu:not(.is-open) {
+    display: none;
+  }
+
+  .js-ready .header-menu.is-open {
+    animation: menu-pop 180ms ease;
+  }
+
+  .js-ready .site-nav {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.55rem;
+    padding-bottom: 0;
+    white-space: normal;
+    overflow: visible;
+  }
+
+  .js-ready .site-nav a {
+    width: 100%;
+    padding: 0.75rem 0.85rem;
     border: 1px solid rgba(255, 220, 182, 0.1);
-    border-radius: 999px;
+    border-radius: 1rem;
     background: rgba(255, 255, 255, 0.04);
   }
 
-  .header-actions {
+  .js-ready .header-actions {
     width: 100%;
-    justify-content: stretch;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.6rem;
   }
 
-  .header-actions .button {
-    flex: 1 1 0;
+  .js-ready .header-actions .button {
+    width: 100%;
     min-width: 0;
   }
 
@@ -1070,22 +1165,28 @@ main {
     font-size: 1.2rem;
   }
 
-  .header-actions {
-    gap: 0.7rem;
+  .menu-toggle {
+    width: 2.8rem;
+    height: 2.8rem;
   }
 
-  .header-actions .button {
-    flex: 1 1 auto;
+  .js-ready .header-menu {
+    width: min(16.25rem, calc(100vw - 0.9rem));
+    padding: 0.8rem;
   }
 
-  .site-nav {
-    margin-inline: -0.05rem;
-    padding-bottom: 0.15rem;
+  .js-ready .site-nav {
+    margin-inline: 0;
+    gap: 0.45rem;
   }
 
-  .site-nav a {
-    padding: 0.5rem 0.72rem;
-    font-size: 0.9rem;
+  .js-ready .site-nav a {
+    padding: 0.72rem 0.82rem;
+    font-size: 0.92rem;
+  }
+
+  .js-ready .header-actions {
+    gap: 0.6rem;
   }
 
   .hero {
@@ -1179,6 +1280,18 @@ main {
 
   .policy-copy {
     max-width: none;
+  }
+}
+
+@keyframes menu-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-0.4rem) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 }
 

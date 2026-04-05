@@ -51,6 +51,9 @@
       href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Manrope:wght@400;500;600;700;800&display=swap"
       rel="stylesheet"
     />
+    <script>
+      document.documentElement.classList.add("js-ready");
+    </script>
     <link rel="stylesheet" href="./styles.css" />
     <script defer src="./site.js"></script>
     <script type="application/ld+json">
@@ -129,30 +132,46 @@
           <span>Bdayblaze</span>
         </a>
 
-        <nav class="site-nav" aria-label="Primary">
-          <a href="#showcase">Showcase</a>
-          <a href="#features">Features</a>
-          <a href="#how-it-works">How it works</a>
-          <a href="./help/">Help</a>
-          <a href="#privacy">Privacy</a>
-          <a href="./terms/">Terms</a>
-        </nav>
+        <button
+          class="menu-toggle"
+          type="button"
+          aria-expanded="false"
+          aria-controls="site-menu"
+          aria-label="Open site menu"
+        >
+          <span class="menu-toggle-dots" aria-hidden="true">
+            <span></span>
+            <span></span>
+            <span></span>
+          </span>
+        </button>
 
-        <div class="header-actions">
-          <a
-            class="button button-ghost"
-            href="https://github.com/arno-create/Bdayblaze"
-            target="_blank"
-            rel="noreferrer"
-            >GitHub</a
-          >
-          <a
-            class="button button-primary"
-            href="https://discord.com/oauth2/authorize?client_id=1485920716573380660"
-            target="_blank"
-            rel="noreferrer"
-            >Install</a
-          >
+        <div class="header-menu" id="site-menu">
+          <nav class="site-nav" aria-label="Primary">
+            <a href="#showcase">Showcase</a>
+            <a href="#features">Features</a>
+            <a href="#how-it-works">How it works</a>
+            <a href="./help/">Help</a>
+            <a href="#privacy">Privacy</a>
+            <a href="./terms/">Terms</a>
+          </nav>
+
+          <div class="header-actions">
+            <a
+              class="button button-ghost"
+              href="https://github.com/arno-create/Bdayblaze"
+              target="_blank"
+              rel="noreferrer"
+              >GitHub</a
+            >
+            <a
+              class="button button-primary"
+              href="https://discord.com/oauth2/authorize?client_id=1485920716573380660"
+              target="_blank"
+              rel="noreferrer"
+              >Install</a
+            >
+          </div>
         </div>
       </div>
     </header>
