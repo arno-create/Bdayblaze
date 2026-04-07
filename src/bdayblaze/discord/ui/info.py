@@ -7,6 +7,37 @@ import discord
 
 from bdayblaze.discord.embed_budget import BudgetedEmbed
 
+SUPPORT_SERVER_URL = "https://discord.com/servers/inevitable-friendship-1322933864360050688"
+OFFICIAL_WEBSITE_URL = "https://arno-create.github.io/Bdayblaze/"
+HELP_DOCS_URL = "https://arno-create.github.io/Bdayblaze/help/"
+REPOSITORY_FALLBACK_URL = "https://github.com/arno-create/Bdayblaze"
+
+
+def build_info_links_view() -> discord.ui.View:
+    view = discord.ui.View(timeout=None)
+    view.add_item(
+        discord.ui.Button(
+            label="Support Server",
+            style=discord.ButtonStyle.link,
+            url=SUPPORT_SERVER_URL,
+        )
+    )
+    view.add_item(
+        discord.ui.Button(
+            label="Website",
+            style=discord.ButtonStyle.link,
+            url=OFFICIAL_WEBSITE_URL,
+        )
+    )
+    view.add_item(
+        discord.ui.Button(
+            label="GitHub",
+            style=discord.ButtonStyle.link,
+            url=_repository_url(),
+        )
+    )
+    return view
+
 
 def build_help_embed() -> discord.Embed:
     budget = BudgetedEmbed.create(
@@ -104,12 +135,32 @@ def build_help_embed() -> discord.Embed:
         ),
         inline=False,
     )
+    _add_links_field(budget)
     budget.set_footer(
-        
-            "Public docs: https://arno-create.github.io/Bdayblaze/help/ | "
-            "Use top-level /about for bot-wide info."
-        
+        f"Public docs: {HELP_DOCS_URL} | Use top-level /about for bot-wide info."
     )
+    return budget.build()
+
+
+def build_support_embed() -> discord.Embed:
+    budget = BudgetedEmbed.create(
+        title="\U0001F6DF Bdayblaze Support",
+        description=(
+            "If you find a bug, hit a confusing edge case, or notice something that feels off, "
+            "please report it. Those reports directly improve Bdayblaze and are genuinely "
+            "appreciated."
+        ),
+        color=discord.Color.blurple(),
+    )
+    budget.add_field(
+        name="How to get help",
+        value=(
+            "Use the support server for bug reports, setup help, and product questions. Sharing "
+            "what happened, where it happened, and what you expected makes fixes much faster."
+        ),
+        inline=False,
+    )
+    _add_links_field(budget)
     return budget.build()
 
 
@@ -160,10 +211,8 @@ def build_about_embed() -> discord.Embed:
         ),
         inline=False,
     )
-    version_line = f"Version: `{package_version}`"
-    if repo_url is not None:
-        version_line = f"{version_line}\nRepository: {repo_url}"
-    budget.add_field(name="Version", value=version_line, inline=False)
+    budget.add_field(name="Version", value=f"Version: `{package_version}`", inline=False)
+    _add_links_field(budget, repository_url=repo_url)
     return budget.build()
 
 
@@ -174,15 +223,34 @@ def _package_version() -> str:
         return "unavailable"
 
 
-def _repository_url() -> str | None:
+def _add_links_field(
+    budget: BudgetedEmbed,
+    *,
+    repository_url: str | None = None,
+) -> None:
+    budget.add_field(
+        name="Links",
+        value=_links_field_value(repository_url or _repository_url()),
+        inline=False,
+    )
+
+
+def _links_field_value(repository_url: str) -> str:
+    return (
+        f"Support server: {SUPPORT_SERVER_URL}\n"
+        f"Official website: {OFFICIAL_WEBSITE_URL}\n"
+        f"GitHub: {repository_url}"
+    )
+
+
+def _repository_url() -> str:
     try:
         package_metadata = metadata("bdayblaze")
     except PackageNotFoundError:
-        return None
+        return REPOSITORY_FALLBACK_URL
     project_urls = cast(list[str], package_metadata.get_all("Project-URL") or [])
     for value in project_urls:
         label, _, url = value.partition(",")
         if label.strip().lower() == "repository" and url.strip():
             return url.strip()
-    return None
-
+    return REPOSITORY_FALLBACK_URL

@@ -240,6 +240,7 @@ def test_admin_status_and_info_embeds_stay_within_discord_limits() -> None:
 
     embeds = [
         info.build_help_embed(),
+        info.build_support_embed(),
         info.build_about_embed(),
         _build_dry_run_status_embed(
             readiness,
