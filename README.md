@@ -1,4 +1,4 @@
-![Bdayblaze banner](assets/banner.png)
+![Bdayblaze banner](assets/banner.jpg)
 
 # Bdayblaze
 

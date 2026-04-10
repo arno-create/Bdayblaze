@@ -155,25 +155,25 @@
     return;
   }
 
-  const heroMedia = document.querySelector(".hero-media");
-  if (!(heroMedia instanceof HTMLElement)) {
+  const heroStage = document.querySelector(".hero-stage");
+  if (!(heroStage instanceof HTMLElement)) {
     return;
   }
 
   const resetPointer = () => {
-    heroMedia.style.setProperty("--pointer-x", "0");
-    heroMedia.style.setProperty("--pointer-y", "0");
+    heroStage.style.setProperty("--pointer-x", "0");
+    heroStage.style.setProperty("--pointer-y", "0");
   };
 
-  heroMedia.addEventListener("pointermove", (event) => {
-    const rect = heroMedia.getBoundingClientRect();
+  heroStage.addEventListener("pointermove", (event) => {
+    const rect = heroStage.getBoundingClientRect();
     const normalizedX = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     const normalizedY = ((event.clientY - rect.top) / rect.height) * 2 - 1;
 
-    heroMedia.style.setProperty("--pointer-x", normalizedX.toFixed(3));
-    heroMedia.style.setProperty("--pointer-y", normalizedY.toFixed(3));
+    heroStage.style.setProperty("--pointer-x", normalizedX.toFixed(3));
+    heroStage.style.setProperty("--pointer-y", normalizedY.toFixed(3));
   });
 
-  heroMedia.addEventListener("pointerleave", resetPointer);
+  heroStage.addEventListener("pointerleave", resetPointer);
   resetPointer();
 })();
