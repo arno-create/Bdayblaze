@@ -32,9 +32,9 @@ def test_homepage_and_legal_pages_link_help_and_use_real_banner_asset() -> None:
     assert "./help/" in index_html
     assert "../help/" in privacy_html
     assert "../help/" in terms_html
-    assert "assets/banner.jpg" in index_html
-    assert "assets/banner.jpg" in privacy_html
-    assert "assets/banner.jpg" in terms_html
+    assert "assets/banner.png" in index_html
+    assert "assets/banner.png" in privacy_html
+    assert "assets/banner.png" in terms_html
     assert "banner.png" not in index_html
     assert "banner.png" not in privacy_html
     assert "banner.png" not in terms_html
@@ -48,5 +48,5 @@ def test_sitemap_and_readme_include_help_page() -> None:
 
     assert "https://arno-create.github.io/Bdayblaze/help/" in sitemap_xml
     assert "[Help and FAQ](https://arno-create.github.io/Bdayblaze/help/)" in readme
-    assert "assets/banner.jpg" in readme
+    assert "assets/banner.png" in readme
     assert "/birthdayadmin setup" in readme
