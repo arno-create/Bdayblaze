@@ -37,6 +37,12 @@ class Settings:
     guild_sync_ids: tuple[int, ...]
     bind_host: str
     bind_port: int | None
+    topgg_enabled: bool
+    topgg_bot_id: int
+    topgg_webhook_secret: str
+    topgg_token: str
+    topgg_v2_replay_window_seconds: int
+    topgg_refresh_cooldown_seconds: int
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -58,4 +64,10 @@ class Settings:
             guild_sync_ids=_parse_int_list("BDAYBLAZE_GUILD_SYNC_IDS"),
             bind_host=getenv("BDAYBLAZE_BIND_HOST", "0.0.0.0").strip() or "0.0.0.0",
             bind_port=int(port) if port else None,
+            topgg_enabled=_parse_bool("TOPGG_ENABLED", False),
+            topgg_bot_id=_parse_int("TOPGG_BOT_ID", 1485920716573380660),
+            topgg_webhook_secret=getenv("TOPGG_WEBHOOK_SECRET", "").strip(),
+            topgg_token=getenv("TOPGG_TOKEN", "").strip(),
+            topgg_v2_replay_window_seconds=_parse_int("TOPGG_V2_REPLAY_WINDOW_SECONDS", 300),
+            topgg_refresh_cooldown_seconds=_parse_int("TOPGG_REFRESH_COOLDOWN_SECONDS", 60),
         )

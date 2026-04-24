@@ -226,6 +226,7 @@ class ExperienceService:
         target_user_id: int,
         wish_text: str,
         link_url: str | None,
+        max_wish_length: int = 350,
         now_utc: datetime | None = None,
     ) -> BirthdayWish:
         if author_user_id == target_user_id:
@@ -250,8 +251,10 @@ class ExperienceService:
         normalized_text = wish_text.strip()
         if not normalized_text:
             raise ValidationError("Birthday wish text cannot be blank.")
-        if len(normalized_text) > 350:
-            raise ValidationError("Birthday wish text must be 350 characters or fewer.")
+        if len(normalized_text) > max_wish_length:
+            raise ValidationError(
+                f"Birthday wish text must be {max_wish_length} characters or fewer."
+            )
         ensure_safe_text(normalized_text, label="Birthday wish")
         normalized_link = None
         if link_url is not None and link_url.strip():
@@ -416,6 +419,7 @@ class ExperienceService:
         target_user_id: int,
         viewer_user_id: int,
         admin_override: bool,
+        history_entry_limit: int = _TIMELINE_ENTRY_LIMIT,
         now_utc: datetime | None = None,
     ) -> BirthdayTimeline:
         birthday, guild_settings = await self._require_birthday_context(guild_id, target_user_id)
@@ -458,7 +462,7 @@ class ExperienceService:
         entries = await self._repository.list_recent_birthday_celebrations(
             guild_id,
             target_user_id,
-            limit=_TIMELINE_ENTRY_LIMIT,
+            limit=history_entry_limit,
         )
         streak_scan = await self._repository.list_recent_birthday_celebrations(
             guild_id,

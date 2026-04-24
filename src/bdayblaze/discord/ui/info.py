@@ -55,7 +55,8 @@ def build_help_embed() -> discord.Embed:
             "2. Server admins should open `/birthdayadmin setup` for routing, timezone, "
             "and safety rules.\n"
             "3. Use `/birthdayadmin studio` for copy, style, previews, and celebration design.\n"
-            "4. Use `/birthdayadmin test-message` before going live."
+            "4. Use `/birthdayadmin test-message` before going live.\n"
+            "5. Use `/vote` if this deployment enables the temporary Top.gg vote bonus."
         ),
         inline=False,
     )
@@ -66,6 +67,7 @@ def build_help_embed() -> discord.Embed:
             "`/birthday view` See your saved record.\n"
             "`/birthday remove` Delete your server-scoped data.\n"
             "`/birthday privacy` Review visibility and privacy defaults.\n"
+            "`/vote` Check your temporary Top.gg vote bonus status.\n"
             "`/birthday today` Show birthdays currently active under bot celebration logic.\n"
             "`/birthday next` See the nearest upcoming birthday.\n"
             "`/birthday upcoming` Browse upcoming visible birthdays.\n"

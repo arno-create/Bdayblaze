@@ -29,6 +29,7 @@ from bdayblaze.domain.models import (
     BirthdayDisplayState,
     BirthdayPreview,
     BirthdayTimeline,
+    TimelineEntry,
     GuildSettings,
     MemberBirthday,
     RecurringCelebration,
@@ -552,6 +553,52 @@ def test_build_timeline_embed_uses_recovering_description() -> None:
 
     assert "Late recovery is still pending" in embed.description
     assert _timeline_is_active_now(timeline) is False
+
+
+def test_build_timeline_embed_points_to_vote_when_history_is_truncated() -> None:
+    timeline = BirthdayTimeline(
+        birthday=FakeBirthdayService().birthday,
+        active_celebration=None,
+        display_state=BirthdayDisplayState(
+            status="upcoming",
+            relevant_occurrence_at_utc=datetime(2027, 3, 24, tzinfo=UTC),
+            next_future_occurrence_at_utc=datetime(2027, 3, 24, tzinfo=UTC),
+        ),
+        celebration_count=12,
+        celebration_streak=4,
+        wishes_received_count=10,
+        quest_badge_count=3,
+        surprise_count=1,
+        featured_count=1,
+        next_countdown_at_utc=datetime(2027, 3, 24, tzinfo=UTC),
+        same_day_count=1,
+        month_total_count=2,
+        zodiac_label="Aries",
+        entries=(
+            TimelineEntry(
+                celebration_id=1,
+                occurrence_start_at_utc=datetime(2026, 3, 24, tzinfo=UTC),
+                late_delivery=False,
+                revealed_wish_count=2,
+                quest_completed=True,
+                featured_birthday=False,
+                surprise_reward_type=None,
+                surprise_reward_label=None,
+                nitro_fulfillment_status=None,
+            ),
+        ),
+    )
+
+    embed = _build_timeline_embed(
+        SimpleNamespace(display_name="Jamie"),
+        timeline,
+        active_now=False,
+        show_vote_bonus_hint=True,
+    )
+
+    vote_field = next(field for field in embed.fields if field.name == "Vote bonus")
+    assert "/vote" in vote_field.value
+    assert "12 celebrations" in vote_field.value
 
 
 def _cog() -> tuple[BirthdayGroup, BirthdayAdminGroup]:

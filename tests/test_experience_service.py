@@ -365,6 +365,49 @@ async def test_add_wish_saves_safe_https_link() -> None:
 
 
 @pytest.mark.asyncio
+async def test_add_wish_respects_expanded_vote_bonus_character_limit() -> None:
+    repository = FakeExperienceRepository()
+    repository.experience_settings = replace(
+        GuildExperienceSettings.default(1),
+        capsules_enabled=True,
+    )
+    service = ExperienceService(repository)  # type: ignore[arg-type]
+
+    wish = await service.add_wish(
+        guild_id=1,
+        author_user_id=7,
+        target_user_id=42,
+        wish_text="x" * 500,
+        link_url=None,
+        max_wish_length=500,
+        now_utc=datetime(2026, 3, 24, 12, tzinfo=UTC),
+    )
+
+    assert len(wish.wish_text) == 500
+
+
+@pytest.mark.asyncio
+async def test_build_timeline_respects_vote_bonus_entry_limit() -> None:
+    repository = FakeExperienceRepository()
+    repository.timeline_entries = [
+        replace(entry, celebration_id=index + 1)
+        for index, entry in enumerate(repository.timeline_entries * 8)
+    ]
+    service = ExperienceService(repository)  # type: ignore[arg-type]
+
+    timeline = await service.build_timeline(
+        guild_id=1,
+        target_user_id=42,
+        viewer_user_id=42,
+        admin_override=False,
+        history_entry_limit=12,
+        now_utc=datetime(2026, 3, 24, 12, tzinfo=UTC),
+    )
+
+    assert len(timeline.entries) == 12
+
+
+@pytest.mark.asyncio
 async def test_timeline_respects_private_visibility_without_admin_override() -> None:
     repository = FakeExperienceRepository()
     service = ExperienceService(repository)  # type: ignore[arg-type]

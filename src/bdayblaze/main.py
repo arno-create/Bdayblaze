@@ -28,6 +28,7 @@ from bdayblaze.services.scheduler import (
     DirectSendResult,
 )
 from bdayblaze.services.settings_service import SettingsService
+from bdayblaze.services.vote_service import VoteService
 
 
 async def _build_container(settings: Settings, runtime_status: RuntimeStatus) -> ServiceContainer:
@@ -62,6 +63,7 @@ async def _build_container(settings: Settings, runtime_status: RuntimeStatus) ->
             recovery_grace_hours=settings.recovery_grace_hours,
         )
         settings_service = SettingsService(repository)
+        vote_service = VoteService(repository, settings=settings)
         studio_audit_logger = StudioAuditLogger(settings_service)
         metrics = SchedulerMetrics()
         placeholder_gateway = _DeferredGateway()
@@ -93,6 +95,7 @@ async def _build_container(settings: Settings, runtime_status: RuntimeStatus) ->
             runtime_status=runtime_status,
             scheduler_service=scheduler_service,
             scheduler_runner=BirthdaySchedulerRunner(scheduler_service, runtime_status),
+            vote_service=vote_service,
         )
     except Exception:
         await pool.close()
@@ -113,6 +116,7 @@ async def _run_bot(settings: Settings) -> None:
             host=settings.bind_host,
             port=settings.bind_port,
             scheduler_max_sleep_seconds=settings.scheduler_max_sleep_seconds,
+            vote_service=container.vote_service,
         )
         if settings.bind_port is not None
         else None

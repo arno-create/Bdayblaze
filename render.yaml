@@ -23,3 +23,11 @@ services:
         value: "300"
       - key: BDAYBLAZE_SCHEDULER_BATCH_SIZE
         value: "25"
+      - key: TOPGG_ENABLED
+        value: "false"
+      - key: TOPGG_BOT_ID
+        value: "1485920716573380660"
+      - key: TOPGG_WEBHOOK_SECRET
+        sync: false
+      - key: TOPGG_TOKEN
+        sync: false

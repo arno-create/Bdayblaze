@@ -11,6 +11,7 @@ from discord.ext import commands
 from bdayblaze.container import ServiceContainer
 from bdayblaze.discord.cogs.birthday import BirthdayAdminGroup, BirthdayGroup
 from bdayblaze.discord.cogs.info import InfoCog
+from bdayblaze.discord.cogs.vote import VoteCog
 from bdayblaze.logging import get_logger, redact_identifier
 from bdayblaze.services.diagnostics import classify_discord_http_failure
 from bdayblaze.services.errors import BdayblazeError
@@ -64,6 +65,7 @@ class BdayblazeBot(commands.Bot):
             )
         )
         await self.add_cog(InfoCog())
+        await self.add_cog(VoteCog(self.container.vote_service))
         if self.container.settings.guild_sync_ids:
             for guild_id in self.container.settings.guild_sync_ids:
                 await self.tree.sync(guild=discord.Object(id=guild_id))

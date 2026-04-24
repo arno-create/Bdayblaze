@@ -8,6 +8,9 @@ from typing import Any
 
 from bdayblaze.domain.models import RuntimeStatus, SchedulerMetrics
 from bdayblaze.logging import get_logger
+from bdayblaze.services.vote_service import VoteService
+
+_MAX_REQUEST_BODY_BYTES = 64 * 1024
 
 
 @dataclass(slots=True)
@@ -17,6 +20,7 @@ class HttpHealthServer:
     host: str
     port: int
     scheduler_max_sleep_seconds: int
+    vote_service: VoteService | None = None
     _server: asyncio.base_events.Server | None = field(init=False, default=None)
     _logger: Any = field(init=False)
 
@@ -51,47 +55,101 @@ class HttpHealthServer:
             await writer.wait_closed()
             return
 
-        path = "/"
+        method = "GET"
+        raw_path = "/"
         try:
             parts = request_line.decode("ascii", errors="ignore").strip().split()
             if len(parts) >= 2:
-                path = parts[1]
-        finally:
-            while True:
-                line = await reader.readline()
-                if not line or line in {b"\r\n", b"\n"}:
-                    break
+                method = parts[0].upper()
+                raw_path = parts[1]
+            headers = await self._read_headers(reader)
+            body = await self._read_body(reader, headers)
+            path = raw_path.split("?", 1)[0] or "/"
+            status_code, response_body, content_type = await self._route_request(
+                method=method,
+                path=path,
+                headers=headers,
+                body=body,
+            )
+        except _BodyTooLarge:
+            status_code = "413 Payload Too Large"
+            response_body = dumps({"status": "payload_too_large"}).encode("utf-8")
+            content_type = "application/json"
+        except Exception:
+            self._logger.exception("http_request_failed")
+            status_code = "500 Internal Server Error"
+            response_body = dumps({"status": "internal_error"}).encode("utf-8")
+            content_type = "application/json"
 
-        if path == "/":
-            status_code = "200 OK"
-            body = self._build_root_page().encode("utf-8")
-            content_type = "text/html; charset=utf-8"
-        elif path in {"/health", "/healthz", "/livez", "/readyz"}:
-            status_code, payload = self._build_response(path)
-            body = dumps(payload).encode("utf-8")
-            content_type = "application/json"
-        else:
-            status_code = "404 Not Found"
-            body = dumps({"status": "not_found"}).encode("utf-8")
-            content_type = "application/json"
         writer.write(
             (
                 f"HTTP/1.1 {status_code}\r\n"
                 f"Content-Type: {content_type}\r\n"
-                f"Content-Length: {len(body)}\r\n"
+                f"Content-Length: {len(response_body)}\r\n"
                 "Connection: close\r\n"
                 "\r\n"
             ).encode("ascii")
         )
-        writer.write(body)
+        writer.write(response_body)
         await writer.drain()
         writer.close()
         await writer.wait_closed()
 
+    async def _route_request(
+        self,
+        *,
+        method: str,
+        path: str,
+        headers: dict[str, str],
+        body: bytes,
+    ) -> tuple[str, bytes, str]:
+        if path == "/" and method == "GET":
+            return (
+                "200 OK",
+                self._build_root_page().encode("utf-8"),
+                "text/html; charset=utf-8",
+            )
+        if path in {"/health", "/healthz", "/livez", "/readyz"} and method == "GET":
+            status_code, payload = self._build_response(path)
+            return status_code, dumps(payload).encode("utf-8"), "application/json"
+        if path == "/topgg/webhook":
+            if method != "POST":
+                return (
+                    "405 Method Not Allowed",
+                    dumps({"status": "method_not_allowed"}).encode("utf-8"),
+                    "application/json",
+                )
+            if self.vote_service is None:
+                return (
+                    "503 Service Unavailable",
+                    dumps(
+                        {
+                            "status": "disabled",
+                            "message": "Top.gg vote bonus is unavailable in this runtime.",
+                        }
+                    ).encode("utf-8"),
+                    "application/json",
+                )
+            result = await self.vote_service.handle_webhook(
+                headers=headers,
+                raw_body=body,
+                now_utc=datetime.now(UTC),
+            )
+            return (
+                _http_status_text(result.http_status),
+                dumps(result.payload).encode("utf-8"),
+                "application/json",
+            )
+        return (
+            "404 Not Found",
+            dumps({"status": "not_found"}).encode("utf-8"),
+            "application/json",
+        )
+
     def _build_response(
         self,
         path: str = "/healthz",
-    ) -> tuple[str, dict[str, str | int | bool | None]]:
+    ) -> tuple[str, dict[str, object]]:
         if path == "/livez":
             return (
                 "200 OK",
@@ -114,7 +172,7 @@ class HttpHealthServer:
             detail,
         )
 
-    def _detail_payload(self) -> dict[str, str | int | bool | None]:
+    def _detail_payload(self) -> dict[str, object]:
         stale_window = timedelta(seconds=max(self.scheduler_max_sleep_seconds * 2, 600))
         now_utc = datetime.now(UTC)
         last_iteration = self.metrics.last_iteration_at_utc
@@ -142,7 +200,21 @@ class HttpHealthServer:
         else:
             status = "ready"
 
-        return {
+        topgg = self._safe_topgg_diagnostics()
+        if (
+            topgg is not None
+            and topgg["enabled"]
+            and (
+                topgg["configuration_state"] != "ready"
+                or not topgg["storage_ready"]
+                or not topgg["runtime_attached"]
+                or not topgg["public_routes_ready"]
+            )
+            and status == "ready"
+        ):
+            status = "degraded"
+
+        payload: dict[str, object] = {
             "status": status,
             "phase": self.runtime_status.startup_phase,
             "utc": now_utc.isoformat(),
@@ -179,6 +251,52 @@ class HttpHealthServer:
                 self.runtime_status.scheduler_recovery_failed_at_utc
             ),
             "unexpected_shutdown_at_utc": _iso(self.runtime_status.unexpected_shutdown_at_utc),
+        }
+        if topgg is not None:
+            payload["topgg"] = topgg
+        return payload
+
+    async def _read_headers(self, reader: asyncio.StreamReader) -> dict[str, str]:
+        headers: dict[str, str] = {}
+        while True:
+            line = await reader.readline()
+            if not line or line in {b"\r\n", b"\n"}:
+                break
+            decoded = line.decode("ascii", errors="ignore").strip()
+            name, _, value = decoded.partition(":")
+            if not name:
+                continue
+            headers[name.lower()] = value.strip()
+        return headers
+
+    async def _read_body(
+        self,
+        reader: asyncio.StreamReader,
+        headers: dict[str, str],
+    ) -> bytes:
+        content_length = int(headers.get("content-length", "0") or "0")
+        if content_length <= 0:
+            return b""
+        if content_length > _MAX_REQUEST_BODY_BYTES:
+            raise _BodyTooLarge
+        return await reader.readexactly(content_length)
+
+    def _safe_topgg_diagnostics(self) -> dict[str, object] | None:
+        if self.vote_service is None:
+            return None
+        snapshot = self.vote_service.diagnostics_snapshot()
+        return {
+            "enabled": bool(snapshot.get("enabled")),
+            "configuration_state": snapshot.get("configuration_state"),
+            "configuration_message": snapshot.get("configuration_message"),
+            "webhook_mode": snapshot.get("webhook_mode"),
+            "storage_ready": bool(snapshot.get("storage_ready")),
+            "storage_backend": snapshot.get("storage_backend"),
+            "runtime_attached": True,
+            "public_routes_ready": True,
+            "refresh_available": bool(snapshot.get("refresh_available")),
+            "refresh_cooldown_seconds": snapshot.get("refresh_cooldown_seconds"),
+            "timing_source": snapshot.get("timing_source"),
         }
 
     def _build_root_page(self) -> str:
@@ -270,5 +388,21 @@ class HttpHealthServer:
 """
 
 
+def _http_status_text(status_code: int) -> str:
+    return {
+        200: "200 OK",
+        400: "400 Bad Request",
+        404: "404 Not Found",
+        405: "405 Method Not Allowed",
+        413: "413 Payload Too Large",
+        500: "500 Internal Server Error",
+        503: "503 Service Unavailable",
+    }.get(status_code, f"{status_code} Unknown")
+
+
 def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
+
+
+class _BodyTooLarge(Exception):
+    pass

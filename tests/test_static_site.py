@@ -40,6 +40,8 @@ def test_homepage_and_legal_pages_link_help_and_use_real_banner_asset() -> None:
     assert "banner.png" not in terms_html
     assert "/birthdayadmin" in index_html
     assert "/birthdayadmin member remove" in privacy_html
+    assert "Premium Birthday Bot" not in index_html
+    assert "premium, privacy-first" not in index_html
 
 
 def test_sitemap_and_readme_include_help_page() -> None:
@@ -50,3 +52,14 @@ def test_sitemap_and_readme_include_help_page() -> None:
     assert "[Help and FAQ](https://arno-create.github.io/Bdayblaze/help/)" in readme
     assert "assets/banner.jpg" in readme
     assert "/birthdayadmin setup" in readme
+
+
+def test_env_example_and_runtime_config_document_topgg_as_opt_in() -> None:
+    env_example = _read_text(".env.example")
+    render_yaml = _read_text("render.yaml")
+
+    assert "TOPGG_ENABLED=false" in env_example
+    assert "TOPGG_WEBHOOK_SECRET=" in env_example
+    assert "TOPGG_TOKEN=" in env_example
+    assert "TOPGG_BOT_ID=1485920716573380660" in env_example
+    assert "TOPGG_ENABLED" in render_yaml

@@ -13,6 +13,7 @@ Bdayblaze is a production-minded Discord birthday bot built for polished celebra
 - Timeline cards give members a countdown, active celebration state, and compact history.
 - Celebration Studio and Birthday Setup keep previews, routing, media checks, and safety controls inside Discord.
 - Scheduler recovery, health endpoints, and compact analytics are designed for real deployments, not demo-only flows.
+- Optional Top.gg voting can unlock a temporary utility boost for the voter. It is opt-in per deployment, disabled by default, and not a premium tier.
 
 ## Product surfaces
 
@@ -37,6 +38,7 @@ Birthday Setup handles channel routing, eligibility, roles, anniversary behavior
 2. Copy `.env.example` to `.env` and set:
    - `DISCORD_TOKEN`
    - `DATABASE_URL`
+   - optionally `TOPGG_ENABLED=true`, `TOPGG_WEBHOOK_SECRET`, and `TOPGG_TOKEN` if you want the Top.gg vote bonus lane
 
 3. Run migrations.
 
@@ -56,6 +58,7 @@ Top-level:
 
 - `/help`
 - `/about`
+- `/vote`
 
 Members:
 
@@ -86,6 +89,7 @@ Admin migration note:
 
 - Render should run the bot runtime and health endpoints only.
 - The public marketing site is a separate static bundle served from the repository root.
+- Top.gg voting is opt-in, disabled by default, temporary, utility-only, and not a premium tier.
 - Canonical static entrypoint: [`index.html`](index.html)
 - Canonical static assets: [`styles.css`](styles.css), [`site.js`](site.js), [`.nojekyll`](.nojekyll), and [`assets/`](assets/)
 - GitHub Pages should publish `main / (root)` so the landing page plus `privacy/index.html` and `terms/index.html` are served from the same source of truth.

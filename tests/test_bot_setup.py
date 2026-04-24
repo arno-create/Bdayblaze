@@ -20,12 +20,13 @@ def _bot(
 
     bot = BdayblazeBot(
         SimpleNamespace(
-        birthday_service=object(),
-        experience_service=object(),
-        settings_service=object(),
-        health_service=object(),
-        studio_audit_logger=object(),
-        settings=SimpleNamespace(guild_sync_ids=list(guild_sync_ids)),
+            birthday_service=object(),
+            experience_service=object(),
+            settings_service=object(),
+            health_service=object(),
+            studio_audit_logger=object(),
+            vote_service=object(),
+            settings=SimpleNamespace(guild_sync_ids=list(guild_sync_ids)),
         )
     )
     bot._logger = FakeLogger()
@@ -56,7 +57,12 @@ async def test_setup_hook_registers_public_and_admin_cogs_before_global_sync() -
 
     await bot.setup_hook()
 
-    assert [type(cog) for cog in added_cogs] == [BirthdayGroup, BirthdayAdminGroup, InfoCog]
+    assert [type(cog).__name__ for cog in added_cogs] == [
+        "BirthdayGroup",
+        "BirthdayAdminGroup",
+        "InfoCog",
+        "VoteCog",
+    ]
     assert len(error_handlers) == 1
     assert error_handlers[0].__self__ is bot
     assert error_handlers[0].__func__ is BdayblazeBot.on_app_command_error
@@ -69,5 +75,10 @@ async def test_setup_hook_preserves_guild_scoped_sync_behavior() -> None:
 
     await bot.setup_hook()
 
-    assert [type(cog) for cog in added_cogs] == [BirthdayGroup, BirthdayAdminGroup, InfoCog]
+    assert [type(cog).__name__ for cog in added_cogs] == [
+        "BirthdayGroup",
+        "BirthdayAdminGroup",
+        "InfoCog",
+        "VoteCog",
+    ]
     assert [guild.id for guild in sync_calls] == [101, 202]

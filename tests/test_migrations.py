@@ -23,3 +23,15 @@ def test_processing_index_migration_adds_partial_processing_started_index() -> N
     assert "CREATE INDEX IF NOT EXISTS celebration_events_processing_started_idx" in sql
     assert "ON celebration_events (processing_started_at_utc)" in sql
     assert "WHERE state = 'processing'" in sql
+
+
+def test_topgg_vote_receipts_migration_creates_ledger_and_indexes() -> None:
+    sql = Path("migrations/011_topgg_vote_receipts.sql").read_text(encoding="utf-8")
+
+    assert "CREATE TABLE IF NOT EXISTS topgg_vote_receipts" in sql
+    assert "event_id TEXT PRIMARY KEY" in sql
+    assert "discord_user_id BIGINT NOT NULL" in sql
+    assert "payload_hash TEXT NOT NULL" in sql
+    assert "vote_created_at TIMESTAMPTZ" in sql
+    assert "vote_expires_at TIMESTAMPTZ" in sql
+    assert "CREATE INDEX IF NOT EXISTS idx_topgg_vote_receipts_user_expires" in sql

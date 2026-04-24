@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 from calendar import month_name
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import discord
@@ -443,17 +443,31 @@ class BirthdayGroup(
         self,
         interaction: discord.Interaction,
         member: discord.Member,
-        message: app_commands.Range[str, 1, 350],
+        message: app_commands.Range[str, 1, 500],
         link: str | None = None,
     ) -> None:
         assert interaction.guild is not None
         await interaction.response.defer(ephemeral=True)
+        vote_status = await _get_vote_bonus_status(interaction)
+        wish_character_limit = (
+            getattr(vote_status, "wish_character_limit", 350) if vote_status is not None else 350
+        )
+        if len(message.strip()) > wish_character_limit:
+            await interaction.followup.send(
+                _build_wish_length_message(
+                    vote_status=vote_status,
+                    wish_character_limit=wish_character_limit,
+                ),
+                ephemeral=True,
+            )
+            return
         wish = await self._experience_service.add_wish(
             guild_id=interaction.guild.id,
             author_user_id=interaction.user.id,
             target_user_id=member.id,
             wish_text=message,
             link_url=link,
+            max_wish_length=wish_character_limit,
         )
         embed = discord.Embed(
             title="Birthday wish queued",
@@ -620,11 +634,20 @@ class BirthdayGroup(
         assert interaction.guild is not None
         await interaction.response.defer(ephemeral=True)
         target = member or interaction.user
+        vote_status = (
+            await _get_vote_bonus_status(interaction)
+            if target.id == interaction.user.id
+            else None
+        )
+        history_entry_limit = (
+            getattr(vote_status, "timeline_entry_limit", 6) if vote_status is not None else 6
+        )
         timeline = await self._experience_service.build_timeline(
             guild_id=interaction.guild.id,
             target_user_id=target.id,
             viewer_user_id=interaction.user.id,
             admin_override=False,
+            history_entry_limit=history_entry_limit,
         )
         if await _refresh_live_quest_progress(
             interaction,
@@ -635,12 +658,20 @@ class BirthdayGroup(
                 target_user_id=target.id,
                 viewer_user_id=interaction.user.id,
                 admin_override=False,
+                history_entry_limit=history_entry_limit,
             )
         await interaction.followup.send(
             embed=_build_timeline_embed(
                 target,
                 timeline,
                 active_now=_timeline_is_active_now(timeline),
+                show_vote_bonus_hint=(
+                    target.id == interaction.user.id
+                    and vote_status is not None
+                    and not bool(getattr(vote_status, "active", False))
+                    and bool(getattr(vote_status, "enabled", True))
+                    and timeline.celebration_count > len(timeline.entries)
+                ),
             ),
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
@@ -2818,6 +2849,7 @@ def _build_timeline_embed(
     timeline: BirthdayTimeline,
     *,
     active_now: bool,
+    show_vote_bonus_hint: bool = False,
 ) -> discord.Embed:
     if active_now:
         description = "Celebration is live today."
@@ -2957,7 +2989,37 @@ def _build_timeline_embed(
                 line = f"{line} - {', '.join(notes)}"
             lines.append(line)
         embed.add_line_fields("Recent celebrations", lines, inline=False)
+    if show_vote_bonus_hint:
+        embed.add_field(
+            name="Vote bonus",
+            value=(
+                "Need more history? `/vote` can temporarily expand your private timeline to "
+                "12 celebrations."
+            ),
+            inline=False,
+        )
     return embed.build()
+
+
+async def _get_vote_bonus_status(interaction: discord.Interaction) -> Any | None:
+    container = getattr(getattr(interaction, "client", None), "container", None)
+    vote_service = getattr(container, "vote_service", None)
+    if vote_service is None:
+        return None
+    return await vote_service.get_vote_bonus_status(interaction.user.id)
+
+
+def _build_wish_length_message(
+    *,
+    vote_status: Any | None,
+    wish_character_limit: int,
+) -> str:
+    if vote_status is not None and bool(getattr(vote_status, "enabled", True)):
+        return (
+            f"Birthday Capsule wishes are limited to {wish_character_limit} characters right now. "
+            "`/vote` can raise that limit to 500 temporarily."
+        )
+    return f"Birthday Capsule wishes are limited to {wish_character_limit} characters right now."
 
 
 def _build_analytics_embed(analytics: GuildAnalytics) -> discord.Embed:

@@ -39,6 +39,7 @@ from bdayblaze.domain.models import (
     TimelineEntry,
     TrackedAnniversary,
 )
+from bdayblaze.domain.topgg import TopggVoteReceipt
 
 
 class PostgresRepository:
@@ -243,6 +244,92 @@ class PostgresRepository:
                 settings.surprises_enabled,
             )
         return self._map_guild_experience_settings(row)
+
+    async def insert_topgg_vote_receipt(
+        self,
+        receipt: TopggVoteReceipt,
+    ) -> bool:
+        async with self._pool.acquire() as connection:
+            result = await connection.execute(
+                """
+                INSERT INTO topgg_vote_receipts (
+                    event_id,
+                    discord_user_id,
+                    event_type,
+                    webhook_mode,
+                    payload_hash,
+                    trace_id,
+                    signature_timestamp,
+                    vote_created_at,
+                    vote_expires_at,
+                    timing_source,
+                    weight,
+                    received_at,
+                    processed_at,
+                    status,
+                    error_text
+                )
+                VALUES (
+                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                    $11, $12, $13, $14, $15
+                )
+                ON CONFLICT (event_id) DO NOTHING
+                """,
+                receipt.event_id,
+                receipt.discord_user_id,
+                receipt.event_type,
+                receipt.webhook_mode,
+                receipt.payload_hash,
+                receipt.trace_id,
+                receipt.signature_timestamp,
+                receipt.vote_created_at,
+                receipt.vote_expires_at,
+                receipt.timing_source,
+                receipt.weight,
+                receipt.received_at,
+                receipt.processed_at,
+                receipt.status,
+                receipt.error_text,
+            )
+        return _parse_affected_rows(result) == 1
+
+    async def fetch_latest_topgg_vote_receipt(
+        self,
+        discord_user_id: int,
+    ) -> TopggVoteReceipt | None:
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(
+                """
+                SELECT *
+                FROM topgg_vote_receipts
+                WHERE discord_user_id = $1
+                  AND status = 'processed'
+                ORDER BY COALESCE(processed_at, received_at) DESC, received_at DESC
+                LIMIT 1
+                """,
+                discord_user_id,
+            )
+        return self._map_topgg_vote_receipt(row) if row is not None else None
+
+    async def list_recent_topgg_vote_receipts(
+        self,
+        discord_user_id: int,
+        *,
+        limit: int,
+    ) -> list[TopggVoteReceipt]:
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(
+                """
+                SELECT *
+                FROM topgg_vote_receipts
+                WHERE discord_user_id = $1
+                ORDER BY COALESCE(processed_at, received_at) DESC, received_at DESC
+                LIMIT $2
+                """,
+                discord_user_id,
+                limit,
+            )
+        return [self._map_topgg_vote_receipt(row) for row in rows]
 
     async def list_guild_surprise_rewards(self, guild_id: int) -> list[GuildSurpriseReward]:
         async with self._pool.acquire() as connection:
@@ -3444,6 +3531,26 @@ class PostgresRepository:
             send_started_at_utc=row["send_started_at_utc"],
             created_at_utc=row["created_at_utc"],
             updated_at_utc=row["updated_at_utc"],
+        )
+
+    @staticmethod
+    def _map_topgg_vote_receipt(row: asyncpg.Record) -> TopggVoteReceipt:
+        return TopggVoteReceipt(
+            event_id=row["event_id"],
+            discord_user_id=row["discord_user_id"],
+            event_type=row["event_type"],
+            webhook_mode=row["webhook_mode"],
+            payload_hash=row["payload_hash"],
+            trace_id=row["trace_id"],
+            signature_timestamp=row["signature_timestamp"],
+            vote_created_at=row["vote_created_at"],
+            vote_expires_at=row["vote_expires_at"],
+            timing_source=row["timing_source"],
+            weight=row["weight"],
+            received_at=row["received_at"],
+            processed_at=row["processed_at"],
+            status=row["status"],
+            error_text=row["error_text"],
         )
 
 

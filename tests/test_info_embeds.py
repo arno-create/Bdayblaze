@@ -17,6 +17,7 @@ def test_build_help_embed_mentions_operator_flows() -> None:
 
     assert "Bdayblaze Help" in (embed.title or "")
     assert any(field.name == "Getting started" for field in embed.fields)
+    assert "/vote" in embed.fields[0].value
     assert "/birthdayadmin test-message" in embed.fields[0].value
     assert "/birthdayadmin studio" in embed.fields[0].value
     user_field = next(field for field in embed.fields if field.name == "User commands")
@@ -43,6 +44,7 @@ def test_build_help_embed_mentions_operator_flows() -> None:
     assert info.OFFICIAL_WEBSITE_URL in links_field.value
     assert info.REPOSITORY_FALLBACK_URL in links_field.value
     assert info.HELP_DOCS_URL in (embed.footer.text or "")
+    assert "premium" not in (embed.description or "").lower()
 
 
 def test_build_support_embed_thanks_users_and_includes_links() -> None:

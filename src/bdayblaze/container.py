@@ -13,6 +13,7 @@ from bdayblaze.services.experience_service import ExperienceService
 from bdayblaze.services.health_service import HealthService
 from bdayblaze.services.scheduler import BirthdaySchedulerRunner, BirthdaySchedulerService
 from bdayblaze.services.settings_service import SettingsService
+from bdayblaze.services.vote_service import VoteService
 
 
 @dataclass(slots=True)
@@ -29,3 +30,4 @@ class ServiceContainer:
     runtime_status: RuntimeStatus
     scheduler_service: BirthdaySchedulerService
     scheduler_runner: BirthdaySchedulerRunner
+    vote_service: VoteService
