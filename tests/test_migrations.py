@@ -35,3 +35,15 @@ def test_topgg_vote_receipts_migration_creates_ledger_and_indexes() -> None:
     assert "vote_created_at TIMESTAMPTZ" in sql
     assert "vote_expires_at TIMESTAMPTZ" in sql
     assert "CREATE INDEX IF NOT EXISTS idx_topgg_vote_receipts_user_expires" in sql
+
+
+def test_topgg_vote_reminders_migration_creates_global_reminder_table() -> None:
+    sql = Path("migrations/012_topgg_vote_reminders.sql").read_text(encoding="utf-8")
+
+    assert "CREATE TABLE IF NOT EXISTS topgg_vote_reminders" in sql
+    assert "discord_user_id BIGINT PRIMARY KEY" in sql
+    assert "enabled BOOLEAN NOT NULL DEFAULT FALSE" in sql
+    assert "scheduled_vote_expires_at TIMESTAMPTZ" in sql
+    assert "scheduled_reminder_at TIMESTAMPTZ" in sql
+    assert "attempt_count INTEGER NOT NULL DEFAULT 0" in sql
+    assert "CREATE INDEX IF NOT EXISTS idx_topgg_vote_reminders_due" in sql

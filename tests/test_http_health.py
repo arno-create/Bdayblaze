@@ -223,9 +223,12 @@ def test_http_health_includes_disabled_topgg_block_without_degrading_readiness()
                 "webhook_mode": None,
                 "storage_ready": True,
                 "storage_backend": "postgres",
+                "storage_message": "Top.gg storage is ready.",
                 "refresh_available": False,
                 "refresh_cooldown_seconds": 60,
                 "timing_source": None,
+                "reminder_ready": True,
+                "reminder_delivery_mode": "dm",
             }
         ),
     )
@@ -236,6 +239,7 @@ def test_http_health_includes_disabled_topgg_block_without_degrading_readiness()
     assert payload["status"] == "ready"
     assert payload["topgg"]["configuration_state"] == "disabled"
     assert payload["topgg"]["public_routes_ready"] is True
+    assert payload["topgg"]["reminder_delivery_mode"] == "dm"
 
 
 def test_http_health_degrades_when_topgg_is_enabled_but_misconfigured() -> None:
@@ -260,9 +264,12 @@ def test_http_health_degrades_when_topgg_is_enabled_but_misconfigured() -> None:
                 "webhook_mode": None,
                 "storage_ready": True,
                 "storage_backend": "postgres",
+                "storage_message": "Missing webhook secret.",
                 "refresh_available": False,
                 "refresh_cooldown_seconds": 60,
                 "timing_source": None,
+                "reminder_ready": True,
+                "reminder_delivery_mode": "dm",
             }
         ),
     )
@@ -290,9 +297,12 @@ async def test_topgg_webhook_route_returns_truthful_503_when_disabled() -> None:
                 "webhook_mode": None,
                 "storage_ready": True,
                 "storage_backend": "postgres",
+                "storage_message": "Top.gg storage is ready.",
                 "refresh_available": False,
                 "refresh_cooldown_seconds": 60,
                 "timing_source": None,
+                "reminder_ready": True,
+                "reminder_delivery_mode": "dm",
             },
             webhook_status=503,
             webhook_body={
@@ -312,3 +322,42 @@ async def test_topgg_webhook_route_returns_truthful_503_when_disabled() -> None:
     assert status_code == "503 Service Unavailable"
     assert content_type == "application/json"
     assert loads(body)["status"] == "disabled"
+
+
+def test_http_health_degrades_when_topgg_reminders_are_unready() -> None:
+    metrics = SchedulerMetrics(
+        recovery_completed=True,
+        last_iteration_at_utc=datetime.now(UTC),
+        iterations=2,
+    )
+    runtime_status = _runtime_status()
+    runtime_status.bot_ready_at_utc = datetime.now(UTC)
+    server = HttpHealthServer(
+        metrics=metrics,
+        runtime_status=runtime_status,
+        host="127.0.0.1",
+        port=8080,
+        scheduler_max_sleep_seconds=300,
+        vote_service=FakeVoteService(
+            snapshot={
+                "enabled": True,
+                "configuration_state": "ready",
+                "configuration_message": "Top.gg vote bonus is enabled and ready.",
+                "webhook_mode": "v2",
+                "storage_ready": True,
+                "storage_backend": "postgres",
+                "storage_message": "Top.gg storage is ready.",
+                "refresh_available": False,
+                "refresh_cooldown_seconds": 60,
+                "timing_source": "exact",
+                "reminder_ready": False,
+                "reminder_delivery_mode": "dm",
+            }
+        ),
+    )
+
+    status_code, payload = server._build_response("/readyz")
+
+    assert status_code == "503 Service Unavailable"
+    assert payload["status"] == "degraded"
+    assert payload["topgg"]["reminder_ready"] is False

@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
+from bdayblaze.domain.topgg import VoteBonusStatus
 from bdayblaze.domain.models import (
     AnniversaryRecipientSnapshot,
     AnnouncementRecipientSnapshot,
@@ -15,6 +16,7 @@ from bdayblaze.domain.models import (
 )
 from bdayblaze.logging import get_logger
 from bdayblaze.repositories.postgres import PostgresRepository
+from bdayblaze.services.vote_service import VoteService
 
 
 class GatewaySkipError(Exception):
@@ -174,6 +176,14 @@ class SchedulerGateway(Protocol):
 
     async def remove_birthday_role(self, *, guild_id: int, user_id: int, role_id: int) -> str: ...
 
+    async def send_topgg_vote_reminder(
+        self,
+        *,
+        user_id: int,
+        status: VoteBonusStatus,
+        vote_url: str,
+    ) -> DirectSendResult: ...
+
 
 class BirthdaySchedulerService:
     def __init__(
@@ -185,6 +195,7 @@ class BirthdaySchedulerService:
         batch_size: int,
         recovery_grace_hours: int,
         scheduler_max_sleep_seconds: int,
+        vote_service: VoteService | None = None,
     ) -> None:
         self._repository = repository
         self._gateway = gateway
@@ -192,6 +203,7 @@ class BirthdaySchedulerService:
         self._batch_size = batch_size
         self._recovery_grace = timedelta(hours=recovery_grace_hours)
         self._scheduler_max_sleep_seconds = scheduler_max_sleep_seconds
+        self._vote_service = vote_service
         self._logger = get_logger(component="scheduler")
         self._stale_processing_after = timedelta(minutes=15)
         self._retry_delay = timedelta(minutes=5)
@@ -239,12 +251,14 @@ class BirthdaySchedulerService:
             claimed_removals = await self._repository.claim_due_role_removals(
                 current, self._batch_size
             )
+            claimed_vote_reminders = await self._claim_due_topgg_vote_reminders(current)
             pending_events = await self._repository.claim_pending_events(current, self._batch_size)
             total_claimed += (
                 claimed_birthdays
                 + claimed_anniversaries
                 + claimed_recurring
                 + claimed_removals
+                + len(claimed_vote_reminders)
                 + len(pending_events)
             )
             if (
@@ -253,8 +267,11 @@ class BirthdaySchedulerService:
                 and claimed_anniversaries == 0
                 and claimed_recurring == 0
                 and claimed_removals == 0
+                and not claimed_vote_reminders
             ):
                 break
+            if claimed_vote_reminders:
+                await self._execute_topgg_vote_reminders(current, claimed_vote_reminders)
             if pending_events:
                 await self._execute_pending_events(current, pending_events)
 
@@ -667,6 +684,135 @@ class BirthdaySchedulerService:
             capsule_state="revealed_private",
         )
         await self._repository.complete_event_as_skipped(event.id, result.status)
+
+    async def _claim_due_topgg_vote_reminders(self, now_utc: datetime) -> list[object]:
+        if self._vote_service is None:
+            return []
+        claimer = getattr(self._repository, "claim_due_topgg_vote_reminders", None)
+        if not callable(claimer):
+            return []
+        return list(await claimer(now_utc, self._batch_size))
+
+    async def _execute_topgg_vote_reminders(
+        self,
+        now_utc: datetime,
+        reminders: list[object],
+    ) -> None:
+        if self._vote_service is None:
+            return
+        max_attempts = int(
+            getattr(self._vote_service, "REMINDER_MAX_ATTEMPTS", VoteService.REMINDER_MAX_ATTEMPTS)
+        )
+        retry_delay = getattr(
+            self._vote_service,
+            "REMINDER_RETRY_DELAY",
+            VoteService.REMINDER_RETRY_DELAY,
+        )
+        for reminder in reminders:
+            discord_user_id = int(getattr(reminder, "discord_user_id"))
+            vote_expires_at = getattr(reminder, "scheduled_vote_expires_at", None)
+            attempt_count = int(getattr(reminder, "attempt_count", 0))
+            if vote_expires_at is None:
+                await self._mark_topgg_vote_reminder_skipped(
+                    discord_user_id,
+                    vote_expires_at=now_utc,
+                    error_code="invalid_vote_window",
+                )
+                continue
+            try:
+                status = await self._vote_service.get_vote_bonus_status(
+                    discord_user_id,
+                    now_utc=now_utc,
+                )
+                result = await self._gateway.send_topgg_vote_reminder(
+                    user_id=discord_user_id,
+                    status=status,
+                    vote_url=self._vote_service.vote_url,
+                )
+            except GatewayPermanentError as exc:
+                await self._mark_topgg_vote_reminder_skipped(
+                    discord_user_id,
+                    vote_expires_at=vote_expires_at,
+                    error_code=exc.code,
+                )
+                continue
+            except GatewayRetryableError as exc:
+                if (
+                    vote_expires_at - now_utc <= timedelta(minutes=1)
+                    or attempt_count >= max_attempts
+                ):
+                    await self._mark_topgg_vote_reminder_skipped(
+                        discord_user_id,
+                        vote_expires_at=vote_expires_at,
+                        error_code=exc.code,
+                    )
+                    continue
+                await self._reschedule_topgg_vote_reminder_retry(
+                    discord_user_id,
+                    vote_expires_at=vote_expires_at,
+                    retry_at=now_utc + retry_delay,
+                    error_code=exc.code,
+                )
+                continue
+            if result.status == "sent":
+                await self._mark_topgg_vote_reminder_sent(
+                    discord_user_id,
+                    vote_expires_at=vote_expires_at,
+                    reminded_at=now_utc,
+                )
+                continue
+            await self._mark_topgg_vote_reminder_skipped(
+                discord_user_id,
+                vote_expires_at=vote_expires_at,
+                error_code=result.status,
+            )
+
+    async def _mark_topgg_vote_reminder_sent(
+        self,
+        discord_user_id: int,
+        *,
+        vote_expires_at: datetime,
+        reminded_at: datetime,
+    ) -> None:
+        marker = getattr(self._repository, "mark_topgg_vote_reminder_sent", None)
+        if callable(marker):
+            await marker(
+                discord_user_id,
+                vote_expires_at=vote_expires_at,
+                reminded_at=reminded_at,
+            )
+
+    async def _reschedule_topgg_vote_reminder_retry(
+        self,
+        discord_user_id: int,
+        *,
+        vote_expires_at: datetime,
+        retry_at: datetime,
+        error_code: str,
+    ) -> None:
+        rescheduler = getattr(self._repository, "reschedule_topgg_vote_reminder_retry", None)
+        if callable(rescheduler):
+            await rescheduler(
+                discord_user_id,
+                vote_expires_at=vote_expires_at,
+                retry_at=retry_at,
+                error_code=error_code,
+            )
+
+    async def _mark_topgg_vote_reminder_skipped(
+        self,
+        discord_user_id: int,
+        *,
+        vote_expires_at: datetime,
+        error_code: str,
+    ) -> None:
+        marker = getattr(self._repository, "mark_topgg_vote_reminder_skipped", None)
+        if callable(marker):
+            await marker(
+                discord_user_id,
+                vote_expires_at=vote_expires_at,
+                error_code=error_code,
+            )
 
 
 class BirthdaySchedulerRunner:

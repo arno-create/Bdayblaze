@@ -39,7 +39,7 @@ from bdayblaze.domain.models import (
     TimelineEntry,
     TrackedAnniversary,
 )
-from bdayblaze.domain.topgg import TopggVoteReceipt
+from bdayblaze.domain.topgg import TopggVoteReceipt, TopggVoteReminder
 
 
 class PostgresRepository:
@@ -330,6 +330,261 @@ class PostgresRepository:
                 limit,
             )
         return [self._map_topgg_vote_receipt(row) for row in rows]
+
+    async def probe_topgg_storage(self) -> tuple[bool, str]:
+        try:
+            async with self._pool.acquire() as connection:
+                receipts_ready = await connection.fetchval(
+                    "SELECT to_regclass('public.topgg_vote_receipts') IS NOT NULL"
+                )
+                reminders_ready = await connection.fetchval(
+                    "SELECT to_regclass('public.topgg_vote_reminders') IS NOT NULL"
+                )
+        except Exception:
+            return False, "Top.gg storage probe failed."
+        if not receipts_ready or not reminders_ready:
+            return False, "Top.gg storage tables are not ready."
+        return True, "Top.gg storage is ready."
+
+    async def fetch_topgg_vote_reminder(
+        self,
+        discord_user_id: int,
+    ) -> TopggVoteReminder | None:
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(
+                """
+                SELECT *
+                FROM topgg_vote_reminders
+                WHERE discord_user_id = $1
+                """,
+                discord_user_id,
+            )
+        return self._map_topgg_vote_reminder(row) if row is not None else None
+
+    async def upsert_topgg_vote_reminder_preference(
+        self,
+        discord_user_id: int,
+        *,
+        enabled: bool,
+        now_utc: datetime,
+    ) -> TopggVoteReminder:
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(
+                """
+                INSERT INTO topgg_vote_reminders (
+                    discord_user_id,
+                    enabled,
+                    created_at,
+                    updated_at
+                )
+                VALUES ($1, $2, $3, $3)
+                ON CONFLICT (discord_user_id) DO UPDATE SET
+                    enabled = EXCLUDED.enabled,
+                    updated_at = EXCLUDED.updated_at
+                RETURNING *
+                """,
+                discord_user_id,
+                enabled,
+                now_utc,
+            )
+        return self._map_topgg_vote_reminder(row)
+
+    async def schedule_topgg_vote_reminder(
+        self,
+        discord_user_id: int,
+        *,
+        vote_expires_at: datetime,
+        reminder_at: datetime,
+        timing_source: str,
+        now_utc: datetime,
+    ) -> TopggVoteReminder:
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(
+                """
+                INSERT INTO topgg_vote_reminders (
+                    discord_user_id,
+                    enabled,
+                    scheduled_vote_expires_at,
+                    scheduled_reminder_at,
+                    processing_started_at,
+                    last_reminded_vote_expires_at,
+                    last_reminded_at,
+                    attempt_count,
+                    last_error_code,
+                    timing_source,
+                    created_at,
+                    updated_at
+                )
+                VALUES (
+                    $1, TRUE, $2, $3, NULL, NULL, NULL, 0, NULL, $4, $5, $5
+                )
+                ON CONFLICT (discord_user_id) DO UPDATE SET
+                    enabled = TRUE,
+                    scheduled_vote_expires_at = EXCLUDED.scheduled_vote_expires_at,
+                    scheduled_reminder_at = EXCLUDED.scheduled_reminder_at,
+                    processing_started_at = NULL,
+                    attempt_count = 0,
+                    last_error_code = NULL,
+                    timing_source = EXCLUDED.timing_source,
+                    updated_at = EXCLUDED.updated_at
+                RETURNING *
+                """,
+                discord_user_id,
+                vote_expires_at,
+                reminder_at,
+                timing_source,
+                now_utc,
+            )
+        return self._map_topgg_vote_reminder(row)
+
+    async def clear_topgg_vote_reminder_schedule(
+        self,
+        discord_user_id: int,
+        *,
+        keep_enabled: bool,
+        now_utc: datetime,
+    ) -> TopggVoteReminder:
+        async with self._pool.acquire() as connection:
+            row = await connection.fetchrow(
+                """
+                INSERT INTO topgg_vote_reminders (
+                    discord_user_id,
+                    enabled,
+                    created_at,
+                    updated_at
+                )
+                VALUES ($1, $2, $3, $3)
+                ON CONFLICT (discord_user_id) DO UPDATE SET
+                    enabled = EXCLUDED.enabled,
+                    scheduled_vote_expires_at = NULL,
+                    scheduled_reminder_at = NULL,
+                    processing_started_at = NULL,
+                    attempt_count = 0,
+                    timing_source = NULL,
+                    updated_at = EXCLUDED.updated_at
+                RETURNING *
+                """,
+                discord_user_id,
+                keep_enabled,
+                now_utc,
+            )
+        return self._map_topgg_vote_reminder(row)
+
+    async def claim_due_topgg_vote_reminders(
+        self,
+        now_utc: datetime,
+        batch_size: int,
+    ) -> list[TopggVoteReminder]:
+        stale_before_utc = now_utc - timedelta(minutes=15)
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(
+                """
+                WITH due AS (
+                    SELECT discord_user_id
+                    FROM topgg_vote_reminders
+                    WHERE enabled = TRUE
+                      AND scheduled_reminder_at IS NOT NULL
+                      AND scheduled_vote_expires_at IS NOT NULL
+                      AND scheduled_reminder_at <= $1
+                      AND (
+                          processing_started_at IS NULL
+                          OR processing_started_at <= $3
+                      )
+                    ORDER BY scheduled_reminder_at ASC
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT $2
+                )
+                UPDATE topgg_vote_reminders AS reminders
+                SET processing_started_at = $1,
+                    attempt_count = reminders.attempt_count + 1,
+                    updated_at = $1
+                FROM due
+                WHERE reminders.discord_user_id = due.discord_user_id
+                RETURNING reminders.*
+                """,
+                now_utc,
+                batch_size,
+                stale_before_utc,
+            )
+        return [self._map_topgg_vote_reminder(row) for row in rows]
+
+    async def mark_topgg_vote_reminder_sent(
+        self,
+        discord_user_id: int,
+        *,
+        vote_expires_at: datetime,
+        reminded_at: datetime,
+    ) -> None:
+        async with self._pool.acquire() as connection:
+            await connection.execute(
+                """
+                UPDATE topgg_vote_reminders
+                SET scheduled_vote_expires_at = NULL,
+                    scheduled_reminder_at = NULL,
+                    processing_started_at = NULL,
+                    last_reminded_vote_expires_at = $2,
+                    last_reminded_at = $3,
+                    attempt_count = 0,
+                    last_error_code = NULL,
+                    timing_source = NULL,
+                    updated_at = $3
+                WHERE discord_user_id = $1
+                """,
+                discord_user_id,
+                vote_expires_at,
+                reminded_at,
+            )
+
+    async def reschedule_topgg_vote_reminder_retry(
+        self,
+        discord_user_id: int,
+        *,
+        vote_expires_at: datetime,
+        retry_at: datetime,
+        error_code: str,
+    ) -> None:
+        async with self._pool.acquire() as connection:
+            await connection.execute(
+                """
+                UPDATE topgg_vote_reminders
+                SET scheduled_vote_expires_at = $2,
+                    scheduled_reminder_at = $3,
+                    processing_started_at = NULL,
+                    last_error_code = $4,
+                    updated_at = $3
+                WHERE discord_user_id = $1
+                """,
+                discord_user_id,
+                vote_expires_at,
+                retry_at,
+                error_code,
+            )
+
+    async def mark_topgg_vote_reminder_skipped(
+        self,
+        discord_user_id: int,
+        *,
+        vote_expires_at: datetime,
+        error_code: str,
+    ) -> None:
+        async with self._pool.acquire() as connection:
+            await connection.execute(
+                """
+                UPDATE topgg_vote_reminders
+                SET scheduled_vote_expires_at = NULL,
+                    scheduled_reminder_at = NULL,
+                    processing_started_at = NULL,
+                    attempt_count = 0,
+                    last_error_code = $3,
+                    last_reminded_vote_expires_at = $2,
+                    timing_source = NULL,
+                    updated_at = NOW()
+                WHERE discord_user_id = $1
+                """,
+                discord_user_id,
+                vote_expires_at,
+                error_code,
+            )
 
     async def list_guild_surprise_rewards(self, guild_id: int) -> list[GuildSurpriseReward]:
         async with self._pool.acquire() as connection:
@@ -2726,6 +2981,11 @@ class PostgresRepository:
                     SELECT MIN(scheduled_for_utc) AS due_at
                     FROM celebration_events
                     WHERE state = 'pending'
+                    UNION ALL
+                    SELECT MIN(scheduled_reminder_at) AS due_at
+                    FROM topgg_vote_reminders
+                    WHERE enabled = TRUE
+                      AND scheduled_reminder_at IS NOT NULL
                 ) AS due_candidates
                 """
             )
@@ -3551,6 +3811,23 @@ class PostgresRepository:
             processed_at=row["processed_at"],
             status=row["status"],
             error_text=row["error_text"],
+        )
+
+    @staticmethod
+    def _map_topgg_vote_reminder(row: asyncpg.Record) -> TopggVoteReminder:
+        return TopggVoteReminder(
+            discord_user_id=row["discord_user_id"],
+            enabled=row["enabled"],
+            scheduled_vote_expires_at=row["scheduled_vote_expires_at"],
+            scheduled_reminder_at=row["scheduled_reminder_at"],
+            processing_started_at=row["processing_started_at"],
+            last_reminded_vote_expires_at=row["last_reminded_vote_expires_at"],
+            last_reminded_at=row["last_reminded_at"],
+            attempt_count=row["attempt_count"],
+            last_error_code=row["last_error_code"],
+            timing_source=row["timing_source"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
         )
 
 

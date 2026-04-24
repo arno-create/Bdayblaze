@@ -207,6 +207,7 @@ class HttpHealthServer:
             and (
                 topgg["configuration_state"] != "ready"
                 or not topgg["storage_ready"]
+                or not topgg["reminder_ready"]
                 or not topgg["runtime_attached"]
                 or not topgg["public_routes_ready"]
             )
@@ -292,11 +293,14 @@ class HttpHealthServer:
             "webhook_mode": snapshot.get("webhook_mode"),
             "storage_ready": bool(snapshot.get("storage_ready")),
             "storage_backend": snapshot.get("storage_backend"),
+            "storage_message": snapshot.get("storage_message"),
             "runtime_attached": True,
             "public_routes_ready": True,
             "refresh_available": bool(snapshot.get("refresh_available")),
             "refresh_cooldown_seconds": snapshot.get("refresh_cooldown_seconds"),
             "timing_source": snapshot.get("timing_source"),
+            "reminder_ready": bool(snapshot.get("reminder_ready")),
+            "reminder_delivery_mode": snapshot.get("reminder_delivery_mode"),
         }
 
     def _build_root_page(self) -> str:

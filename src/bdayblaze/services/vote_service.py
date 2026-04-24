@@ -9,10 +9,12 @@ import aiohttp
 from bdayblaze.config import Settings
 from bdayblaze.domain.topgg import (
     TopggVoteReceipt,
+    TopggVoteReminder,
     TopggWebhookMode,
     TopggWebhookResult,
     VoteBonusStatus,
     VoteRefreshResult,
+    VoteReminderUpdateResult,
     build_v2_signature,
     is_v2_webhook_secret,
     parse_signature_header,
@@ -29,6 +31,11 @@ class VoteService:
     BONUS_TIMELINE_ENTRY_LIMIT = 12
     TOPGG_VOTE_URL_TEMPLATE = "https://top.gg/bot/{bot_id}/vote"
     LEGACY_VOTE_WINDOW = timedelta(hours=12)
+    REMINDER_LEAD_TIME = timedelta(minutes=30)
+    REMINDER_LAST_MINUTE_DELAY = timedelta(minutes=1)
+    REMINDER_MINIMUM_REMAINING = timedelta(minutes=5)
+    REMINDER_RETRY_DELAY = timedelta(minutes=5)
+    REMINDER_MAX_ATTEMPTS = 3
 
     def __init__(
         self,
@@ -39,10 +46,31 @@ class VoteService:
         self._repository = repository
         self._settings = settings
         self._refresh_last_called_at: dict[int, datetime] = {}
+        if settings.topgg_enabled:
+            self._storage_ready = False
+            self._storage_message = "Top.gg storage check is pending."
+        else:
+            self._storage_ready = True
+            self._storage_message = "Top.gg storage is idle while the vote lane is disabled."
 
     @property
     def vote_url(self) -> str:
         return self.TOPGG_VOTE_URL_TEMPLATE.format(bot_id=self._settings.topgg_bot_id)
+
+    async def initialize_storage_state(self) -> None:
+        probe = getattr(self._repository, "probe_topgg_storage", None)
+        if not callable(probe):
+            self._storage_ready = False
+            self._storage_message = "Top.gg storage probe is unavailable."
+            return
+        try:
+            ready, message = await probe()
+        except Exception:
+            self._storage_ready = False
+            self._storage_message = "Top.gg storage probe failed."
+            return
+        self._storage_ready = bool(ready)
+        self._storage_message = str(message)
 
     def diagnostics_snapshot(self) -> dict[str, object]:
         enabled = self._settings.topgg_enabled
@@ -60,17 +88,19 @@ class VoteService:
                 message = "Top.gg vote bonus is enabled and ready."
             else:
                 message = (
-                    "Top.gg vote bonus is enabled. Webhooks are ready. "
-                    "Manual refresh is unavailable until TOPGG_TOKEN is set."
+                    "Top.gg vote bonus is enabled. Webhooks are active. "
+                    "Optional manual refresh is not configured on this deployment."
                 )
         refresh_available = enabled and state == "ready" and bool(self._settings.topgg_token)
+        reminder_ready = (not enabled) or (state == "ready" and self._storage_ready)
         return {
             "enabled": enabled,
             "configuration_state": state,
             "configuration_message": message,
             "webhook_mode": webhook_mode,
-            "storage_ready": True,
+            "storage_ready": self._storage_ready,
             "storage_backend": "postgres",
+            "storage_message": self._storage_message,
             "refresh_available": refresh_available,
             "refresh_cooldown_seconds": self._settings.topgg_refresh_cooldown_seconds,
             "timing_source": (
@@ -80,6 +110,8 @@ class VoteService:
                 if webhook_mode == "legacy"
                 else None
             ),
+            "reminder_ready": reminder_ready,
+            "reminder_delivery_mode": "dm",
         }
 
     async def get_vote_bonus_status(
@@ -91,31 +123,34 @@ class VoteService:
         now = now_utc or datetime.now(UTC)
         diagnostics = self.diagnostics_snapshot()
         refresh_retry_after_seconds = self._refresh_retry_after_seconds(discord_user_id, now_utc=now)
+        receipt = await self.fetch_latest_vote_receipt(discord_user_id)
+        reminder = await self.fetch_vote_reminder(discord_user_id)
         if diagnostics["configuration_state"] == "disabled":
             return self._build_status(
                 lane_state="disabled",
                 active=False,
-                voted_at_utc=None,
-                expires_at_utc=None,
-                timing_source=None,
-                weight=None,
+                voted_at_utc=receipt.vote_created_at if receipt is not None else None,
+                expires_at_utc=receipt.vote_expires_at if receipt is not None else None,
+                timing_source=receipt.timing_source if receipt is not None else None,
+                weight=receipt.weight if receipt is not None else None,
                 refresh_available=False,
                 refresh_retry_after_seconds=None,
                 configuration_message=str(diagnostics["configuration_message"]),
+                reminder=reminder,
             )
         if diagnostics["configuration_state"] != "ready":
             return self._build_status(
                 lane_state="misconfigured",
                 active=False,
-                voted_at_utc=None,
-                expires_at_utc=None,
-                timing_source=None,
-                weight=None,
+                voted_at_utc=receipt.vote_created_at if receipt is not None else None,
+                expires_at_utc=receipt.vote_expires_at if receipt is not None else None,
+                timing_source=receipt.timing_source if receipt is not None else None,
+                weight=receipt.weight if receipt is not None else None,
                 refresh_available=False,
                 refresh_retry_after_seconds=None,
                 configuration_message=str(diagnostics["configuration_message"]),
+                reminder=reminder,
             )
-        receipt = await self.fetch_latest_vote_receipt(discord_user_id)
         if receipt is None or receipt.vote_expires_at is None or receipt.vote_expires_at <= now:
             return self._build_status(
                 lane_state="inactive",
@@ -127,6 +162,7 @@ class VoteService:
                 refresh_available=bool(diagnostics["refresh_available"]),
                 refresh_retry_after_seconds=refresh_retry_after_seconds,
                 configuration_message=None,
+                reminder=reminder,
             )
         lane_state = (
             "active_estimated"
@@ -143,6 +179,7 @@ class VoteService:
             refresh_available=bool(diagnostics["refresh_available"]),
             refresh_retry_after_seconds=refresh_retry_after_seconds,
             configuration_message=None,
+            reminder=reminder,
         )
 
     async def wish_character_limit(
@@ -167,9 +204,7 @@ class VoteService:
         receipt = await self._repository.fetch_latest_topgg_vote_receipt(discord_user_id)
         if receipt is None:
             return None
-        if isinstance(receipt, TopggVoteReceipt):
-            return receipt
-        raise TypeError("Repository returned an unexpected vote receipt value.")
+        return self._coerce_vote_receipt(receipt)
 
     async def list_recent_vote_receipts(
         self,
@@ -183,7 +218,59 @@ class VoteService:
         )
         if not receipts:
             return []
-        return [receipt for receipt in receipts if isinstance(receipt, TopggVoteReceipt)]
+        return [self._coerce_vote_receipt(receipt) for receipt in receipts]
+
+    async def fetch_vote_reminder(self, discord_user_id: int) -> TopggVoteReminder | None:
+        fetcher = getattr(self._repository, "fetch_topgg_vote_reminder", None)
+        if not callable(fetcher):
+            return None
+        reminder = await fetcher(discord_user_id)
+        if reminder is None:
+            return None
+        return self._coerce_vote_reminder(reminder)
+
+    async def set_vote_reminders_enabled(
+        self,
+        discord_user_id: int,
+        *,
+        enabled: bool,
+        now_utc: datetime | None = None,
+    ) -> VoteReminderUpdateResult:
+        now = now_utc or datetime.now(UTC)
+        updater = getattr(self._repository, "upsert_topgg_vote_reminder_preference", None)
+        clearer = getattr(self._repository, "clear_topgg_vote_reminder_schedule", None)
+        if not callable(updater) or not callable(clearer):
+            status = await self.get_vote_bonus_status(discord_user_id, now_utc=now)
+            return VoteReminderUpdateResult(
+                status=status,
+                note="Vote reminders are unavailable on this deployment right now.",
+            )
+
+        await updater(discord_user_id, enabled=enabled, now_utc=now)
+        if not enabled:
+            await clearer(discord_user_id, keep_enabled=False, now_utc=now)
+            status = await self.get_vote_bonus_status(discord_user_id, now_utc=now)
+            return VoteReminderUpdateResult(
+                status=status,
+                note="Vote reminders are off.",
+            )
+
+        latest_receipt = await self.fetch_latest_vote_receipt(discord_user_id)
+        if latest_receipt is None or latest_receipt.vote_expires_at is None or latest_receipt.vote_expires_at <= now:
+            await clearer(discord_user_id, keep_enabled=True, now_utc=now)
+            status = await self.get_vote_bonus_status(discord_user_id, now_utc=now)
+            return VoteReminderUpdateResult(
+                status=status,
+                note="Vote reminders are on. Your next valid vote will arm a reminder.",
+            )
+
+        note = await self._schedule_reminder_for_receipt(
+            discord_user_id,
+            latest_receipt,
+            now_utc=now,
+        )
+        status = await self.get_vote_bonus_status(discord_user_id, now_utc=now)
+        return VoteReminderUpdateResult(status=status, note=note)
 
     async def handle_webhook(
         self,
@@ -213,10 +300,7 @@ class VoteService:
                 },
             )
 
-        normalized_headers = {
-            key.lower(): value.strip()
-            for key, value in headers.items()
-        }
+        normalized_headers = {key.lower(): value.strip() for key, value in headers.items()}
         webhook_mode = self._required_webhook_mode()
         try:
             if webhook_mode == "v2":
@@ -250,7 +334,7 @@ class VoteService:
             return VoteRefreshResult(
                 outcome="unavailable",
                 status=current_status,
-                note="Refresh is unavailable because TOPGG_TOKEN is not configured.",
+                note="Webhooks are active. Optional manual refresh is not configured on this deployment.",
             )
         retry_after_seconds = self._refresh_retry_after_seconds(discord_user_id, now_utc=now)
         if retry_after_seconds is not None:
@@ -282,6 +366,7 @@ class VoteService:
                 error_text="No active Top.gg vote was reported by refresh.",
             )
             await self._repository.insert_topgg_vote_receipt(receipt)
+            await self._clear_reminder_if_enabled(discord_user_id, now_utc=now)
             status = await self.get_vote_bonus_status(discord_user_id, now_utc=now)
             return VoteRefreshResult(
                 outcome="not_found",
@@ -311,7 +396,9 @@ class VoteService:
             processed_at=now,
             status="processed",
         )
-        await self._repository.insert_topgg_vote_receipt(receipt)
+        inserted = await self._repository.insert_topgg_vote_receipt(receipt)
+        if inserted:
+            await self._sync_reminder_if_enabled(discord_user_id, receipt, now_utc=now)
         status = await self.get_vote_bonus_status(discord_user_id, now_utc=now)
         return VoteRefreshResult(
             outcome="refreshed",
@@ -427,6 +514,7 @@ class VoteService:
                 payload={"status": "duplicate"},
                 receipt=receipt,
             )
+        await self._sync_reminder_if_enabled(discord_user_id, receipt, now_utc=now_utc)
         return TopggWebhookResult(
             http_status=200,
             outcome="processed",
@@ -499,6 +587,7 @@ class VoteService:
                 payload={"status": "duplicate"},
                 receipt=receipt,
             )
+        await self._sync_reminder_if_enabled(discord_user_id, receipt, now_utc=now_utc)
         return TopggWebhookResult(
             http_status=200,
             outcome="processed",
@@ -521,9 +610,7 @@ class VoteService:
                         "Top.gg refresh is unavailable because TOPGG_TOKEN was rejected."
                     )
                 if response.status >= 400:
-                    raise ValidationError(
-                        f"Top.gg refresh failed with status {response.status}."
-                    )
+                    raise ValidationError(f"Top.gg refresh failed with status {response.status}.")
                 payload = await response.json()
         if not isinstance(payload, dict):
             raise ValidationError("Top.gg refresh returned an unexpected payload.")
@@ -541,7 +628,11 @@ class VoteService:
         refresh_available: bool,
         refresh_retry_after_seconds: int | None,
         configuration_message: str | None,
+        reminder: TopggVoteReminder | None,
     ) -> VoteBonusStatus:
+        reminder_lane_state, next_reminder_at_utc, last_error_code, reminder_timing_source = (
+            self._describe_reminder(reminder)
+        )
         return VoteBonusStatus(
             lane_state=lane_state,  # type: ignore[arg-type]
             enabled=lane_state != "disabled",
@@ -558,11 +649,151 @@ class VoteService:
                 self.BONUS_WISH_CHARACTER_LIMIT if active else self.DEFAULT_WISH_CHARACTER_LIMIT
             ),
             timeline_entry_limit=(
-                self.BONUS_TIMELINE_ENTRY_LIMIT
-                if active
-                else self.DEFAULT_TIMELINE_ENTRY_LIMIT
+                self.BONUS_TIMELINE_ENTRY_LIMIT if active else self.DEFAULT_TIMELINE_ENTRY_LIMIT
             ),
+            reminders_enabled=bool(reminder.enabled) if reminder is not None else False,
+            reminder_lane_state=reminder_lane_state,
+            next_reminder_at_utc=next_reminder_at_utc,
+            last_reminder_error_code=last_error_code,
+            reminder_timing_source=reminder_timing_source,  # type: ignore[arg-type]
         )
+
+    async def _sync_reminder_if_enabled(
+        self,
+        discord_user_id: int,
+        receipt: TopggVoteReceipt,
+        *,
+        now_utc: datetime,
+    ) -> None:
+        reminder = await self.fetch_vote_reminder(discord_user_id)
+        if reminder is None or not reminder.enabled:
+            return
+        await self._schedule_reminder_for_receipt(discord_user_id, receipt, now_utc=now_utc)
+
+    async def _clear_reminder_if_enabled(
+        self,
+        discord_user_id: int,
+        *,
+        now_utc: datetime,
+    ) -> None:
+        reminder = await self.fetch_vote_reminder(discord_user_id)
+        if reminder is None or not reminder.enabled:
+            return
+        clearer = getattr(self._repository, "clear_topgg_vote_reminder_schedule", None)
+        if callable(clearer):
+            await clearer(discord_user_id, keep_enabled=True, now_utc=now_utc)
+
+    async def _schedule_reminder_for_receipt(
+        self,
+        discord_user_id: int,
+        receipt: TopggVoteReceipt,
+        *,
+        now_utc: datetime,
+    ) -> str:
+        reminder_at = self._compute_reminder_at(receipt, now_utc=now_utc)
+        clearer = getattr(self._repository, "clear_topgg_vote_reminder_schedule", None)
+        scheduler = getattr(self._repository, "schedule_topgg_vote_reminder", None)
+        if reminder_at is None:
+            if callable(clearer):
+                await clearer(discord_user_id, keep_enabled=True, now_utc=now_utc)
+            return "Vote reminders are on. This vote window is too close to expiry, so the next vote will arm a reminder."
+        if callable(scheduler) and receipt.vote_expires_at is not None and receipt.timing_source is not None:
+            await scheduler(
+                discord_user_id,
+                vote_expires_at=receipt.vote_expires_at,
+                reminder_at=reminder_at,
+                timing_source=receipt.timing_source,
+                now_utc=now_utc,
+            )
+        if receipt.timing_source == "legacy_estimated":
+            return "Vote reminders are on. A reminder is armed for this estimated vote window."
+        return "Vote reminders are on. A reminder is armed before this vote window ends."
+
+    def _compute_reminder_at(
+        self,
+        receipt: TopggVoteReceipt,
+        *,
+        now_utc: datetime,
+    ) -> datetime | None:
+        if receipt.vote_expires_at is None:
+            return None
+        remaining = receipt.vote_expires_at - now_utc
+        if remaining > self.REMINDER_LEAD_TIME:
+            return receipt.vote_expires_at - self.REMINDER_LEAD_TIME
+        if remaining >= self.REMINDER_MINIMUM_REMAINING:
+            return now_utc + self.REMINDER_LAST_MINUTE_DELAY
+        return None
+
+    def _describe_reminder(
+        self,
+        reminder: TopggVoteReminder | None,
+    ) -> tuple[str, datetime | None, str | None, str | None]:
+        if reminder is None or not reminder.enabled:
+            return "off", None, None, None
+        if reminder.scheduled_reminder_at is not None and reminder.scheduled_vote_expires_at is not None:
+            if reminder.timing_source == "legacy_estimated":
+                return (
+                    "armed_estimated",
+                    reminder.scheduled_reminder_at,
+                    reminder.last_error_code,
+                    reminder.timing_source,
+                )
+            return (
+                "armed_exact",
+                reminder.scheduled_reminder_at,
+                reminder.last_error_code,
+                reminder.timing_source,
+            )
+        if reminder.last_error_code:
+            return "delivery_issue", None, reminder.last_error_code, None
+        return "waiting_for_next_vote", None, None, None
+
+    @staticmethod
+    def _coerce_vote_receipt(value: object) -> TopggVoteReceipt:
+        if isinstance(value, TopggVoteReceipt):
+            return value
+        try:
+            return TopggVoteReceipt(
+                event_id=str(getattr(value, "event_id")),
+                discord_user_id=int(getattr(value, "discord_user_id")),
+                event_type=str(getattr(value, "event_type")),
+                webhook_mode=getattr(value, "webhook_mode"),
+                payload_hash=str(getattr(value, "payload_hash")),
+                trace_id=getattr(value, "trace_id", None),
+                signature_timestamp=getattr(value, "signature_timestamp", None),
+                vote_created_at=getattr(value, "vote_created_at", None),
+                vote_expires_at=getattr(value, "vote_expires_at", None),
+                timing_source=getattr(value, "timing_source", None),
+                weight=int(getattr(value, "weight")),
+                received_at=getattr(value, "received_at"),
+                processed_at=getattr(value, "processed_at"),
+                status=getattr(value, "status"),
+                error_text=getattr(value, "error_text", None),
+            )
+        except Exception as exc:
+            raise TypeError("Repository returned an unexpected vote receipt value.") from exc
+
+    @staticmethod
+    def _coerce_vote_reminder(value: object) -> TopggVoteReminder:
+        if isinstance(value, TopggVoteReminder):
+            return value
+        try:
+            return TopggVoteReminder(
+                discord_user_id=int(getattr(value, "discord_user_id")),
+                enabled=bool(getattr(value, "enabled")),
+                scheduled_vote_expires_at=getattr(value, "scheduled_vote_expires_at", None),
+                scheduled_reminder_at=getattr(value, "scheduled_reminder_at", None),
+                processing_started_at=getattr(value, "processing_started_at", None),
+                last_reminded_vote_expires_at=getattr(value, "last_reminded_vote_expires_at", None),
+                last_reminded_at=getattr(value, "last_reminded_at", None),
+                attempt_count=int(getattr(value, "attempt_count", 0)),
+                last_error_code=getattr(value, "last_error_code", None),
+                timing_source=getattr(value, "timing_source", None),
+                created_at=getattr(value, "created_at"),
+                updated_at=getattr(value, "updated_at"),
+            )
+        except Exception as exc:
+            raise TypeError("Repository returned an unexpected vote reminder value.") from exc
 
     def _required_webhook_mode(self) -> TopggWebhookMode:
         return "v2" if is_v2_webhook_secret(self._settings.topgg_webhook_secret) else "legacy"

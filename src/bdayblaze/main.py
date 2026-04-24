@@ -64,6 +64,7 @@ async def _build_container(settings: Settings, runtime_status: RuntimeStatus) ->
         )
         settings_service = SettingsService(repository)
         vote_service = VoteService(repository, settings=settings)
+        await vote_service.initialize_storage_state()
         studio_audit_logger = StudioAuditLogger(settings_service)
         metrics = SchedulerMetrics()
         placeholder_gateway = _DeferredGateway()
@@ -74,6 +75,7 @@ async def _build_container(settings: Settings, runtime_status: RuntimeStatus) ->
             batch_size=settings.scheduler_batch_size,
             recovery_grace_hours=settings.recovery_grace_hours,
             scheduler_max_sleep_seconds=settings.scheduler_max_sleep_seconds,
+            vote_service=vote_service,
         )
         health_service = HealthService(
             repository,
@@ -213,6 +215,9 @@ class _DeferredGateway:
         raise RuntimeError("Gateway not attached yet.")
 
     async def remove_birthday_role(self, **_: object) -> str:
+        raise RuntimeError("Gateway not attached yet.")
+
+    async def send_topgg_vote_reminder(self, **_: object) -> DirectSendResult:
         raise RuntimeError("Gateway not attached yet.")
 
 

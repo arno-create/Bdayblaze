@@ -10,6 +10,7 @@ from bdayblaze.discord.announcements import (
     build_announcement_message,
     build_capsule_reveal_message,
 )
+from bdayblaze.discord.ui.vote import build_vote_reminder_embed
 from bdayblaze.discord.member_resolution import MemberResolutionError, resolve_guild_members
 from bdayblaze.domain.announcement_template import (
     AnnouncementRenderRecipient,
@@ -24,6 +25,7 @@ from bdayblaze.domain.models import (
     BirthdayWish,
     GuildSettings,
 )
+from bdayblaze.domain.topgg import VoteBonusStatus
 from bdayblaze.logging import get_logger, redact_identifier
 from bdayblaze.services.content_policy import ensure_safe_announcement_inputs
 from bdayblaze.services.diagnostics import (
@@ -631,6 +633,47 @@ class DiscordSchedulerGateway:
             user_ref=redact_identifier(user_id),
         )
         return "applied"
+
+    async def send_topgg_vote_reminder(
+        self,
+        *,
+        user_id: int,
+        status: VoteBonusStatus,
+        vote_url: str,
+    ) -> DirectSendResult:
+        user = self._bot.get_user(user_id)
+        if user is None:
+            try:
+                user = await self._bot.fetch_user(user_id)
+            except discord.NotFound:
+                return DirectSendResult(status="member_missing")
+            except discord.HTTPException as exc:
+                failure = classify_discord_http_failure(exc, surface="birthday_dm")
+                if failure.permanent:
+                    raise GatewayPermanentError(failure.code) from exc
+                raise GatewayRetryableError(failure.code) from exc
+        try:
+            view = discord.ui.View(timeout=None)
+            view.add_item(
+                discord.ui.Button(
+                    label="Vote on Top.gg",
+                    style=discord.ButtonStyle.link,
+                    url=vote_url,
+                )
+            )
+            await user.send(
+                embed=build_vote_reminder_embed(status, vote_url=vote_url),
+                view=view,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.Forbidden:
+            return DirectSendResult(status="dm_forbidden")
+        except discord.HTTPException as exc:
+            failure = classify_discord_http_failure(exc, surface="birthday_dm")
+            if failure.permanent:
+                raise GatewayPermanentError(failure.code) from exc
+            raise GatewayRetryableError(failure.code) from exc
+        return DirectSendResult(status="sent")
 
     async def _resolve_birthday_recipients(
         self,

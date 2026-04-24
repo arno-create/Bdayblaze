@@ -10,6 +10,7 @@ from bdayblaze.discord.ui.vote import (
     build_owner_vote_status_text,
     build_vote_embed,
 )
+from bdayblaze.domain.topgg import VoteBonusStatus
 from bdayblaze.services.vote_service import VoteService
 
 
@@ -82,7 +83,7 @@ class _VoteStatusView(discord.ui.View):
         *,
         vote_service: VoteService,
         owner_id: int,
-        status: object,
+        status: VoteBonusStatus,
         vote_url: str,
     ) -> None:
         super().__init__(timeout=300)
@@ -109,6 +110,14 @@ class _VoteStatusView(discord.ui.View):
                     ),
                 )
             )
+        self.add_item(
+            _ToggleVoteReminderButton(
+                vote_service=vote_service,
+                owner_id=owner_id,
+                vote_url=vote_url,
+                reminders_enabled=status.reminders_enabled,
+            )
+        )
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self._owner_id:
@@ -138,6 +147,40 @@ class _RefreshVoteButton(discord.ui.Button[_VoteStatusView]):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         result = await self._vote_service.refresh_vote_status(interaction.user.id)
+        await interaction.response.edit_message(
+            embed=build_vote_embed(result.status, notice=result.note),
+            view=_VoteStatusView(
+                vote_service=self._vote_service,
+                owner_id=self._owner_id,
+                status=result.status,
+                vote_url=self._vote_url,
+            ),
+        )
+
+
+class _ToggleVoteReminderButton(discord.ui.Button[_VoteStatusView]):
+    def __init__(
+        self,
+        *,
+        vote_service: VoteService,
+        owner_id: int,
+        vote_url: str,
+        reminders_enabled: bool,
+    ) -> None:
+        super().__init__(
+            label="Disable reminders" if reminders_enabled else "Enable reminders",
+            style=discord.ButtonStyle.secondary,
+        )
+        self._vote_service = vote_service
+        self._owner_id = owner_id
+        self._vote_url = vote_url
+        self._reminders_enabled = reminders_enabled
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        result = await self._vote_service.set_vote_reminders_enabled(
+            interaction.user.id,
+            enabled=not self._reminders_enabled,
+        )
         await interaction.response.edit_message(
             embed=build_vote_embed(result.status, notice=result.note),
             view=_VoteStatusView(

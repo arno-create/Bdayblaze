@@ -15,6 +15,13 @@ VoteLaneState = Literal[
     "active_exact",
     "active_estimated",
 ]
+VoteReminderLaneState = Literal[
+    "off",
+    "armed_exact",
+    "armed_estimated",
+    "waiting_for_next_vote",
+    "delivery_issue",
+]
 TopggReceiptStatus = Literal["processed", "ignored_test"]
 TopggWebhookOutcome = Literal[
     "processed",
@@ -65,6 +72,27 @@ class VoteBonusStatus:
     refresh_retry_after_seconds: int | None
     wish_character_limit: int
     timeline_entry_limit: int
+    reminders_enabled: bool
+    reminder_lane_state: VoteReminderLaneState
+    next_reminder_at_utc: datetime | None
+    last_reminder_error_code: str | None
+    reminder_timing_source: VoteTimingSource | None
+
+
+@dataclass(slots=True, frozen=True)
+class TopggVoteReminder:
+    discord_user_id: int
+    enabled: bool
+    scheduled_vote_expires_at: datetime | None
+    scheduled_reminder_at: datetime | None
+    processing_started_at: datetime | None
+    last_reminded_vote_expires_at: datetime | None
+    last_reminded_at: datetime | None
+    attempt_count: int
+    last_error_code: str | None
+    timing_source: VoteTimingSource | None
+    created_at: datetime
+    updated_at: datetime
 
 
 @dataclass(slots=True, frozen=True)
@@ -78,6 +106,12 @@ class TopggWebhookResult:
 @dataclass(slots=True, frozen=True)
 class VoteRefreshResult:
     outcome: VoteRefreshOutcome
+    status: VoteBonusStatus
+    note: str
+
+
+@dataclass(slots=True, frozen=True)
+class VoteReminderUpdateResult:
     status: VoteBonusStatus
     note: str
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,12 +14,14 @@ from bdayblaze.domain.models import (
     RuntimeStatus,
     SchedulerMetrics,
 )
+from bdayblaze.domain.topgg import VoteBonusStatus
 from bdayblaze.services.scheduler import (
     AnnouncementSendResult,
     BirthdaySchedulerRunner,
     BirthdaySchedulerService,
     DirectSendResult,
     GatewayPermanentError,
+    GatewayRetryableError,
 )
 
 
@@ -31,6 +34,7 @@ class FakeSchedulerRepository:
     ) -> None:
         self.pending_batches = pending_batches
         self.batch_claim = batch_claim
+        self.due_vote_reminders: list[object] = []
         self._claim_pending_calls = 0
         self.requeue_processing_calls = 0
         self.completed_calls: list[tuple[list[int], int | None, str | None]] = []
@@ -40,6 +44,9 @@ class FakeSchedulerRepository:
         self.batch_sent_calls: list[tuple[str, int | None]] = []
         self.capsule_updates: list[tuple[int, int, datetime, str, int | None]] = []
         self.revealed_wishes: list[BirthdayWish] = []
+        self.sent_vote_reminders: list[tuple[int, datetime, datetime]] = []
+        self.skipped_vote_reminders: list[tuple[int, datetime, str]] = []
+        self.retried_vote_reminders: list[tuple[int, datetime, datetime, str]] = []
 
     async def requeue_stale_processing_events(self, stale_before_utc: datetime) -> int:
         self.requeue_processing_calls += 1
@@ -91,6 +98,50 @@ class FakeSchedulerRepository:
 
     async def next_due_timestamp(self) -> datetime | None:
         return None
+
+    async def claim_due_topgg_vote_reminders(
+        self,
+        now_utc: datetime,
+        batch_size: int,
+    ) -> list[object]:
+        due = [
+            reminder
+            for reminder in self.due_vote_reminders
+            if getattr(reminder, "scheduled_reminder_at", None) is not None
+            and getattr(reminder, "scheduled_reminder_at") <= now_utc
+        ]
+        claimed = due[:batch_size]
+        for reminder in claimed:
+            self.due_vote_reminders.remove(reminder)
+        return claimed
+
+    async def mark_topgg_vote_reminder_sent(
+        self,
+        discord_user_id: int,
+        *,
+        vote_expires_at: datetime,
+        reminded_at: datetime,
+    ) -> None:
+        self.sent_vote_reminders.append((discord_user_id, vote_expires_at, reminded_at))
+
+    async def reschedule_topgg_vote_reminder_retry(
+        self,
+        discord_user_id: int,
+        *,
+        vote_expires_at: datetime,
+        retry_at: datetime,
+        error_code: str,
+    ) -> None:
+        self.retried_vote_reminders.append((discord_user_id, vote_expires_at, retry_at, error_code))
+
+    async def mark_topgg_vote_reminder_skipped(
+        self,
+        discord_user_id: int,
+        *,
+        vote_expires_at: datetime,
+        error_code: str,
+    ) -> None:
+        self.skipped_vote_reminders.append((discord_user_id, vote_expires_at, error_code))
 
     async def skip_stale_start_events(self, stale_before_utc: datetime) -> int:
         return 0
@@ -173,10 +224,13 @@ class FakeGateway:
         self.dm_error = dm_error
         self.recurring_error = recurring_error
         self.capsule_result = capsule_result or DirectSendResult(status="sent", message_id=551)
+        self.vote_reminder_result = DirectSendResult(status="sent")
+        self.vote_reminder_error: Exception | None = None
         self.sent_batches: list[str] = []
         self.sent_anniversary_batches: list[str] = []
         self.history_checks: list[str] = []
         self.sent_capsules: list[int] = []
+        self.sent_vote_reminders: list[int] = []
 
     async def find_announcement_message(
         self,
@@ -216,6 +270,12 @@ class FakeGateway:
     async def send_capsule_reveal(self, **kwargs: object) -> DirectSendResult:
         self.sent_capsules.append(int(kwargs["user_id"]))
         return self.capsule_result
+
+    async def send_topgg_vote_reminder(self, **kwargs: object) -> DirectSendResult:
+        if self.vote_reminder_error is not None:
+            raise self.vote_reminder_error
+        self.sent_vote_reminders.append(int(kwargs["user_id"]))
+        return self.vote_reminder_result
 
     async def add_birthday_role(self, **kwargs: object) -> str:
         return self.role_status
@@ -258,6 +318,22 @@ class FakeRunnerService:
         if self.sleep_error is not None:
             raise self.sleep_error
         return self.sleep_seconds
+
+
+class FakeVoteService:
+    def __init__(self, *, status: VoteBonusStatus, vote_url: str = "https://top.gg/bot/1485920716573380660/vote") -> None:
+        self.status = status
+        self.vote_url = vote_url
+        self.calls: list[int] = []
+
+    async def get_vote_bonus_status(
+        self,
+        discord_user_id: int,
+        *,
+        now_utc: datetime | None = None,
+    ) -> VoteBonusStatus:
+        self.calls.append(discord_user_id)
+        return self.status
 
 
 def _announcement_batch(
@@ -346,6 +422,56 @@ def _single_event(event_id: int, kind: str, payload: dict[str, object]) -> Celeb
         updated_at_utc=now,
         completed_at_utc=None,
         processing_started_at_utc=now,
+    )
+
+
+def _vote_status(
+    *,
+    lane_state: str = "active_exact",
+    timing_source: str | None = "exact",
+) -> VoteBonusStatus:
+    return VoteBonusStatus(
+        lane_state=lane_state,  # type: ignore[arg-type]
+        enabled=True,
+        active=lane_state.startswith("active"),
+        configuration_message=None,
+        voted_at_utc=datetime(2026, 3, 24, 10, tzinfo=UTC),
+        expires_at_utc=datetime(2026, 3, 24, 12, tzinfo=UTC),
+        timing_source=timing_source,  # type: ignore[arg-type]
+        weight=1,
+        refresh_available=False,
+        refresh_cooldown_seconds=60,
+        refresh_retry_after_seconds=None,
+        wish_character_limit=500,
+        timeline_entry_limit=12,
+        reminders_enabled=True,
+        reminder_lane_state="armed_exact",
+        next_reminder_at_utc=datetime(2026, 3, 24, 11, 30, tzinfo=UTC),
+        last_reminder_error_code=None,
+        reminder_timing_source=timing_source,  # type: ignore[arg-type]
+    )
+
+
+def _due_vote_reminder(
+    *,
+    discord_user_id: int = 42,
+    vote_expires_at: datetime | None = None,
+    scheduled_reminder_at: datetime | None = None,
+    timing_source: str = "exact",
+    attempt_count: int = 0,
+) -> object:
+    return SimpleNamespace(
+        discord_user_id=discord_user_id,
+        enabled=True,
+        scheduled_vote_expires_at=vote_expires_at or datetime(2026, 3, 24, 12, tzinfo=UTC),
+        scheduled_reminder_at=scheduled_reminder_at
+        or datetime(2026, 3, 24, 11, 30, tzinfo=UTC),
+        processing_started_at=None,
+        last_reminded_vote_expires_at=None,
+        last_reminded_at=None,
+        attempt_count=attempt_count,
+        last_error_code=None,
+        timing_source=timing_source,
     )
 
 
@@ -722,3 +848,102 @@ def test_scheduler_runner_caps_recent_errors() -> None:
 
     assert len(service._metrics.recent_errors) == 20
     assert service._metrics.recent_errors == ["RuntimeError"] * 20
+
+
+@pytest.mark.asyncio
+async def test_scheduler_sends_due_vote_reminder_once_and_marks_it_sent() -> None:
+    repository = FakeSchedulerRepository(
+        pending_batches={},
+        batch_claim=AnnouncementBatchClaim(status="claimed", batch=None),
+    )
+    repository.due_vote_reminders = [_due_vote_reminder()]
+    gateway = FakeGateway()
+    vote_service = FakeVoteService(status=_vote_status())
+    service = BirthdaySchedulerService(
+        repository,  # type: ignore[arg-type]
+        gateway,  # type: ignore[arg-type]
+        SchedulerMetrics(),
+        batch_size=25,
+        recovery_grace_hours=36,
+        scheduler_max_sleep_seconds=300,
+        vote_service=vote_service,  # type: ignore[arg-type]
+    )
+
+    claimed = await service.run_iteration(datetime(2026, 3, 24, 11, 31, tzinfo=UTC))
+
+    assert claimed == 1
+    assert gateway.sent_vote_reminders == [42]
+    assert repository.sent_vote_reminders == [
+        (
+            42,
+            datetime(2026, 3, 24, 12, tzinfo=UTC),
+            datetime(2026, 3, 24, 11, 31, tzinfo=UTC),
+        )
+    ]
+    assert repository.retried_vote_reminders == []
+    assert repository.skipped_vote_reminders == []
+
+
+@pytest.mark.asyncio
+async def test_scheduler_retries_vote_reminder_after_retryable_dm_error() -> None:
+    repository = FakeSchedulerRepository(
+        pending_batches={},
+        batch_claim=AnnouncementBatchClaim(status="claimed", batch=None),
+    )
+    repository.due_vote_reminders = [_due_vote_reminder()]
+    gateway = FakeGateway()
+    gateway.vote_reminder_error = GatewayRetryableError("discord_http_error")
+    vote_service = FakeVoteService(status=_vote_status())
+    service = BirthdaySchedulerService(
+        repository,  # type: ignore[arg-type]
+        gateway,  # type: ignore[arg-type]
+        SchedulerMetrics(),
+        batch_size=25,
+        recovery_grace_hours=36,
+        scheduler_max_sleep_seconds=300,
+        vote_service=vote_service,  # type: ignore[arg-type]
+    )
+
+    claimed = await service.run_iteration(datetime(2026, 3, 24, 11, 31, tzinfo=UTC))
+
+    assert claimed == 1
+    assert repository.sent_vote_reminders == []
+    assert repository.retried_vote_reminders == [
+        (
+            42,
+            datetime(2026, 3, 24, 12, tzinfo=UTC),
+            datetime(2026, 3, 24, 11, 36, tzinfo=UTC),
+            "discord_http_error",
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_skips_vote_reminder_for_dm_forbidden_without_public_fallback() -> None:
+    repository = FakeSchedulerRepository(
+        pending_batches={},
+        batch_claim=AnnouncementBatchClaim(status="claimed", batch=None),
+    )
+    repository.due_vote_reminders = [_due_vote_reminder()]
+    gateway = FakeGateway()
+    gateway.vote_reminder_result = DirectSendResult(status="dm_forbidden")
+    vote_service = FakeVoteService(status=_vote_status())
+    service = BirthdaySchedulerService(
+        repository,  # type: ignore[arg-type]
+        gateway,  # type: ignore[arg-type]
+        SchedulerMetrics(),
+        batch_size=25,
+        recovery_grace_hours=36,
+        scheduler_max_sleep_seconds=300,
+        vote_service=vote_service,  # type: ignore[arg-type]
+    )
+
+    claimed = await service.run_iteration(datetime(2026, 3, 24, 11, 31, tzinfo=UTC))
+
+    assert claimed == 1
+    assert repository.skipped_vote_reminders == [
+        (42, datetime(2026, 3, 24, 12, tzinfo=UTC), "dm_forbidden")
+    ]
+    assert gateway.sent_batches == []
+    assert gateway.sent_anniversary_batches == []
+    assert gateway.sent_capsules == []
