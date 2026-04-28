@@ -3,9 +3,8 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Protocol
+from typing import Any, Protocol, cast
 
-from bdayblaze.domain.topgg import VoteBonusStatus
 from bdayblaze.domain.models import (
     AnniversaryRecipientSnapshot,
     AnnouncementRecipientSnapshot,
@@ -14,6 +13,7 @@ from bdayblaze.domain.models import (
     RuntimeStatus,
     SchedulerMetrics,
 )
+from bdayblaze.domain.topgg import VoteBonusStatus
 from bdayblaze.logging import get_logger
 from bdayblaze.repositories.postgres import PostgresRepository
 from bdayblaze.services.vote_service import VoteService
@@ -709,9 +709,10 @@ class BirthdaySchedulerService:
             VoteService.REMINDER_RETRY_DELAY,
         )
         for reminder in reminders:
-            discord_user_id = int(getattr(reminder, "discord_user_id"))
-            vote_expires_at = getattr(reminder, "scheduled_vote_expires_at", None)
-            attempt_count = int(getattr(reminder, "attempt_count", 0))
+            reminder_record = cast(Any, reminder)
+            discord_user_id = int(reminder_record.discord_user_id)
+            vote_expires_at = getattr(reminder_record, "scheduled_vote_expires_at", None)
+            attempt_count = int(getattr(reminder_record, "attempt_count", 0))
             if vote_expires_at is None:
                 await self._mark_topgg_vote_reminder_skipped(
                     discord_user_id,

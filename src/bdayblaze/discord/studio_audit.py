@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 import discord
 
 from bdayblaze.discord.embed_budget import BudgetedEmbed
-from bdayblaze.logging import get_logger
+from bdayblaze.logging import get_logger, redact_identifier
 from bdayblaze.services.content_policy import ContentPolicyError
 from bdayblaze.services.settings_service import SettingsService
 
@@ -99,8 +99,8 @@ class StudioAuditLogger:
         except discord.HTTPException:
             self._logger.warning(
                 "studio_audit_send_failed",
-                guild_id=interaction.guild.id,
-                channel_id=channel_id,
+                guild_id=redact_identifier(interaction.guild.id),
+                channel_id=redact_identifier(channel_id),
                 surface=surface,
             )
             return

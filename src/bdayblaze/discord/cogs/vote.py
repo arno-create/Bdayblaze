@@ -96,16 +96,17 @@ class _VoteStatusView(discord.ui.View):
                 url=vote_url,
             )
         )
-        if getattr(status, "refresh_available", False):
+        if status.refresh_available:
+            refresh_retry_after_seconds = status.refresh_retry_after_seconds
             self.add_item(
                 _RefreshVoteButton(
                     vote_service=vote_service,
                     owner_id=owner_id,
                     vote_url=vote_url,
-                    disabled=getattr(status, "refresh_retry_after_seconds", None) is not None,
+                    disabled=refresh_retry_after_seconds is not None,
                     label=(
-                        f"Refresh ({getattr(status, 'refresh_retry_after_seconds')}s)"
-                        if getattr(status, "refresh_retry_after_seconds", None) is not None
+                        f"Refresh ({refresh_retry_after_seconds}s)"
+                        if refresh_retry_after_seconds is not None
                         else "Refresh"
                     ),
                 )
@@ -121,7 +122,10 @@ class _VoteStatusView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self._owner_id:
-            await interaction.response.send_message("This vote panel belongs to someone else.", ephemeral=True)
+            await interaction.response.send_message(
+                "This vote panel belongs to someone else.",
+                ephemeral=True,
+            )
             return False
         return True
 

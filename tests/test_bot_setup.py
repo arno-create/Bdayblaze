@@ -3,8 +3,6 @@ from __future__ import annotations
 import pytest
 
 from bdayblaze.bot import BdayblazeBot
-from bdayblaze.discord.cogs.birthday import BirthdayAdminGroup, BirthdayGroup
-from bdayblaze.discord.cogs.info import InfoCog
 
 
 class FakeLogger:

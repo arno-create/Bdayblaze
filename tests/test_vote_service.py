@@ -5,10 +5,12 @@ import hmac
 import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
 from bdayblaze.config import Settings
+from bdayblaze.services.errors import ValidationError
 from bdayblaze.services.vote_service import VoteService
 
 
@@ -49,7 +51,8 @@ class FakeVoteRepository:
         self.storage_message = "Top.gg storage is ready."
 
     async def insert_topgg_vote_receipt(self, receipt: object) -> bool:
-        event_id = getattr(receipt, "event_id")
+        record = cast(Any, receipt)
+        event_id = record.event_id
         if event_id in self.receipts:
             return False
         self.receipts[event_id] = receipt
@@ -59,15 +62,15 @@ class FakeVoteRepository:
         candidates = [
             receipt
             for receipt in self.receipts.values()
-            if getattr(receipt, "discord_user_id") == discord_user_id
-            and getattr(receipt, "status") == "processed"
+            if cast(Any, receipt).discord_user_id == discord_user_id
+            and cast(Any, receipt).status == "processed"
         ]
         if not candidates:
             return None
         candidates.sort(
             key=lambda receipt: (
-                getattr(receipt, "vote_expires_at") or datetime.min.replace(tzinfo=UTC),
-                getattr(receipt, "processed_at") or getattr(receipt, "received_at"),
+                cast(Any, receipt).vote_expires_at or datetime.min.replace(tzinfo=UTC),
+                cast(Any, receipt).processed_at or cast(Any, receipt).received_at,
             ),
             reverse=True,
         )
@@ -82,10 +85,10 @@ class FakeVoteRepository:
         rows = [
             receipt
             for receipt in self.receipts.values()
-            if getattr(receipt, "discord_user_id") == discord_user_id
+            if cast(Any, receipt).discord_user_id == discord_user_id
         ]
         rows.sort(
-            key=lambda receipt: getattr(receipt, "received_at"),
+            key=lambda receipt: cast(Any, receipt).received_at,
             reverse=True,
         )
         return rows[:limit]
@@ -200,11 +203,11 @@ def _settings(
 
 def _v2_vote_payload(
     *,
-    event_id: str = "808499215864008704",
+    event_id: object = "808499215864008704",
     created_at: str = "2026-04-24T12:00:00+00:00",
     expires_at: str = "2026-04-25T00:00:00+00:00",
-    user_platform_id: str = "222",
-    weight: int = 1,
+    user_platform_id: object = "222",
+    weight: object = 1,
 ) -> bytes:
     return json.dumps(
         {
@@ -235,7 +238,7 @@ def _v2_vote_payload(
 def _v2_signature(secret: str, *, timestamp: int, payload: bytes) -> str:
     digest = hmac.new(
         secret.encode("utf-8"),
-        f"{timestamp}.".encode("utf-8") + payload,
+        f"{timestamp}.".encode() + payload,
         hashlib.sha256,
     ).hexdigest()
     return f"t={timestamp},v1={digest}"
@@ -454,6 +457,87 @@ async def test_handle_webhook_rejects_invalid_user_platform_id() -> None:
 
 
 @pytest.mark.asyncio
+async def test_handle_webhook_rejects_non_numeric_user_platform_id() -> None:
+    repository = FakeVoteRepository()
+    service = VoteService(
+        repository,
+        settings=_settings(enabled=True, secret="whs_test_secret"),
+    )
+    payload = _v2_vote_payload(user_platform_id="not-a-discord-id")
+    timestamp = int(datetime(2026, 4, 24, 12, tzinfo=UTC).timestamp())
+
+    result = await service.handle_webhook(
+        headers={
+            "x-topgg-signature": _v2_signature(
+                "whs_test_secret",
+                timestamp=timestamp,
+                payload=payload,
+            )
+        },
+        raw_body=payload,
+        now_utc=datetime(2026, 4, 24, 12, 1, tzinfo=UTC),
+    )
+
+    assert result.http_status == 400
+    assert result.outcome == "invalid_payload"
+    assert repository.receipts == {}
+
+
+@pytest.mark.asyncio
+async def test_handle_webhook_rejects_missing_v2_event_id() -> None:
+    repository = FakeVoteRepository()
+    service = VoteService(
+        repository,
+        settings=_settings(enabled=True, secret="whs_test_secret"),
+    )
+    payload = _v2_vote_payload(event_id="")
+    timestamp = int(datetime(2026, 4, 24, 12, tzinfo=UTC).timestamp())
+
+    result = await service.handle_webhook(
+        headers={
+            "x-topgg-signature": _v2_signature(
+                "whs_test_secret",
+                timestamp=timestamp,
+                payload=payload,
+            )
+        },
+        raw_body=payload,
+        now_utc=datetime(2026, 4, 24, 12, 1, tzinfo=UTC),
+    )
+
+    assert result.http_status == 400
+    assert result.outcome == "invalid_payload"
+    assert repository.receipts == {}
+
+
+@pytest.mark.asyncio
+async def test_handle_webhook_rejects_invalid_v2_weight() -> None:
+    repository = FakeVoteRepository()
+    service = VoteService(
+        repository,
+        settings=_settings(enabled=True, secret="whs_test_secret"),
+    )
+    payload = _v2_vote_payload(weight="heavy")
+    timestamp = int(datetime(2026, 4, 24, 12, tzinfo=UTC).timestamp())
+
+    result = await service.handle_webhook(
+        headers={
+            "x-topgg-signature": _v2_signature(
+                "whs_test_secret",
+                timestamp=timestamp,
+                payload=payload,
+            )
+        },
+        raw_body=payload,
+        now_utc=datetime(2026, 4, 24, 12, 1, tzinfo=UTC),
+    )
+
+    assert result.http_status == 400
+    assert result.outcome == "invalid_payload"
+    assert repository.receipts == {}
+
+
+@pytest.mark.asyncio
 async def test_handle_webhook_is_idempotent_for_duplicate_v2_delivery() -> None:
     repository = FakeVoteRepository()
     service = VoteService(
@@ -525,6 +609,65 @@ async def test_handle_legacy_webhook_marks_vote_window_as_estimated() -> None:
 
 
 @pytest.mark.asyncio
+async def test_legacy_webhook_uses_constant_time_secret_compare(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = FakeVoteRepository()
+    service = VoteService(
+        repository,
+        settings=_settings(enabled=True, secret="legacy-shared-secret"),
+    )
+    calls: list[tuple[str, str]] = []
+
+    def fake_compare(expected: str, received: str) -> bool:
+        calls.append((expected, received))
+        return False
+
+    monkeypatch.setattr("bdayblaze.services.vote_service.hmac_compare", fake_compare)
+
+    result = await service.handle_webhook(
+        headers={"authorization": "wrong-secret"},
+        raw_body=json.dumps(
+            {
+                "bot": "1485920716573380660",
+                "user": "222",
+                "type": "upvote",
+            }
+        ).encode("utf-8"),
+        now_utc=datetime(2026, 4, 24, 12, tzinfo=UTC),
+    )
+
+    assert result.http_status == 400
+    assert result.outcome == "invalid_signature"
+    assert calls == [("legacy-shared-secret", "wrong-secret")]
+
+
+@pytest.mark.asyncio
+async def test_legacy_webhook_rejects_non_numeric_user_without_500() -> None:
+    repository = FakeVoteRepository()
+    service = VoteService(
+        repository,
+        settings=_settings(enabled=True, secret="legacy-shared-secret"),
+    )
+
+    result = await service.handle_webhook(
+        headers={"authorization": "legacy-shared-secret"},
+        raw_body=json.dumps(
+            {
+                "bot": "1485920716573380660",
+                "user": "not-a-discord-id",
+                "type": "upvote",
+            }
+        ).encode("utf-8"),
+        now_utc=datetime(2026, 4, 24, 12, tzinfo=UTC),
+    )
+
+    assert result.http_status == 400
+    assert result.outcome == "invalid_payload"
+    assert repository.receipts == {}
+
+
+@pytest.mark.asyncio
 async def test_enabling_vote_reminders_schedules_one_early_nudge_for_exact_window() -> None:
     repository = FakeVoteRepository()
     service = VoteService(
@@ -559,7 +702,8 @@ async def test_enabling_vote_reminders_schedules_one_early_nudge_for_exact_windo
 
 
 @pytest.mark.asyncio
-async def test_enabling_vote_reminders_with_less_than_five_minutes_left_waits_for_next_vote() -> None:
+async def test_enabling_vote_reminders_with_less_than_five_minutes_left_waits_for_next_vote(
+) -> None:
     repository = FakeVoteRepository()
     service = VoteService(
         repository,
@@ -594,7 +738,8 @@ async def test_enabling_vote_reminders_with_less_than_five_minutes_left_waits_fo
 
 
 @pytest.mark.asyncio
-async def test_duplicate_vote_delivery_reschedules_instead_of_duplicating_reminder_windows() -> None:
+async def test_duplicate_vote_delivery_reschedules_instead_of_duplicating_reminder_windows(
+) -> None:
     repository = FakeVoteRepository()
     repository.reminders[222] = FakeReminderRecord(
         discord_user_id=222,
@@ -684,6 +829,35 @@ async def test_refresh_not_found_clears_pending_vote_reminder_for_current_window
     assert repository.reminders[222].enabled is True
     assert repository.reminders[222].scheduled_reminder_at is None
     assert result.status.reminder_lane_state == "waiting_for_next_vote"
+
+
+@pytest.mark.asyncio
+async def test_refresh_vote_status_returns_private_unavailable_note_when_topgg_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = FakeVoteRepository()
+    service = VoteService(
+        repository,
+        settings=_settings(
+            enabled=True,
+            secret="whs_test_secret",
+            token="topgg-api-token",
+        ),
+    )
+
+    async def fake_fetch(_: int) -> dict[str, object] | None:
+        raise ValidationError("Top.gg refresh is temporarily unavailable.")
+
+    monkeypatch.setattr(service, "_fetch_vote_status_by_user", fake_fetch)
+
+    result = await service.refresh_vote_status(
+        222,
+        now_utc=datetime(2026, 4, 24, 12, tzinfo=UTC),
+    )
+
+    assert result.outcome == "unavailable"
+    assert "temporarily unavailable" in result.note
+    assert result.status.lane_state == "inactive"
 
 
 @pytest.mark.asyncio

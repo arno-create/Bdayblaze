@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 
 import discord
 
@@ -13,9 +14,9 @@ _VOTE_EMBED_COLOR = discord.Color.from_rgb(199, 102, 45)
 
 class _DetachedVoteView:
     def __init__(self) -> None:
-        self.children: list[discord.ui.Item[object]] = []
+        self.children: list[discord.ui.Item[discord.ui.View]] = []
 
-    def add_item(self, item: discord.ui.Item[object]) -> None:
+    def add_item(self, item: discord.ui.Item[discord.ui.View]) -> None:
         self.children.append(item)
 
 
@@ -129,7 +130,7 @@ def build_owner_vote_status_text(
     diagnostics: dict[str, object],
     status: VoteBonusStatus | None,
     discord_user_id: int | None = None,
-    receipts: list[object] | None = None,
+    receipts: Sequence[object] | None = None,
 ) -> str:
     lines = [
         "Top.gg diagnostics",
@@ -207,7 +208,7 @@ def build_vote_reminder_embed(
             ),
             inline=False,
         )
-    budget.set_footer(text=vote_url)
+    budget.set_footer(vote_url)
     return budget.build()
 
 

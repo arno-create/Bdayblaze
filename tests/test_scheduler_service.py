@@ -107,8 +107,8 @@ class FakeSchedulerRepository:
         due = [
             reminder
             for reminder in self.due_vote_reminders
-            if getattr(reminder, "scheduled_reminder_at", None) is not None
-            and getattr(reminder, "scheduled_reminder_at") <= now_utc
+            if reminder.scheduled_reminder_at is not None
+            and reminder.scheduled_reminder_at <= now_utc
         ]
         claimed = due[:batch_size]
         for reminder in claimed:
@@ -321,7 +321,12 @@ class FakeRunnerService:
 
 
 class FakeVoteService:
-    def __init__(self, *, status: VoteBonusStatus, vote_url: str = "https://top.gg/bot/1485920716573380660/vote") -> None:
+    def __init__(
+        self,
+        *,
+        status: VoteBonusStatus,
+        vote_url: str = "https://top.gg/bot/1485920716573380660/vote",
+    ) -> None:
         self.status = status
         self.vote_url = vote_url
         self.calls: list[int] = []

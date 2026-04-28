@@ -8,7 +8,21 @@ from bdayblaze.domain.media_validation import (
     mark_validated_direct_media_url,
     strip_validated_direct_media_marker,
 )
+from bdayblaze.services import media_validation_service
 from bdayblaze.services.media_validation_service import _probe_once, probe_media_url
+
+
+@pytest.fixture(autouse=True)
+def _trust_example_dns(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def no_resolution_issue(hostname: str) -> str | None:
+        return None
+
+    monkeypatch.setattr(
+        media_validation_service,
+        "_public_resolution_issue",
+        no_resolution_issue,
+        raising=False,
+    )
 
 
 def test_assess_media_url_accepts_realistic_signed_cdn_asset() -> None:
@@ -253,6 +267,31 @@ async def test_probe_once_marks_404_as_invalid_media() -> None:
 
 
 @pytest.mark.asyncio
+async def test_probe_once_rejects_redirect_to_private_host() -> None:
+    assessment = assess_media_url(
+        "https://cdn.example.com/banner",
+        label="Announcement image",
+    )
+    assert assessment is not None
+
+    result = await _probe_once(
+        _FakeSession(
+            _FakeResponse(
+                headers={"Location": "https://127.0.0.1/private.png"},
+                status=302,
+            )
+        ),  # type: ignore[arg-type]
+        assessment,
+        method="HEAD",
+        headers={},
+    )
+
+    assert result is not None
+    assert result.classification == "invalid_or_unsafe"
+    assert "redirect" in result.summary.lower()
+
+
+@pytest.mark.asyncio
 async def test_probe_once_uses_signature_fallback_for_octet_stream() -> None:
     assessment = assess_media_url(
         "https://cdn.example.com/banner",
@@ -301,6 +340,38 @@ async def test_probe_media_url_returns_validation_unavailable_on_timeout(
 
     assert result is not None
     assert result.classification == "validation_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_probe_media_url_rejects_host_that_resolves_to_private_ip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_resolution_issue(hostname: str) -> str | None:
+        assert hostname == "storage.example.com"
+        return "resolved to a local or private IP address"
+
+    monkeypatch.setattr(
+        media_validation_service,
+        "_public_resolution_issue",
+        fake_resolution_issue,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        aiohttp,
+        "ClientSession",
+        lambda *args, **kwargs: _SequenceSession(
+            [_FakeResponse(headers={"Content-Type": "image/png"}, status=200)]
+        ),
+    )
+
+    result = await probe_media_url(
+        "https://storage.example.com/object/banner",
+        label="Announcement image",
+    )
+
+    assert result is not None
+    assert result.classification == "invalid_or_unsafe"
+    assert "local or private IP address" in result.summary
 
 
 @pytest.mark.asyncio
