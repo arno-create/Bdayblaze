@@ -11,6 +11,12 @@ from bdayblaze.logging import get_logger
 from bdayblaze.services.vote_service import VoteService
 
 _MAX_REQUEST_BODY_BYTES = 64 * 1024
+_MAX_REQUEST_HEADER_BYTES = 16 * 1024
+_MAX_REQUEST_HEADER_LINE_BYTES = 8 * 1024
+_MAX_REQUEST_HEADER_LINES = 100
+_REQUEST_LINE_TIMEOUT_SECONDS = 5
+_HEADER_READ_TIMEOUT_SECONDS = 5
+_BODY_READ_TIMEOUT_SECONDS = 5
 
 
 @dataclass(slots=True)
@@ -49,19 +55,17 @@ class HttpHealthServer:
         writer: asyncio.StreamWriter,
     ) -> None:
         try:
-            request_line = await asyncio.wait_for(reader.readline(), timeout=5)
-        except TimeoutError:
-            writer.close()
-            await writer.wait_closed()
-            return
-
-        method = "GET"
-        raw_path = "/"
-        try:
+            request_line = await asyncio.wait_for(
+                reader.readline(),
+                timeout=_REQUEST_LINE_TIMEOUT_SECONDS,
+            )
+            if not request_line:
+                raise _BadRequest
             parts = request_line.decode("ascii", errors="ignore").strip().split()
-            if len(parts) >= 2:
-                method = parts[0].upper()
-                raw_path = parts[1]
+            if len(parts) < 2:
+                raise _BadRequest
+            method = parts[0].upper()
+            raw_path = parts[1]
             headers = await self._read_headers(reader)
             body = await self._read_body(reader, headers)
             path = raw_path.split("?", 1)[0] or "/"
@@ -74,6 +78,14 @@ class HttpHealthServer:
         except _BodyTooLarge:
             status_code = "413 Payload Too Large"
             response_body = dumps({"status": "payload_too_large"}).encode("utf-8")
+            content_type = "application/json"
+        except _RequestTimeout:
+            status_code = "408 Request Timeout"
+            response_body = dumps({"status": "request_timeout"}).encode("utf-8")
+            content_type = "application/json"
+        except _BadRequest:
+            status_code = "400 Bad Request"
+            response_body = dumps({"status": "bad_request"}).encode("utf-8")
             content_type = "application/json"
         except Exception:
             self._logger.exception("http_request_failed")
@@ -259,10 +271,26 @@ class HttpHealthServer:
 
     async def _read_headers(self, reader: asyncio.StreamReader) -> dict[str, str]:
         headers: dict[str, str] = {}
+        total_bytes = 0
+        line_count = 0
         while True:
-            line = await reader.readline()
+            try:
+                line = await asyncio.wait_for(
+                    reader.readline(),
+                    timeout=_HEADER_READ_TIMEOUT_SECONDS,
+                )
+            except TimeoutError as exc:
+                raise _RequestTimeout from exc
             if not line or line in {b"\r\n", b"\n"}:
                 break
+            line_count += 1
+            total_bytes += len(line)
+            if (
+                len(line) > _MAX_REQUEST_HEADER_LINE_BYTES
+                or line_count > _MAX_REQUEST_HEADER_LINES
+                or total_bytes > _MAX_REQUEST_HEADER_BYTES
+            ):
+                raise _BadRequest
             decoded = line.decode("ascii", errors="ignore").strip()
             name, _, value = decoded.partition(":")
             if not name:
@@ -275,12 +303,26 @@ class HttpHealthServer:
         reader: asyncio.StreamReader,
         headers: dict[str, str],
     ) -> bytes:
-        content_length = int(headers.get("content-length", "0") or "0")
-        if content_length <= 0:
+        raw_content_length = headers.get("content-length", "0") or "0"
+        try:
+            content_length = int(raw_content_length)
+        except ValueError as exc:
+            raise _BadRequest from exc
+        if content_length < 0:
+            raise _BadRequest
+        if content_length == 0:
             return b""
         if content_length > _MAX_REQUEST_BODY_BYTES:
             raise _BodyTooLarge
-        return await reader.readexactly(content_length)
+        try:
+            return await asyncio.wait_for(
+                reader.readexactly(content_length),
+                timeout=_BODY_READ_TIMEOUT_SECONDS,
+            )
+        except TimeoutError as exc:
+            raise _RequestTimeout from exc
+        except (EOFError, asyncio.IncompleteReadError) as exc:
+            raise _BadRequest from exc
 
     def _safe_topgg_diagnostics(self) -> dict[str, object] | None:
         if self.vote_service is None:
@@ -398,6 +440,7 @@ def _http_status_text(status_code: int) -> str:
         400: "400 Bad Request",
         404: "404 Not Found",
         405: "405 Method Not Allowed",
+        408: "408 Request Timeout",
         413: "413 Payload Too Large",
         500: "500 Internal Server Error",
         503: "503 Service Unavailable",
@@ -409,4 +452,12 @@ def _iso(value: datetime | None) -> str | None:
 
 
 class _BodyTooLarge(Exception):
+    pass
+
+
+class _BadRequest(Exception):
+    pass
+
+
+class _RequestTimeout(Exception):
     pass

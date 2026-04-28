@@ -10,8 +10,8 @@ from bdayblaze.discord.announcements import (
     build_announcement_message,
     build_capsule_reveal_message,
 )
-from bdayblaze.discord.ui.vote import build_vote_reminder_embed
 from bdayblaze.discord.member_resolution import MemberResolutionError, resolve_guild_members
+from bdayblaze.discord.ui.vote import build_vote_reminder_embed
 from bdayblaze.domain.announcement_template import (
     AnnouncementRenderRecipient,
     anniversary_years,
@@ -188,7 +188,7 @@ class DiscordSchedulerGateway:
             raise GatewayRetryableError(failure.code) from exc
         self._logger.info(
             "announcement_sent",
-            guild_id=guild_id,
+            guild_id=redact_identifier(guild_id),
             member_count=len(delivered_user_ids),
         )
         return AnnouncementSendResult(
@@ -300,7 +300,7 @@ class DiscordSchedulerGateway:
             raise GatewayRetryableError(failure.code) from exc
         self._logger.info(
             "anniversary_announcement_sent",
-            guild_id=guild_id,
+            guild_id=redact_identifier(guild_id),
             member_count=len(delivered_user_ids),
         )
         return AnnouncementSendResult(
@@ -604,7 +604,7 @@ class DiscordSchedulerGateway:
             raise GatewayRetryableError("role_add_http_error") from exc
         self._logger.info(
             "birthday_role_added",
-            guild_id=guild_id,
+            guild_id=redact_identifier(guild_id),
             user_ref=redact_identifier(user_id),
         )
         return "applied"
@@ -629,7 +629,7 @@ class DiscordSchedulerGateway:
             raise GatewayRetryableError("role_remove_http_error") from exc
         self._logger.info(
             "birthday_role_removed",
-            guild_id=guild_id,
+            guild_id=redact_identifier(guild_id),
             user_ref=redact_identifier(user_id),
         )
         return "applied"

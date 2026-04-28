@@ -38,7 +38,7 @@ Birthday Setup handles channel routing, eligibility, roles, anniversary behavior
 2. Copy `.env.example` to `.env` and set:
    - `DISCORD_TOKEN`
    - `DATABASE_URL`
-   - optionally `TOPGG_ENABLED=true`, `TOPGG_WEBHOOK_SECRET`, and `TOPGG_TOKEN` if you want the Top.gg vote bonus lane
+   - optionally `TOPGG_ENABLED=true`, a Top.gg V2 `TOPGG_WEBHOOK_SECRET`, and `TOPGG_TOKEN` if you want the Top.gg vote bonus lane
 
 3. Run migrations.
 
@@ -88,8 +88,10 @@ Admin migration note:
 ## Deployment notes
 
 - Render should run the bot runtime and health endpoints only.
+- Render uptime checks should use `/readyz`; `/livez` is process liveness and `/healthz` is detailed runtime state.
 - The public marketing site is a separate static bundle served from the repository root.
-- Top.gg voting is opt-in, disabled by default, temporary, utility-only, and not a premium tier.
+- Top.gg voting is opt-in, disabled by default, temporary, utility-only, and not a premium tier. V2 webhook signing is the recommended setup.
+- Studio Media Tools validate media with bounded network probes and fail closed on unsafe redirects or private/internal DNS resolution.
 - Canonical static entrypoint: [`index.html`](index.html)
 - Canonical static assets: [`styles.css`](styles.css), [`site.js`](site.js), [`.nojekyll`](.nojekyll), and [`assets/`](assets/)
 - GitHub Pages should publish `main / (root)` so the landing page plus `privacy/index.html` and `terms/index.html` are served from the same source of truth.

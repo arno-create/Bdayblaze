@@ -161,6 +161,8 @@ Media handling is intentionally split into two layers:
    - used only from Studio Media Tools
    - short timeout
    - small redirect cap
+   - validates every redirect hop before following it
+   - rejects hosts that resolve to loopback, private, link-local, reserved, multicast, or metadata-style addresses
    - HEAD first, then tiny ranged GET/body sniff fallback
    - accepts real image/GIF/WebP content types or matching signatures
    - classifies HTML as webpage content
@@ -228,7 +230,7 @@ HTTP endpoints:
 - `/readyz` for readiness
 - `/healthz` and `/health` for detailed JSON state
 
-`/readyz` is the canonical uptime-monitor endpoint.
+`/readyz` is the canonical uptime-monitor endpoint. The HTTP parser is intentionally small and bounded: request bodies, header lines, total headers, and read timeouts fail closed before routing.
 
 ## Reliability choices
 

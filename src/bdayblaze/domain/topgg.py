@@ -127,7 +127,7 @@ def payload_sha256(raw_body: bytes) -> str:
 def build_v2_signature(secret: str, *, timestamp: int, payload: bytes) -> str:
     return hmac.new(
         secret.encode("utf-8"),
-        f"{timestamp}.".encode("utf-8") + payload,
+        f"{timestamp}.".encode() + payload,
         hashlib.sha256,
     ).hexdigest()
 

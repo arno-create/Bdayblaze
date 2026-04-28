@@ -7,6 +7,7 @@ import discord
 from bdayblaze.discord.ui.vote import (
     build_owner_vote_status_text,
     build_vote_embed,
+    build_vote_reminder_embed,
     build_vote_view,
 )
 from bdayblaze.domain.topgg import VoteBonusStatus
@@ -123,3 +124,12 @@ def test_build_owner_vote_status_text_stays_private_and_truthful() -> None:
     assert "Top.gg diagnostics" in text
     assert "premium" not in text.lower()
     assert "active_exact" in text
+
+
+def test_build_vote_reminder_embed_sets_vote_url_footer() -> None:
+    embed = build_vote_reminder_embed(
+        _status(lane_state="active_exact", active=True, refresh_available=False),
+        vote_url="https://top.gg/bot/1485920716573380660/vote",
+    )
+
+    assert embed.footer.text == "https://top.gg/bot/1485920716573380660/vote"

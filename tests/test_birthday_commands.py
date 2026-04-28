@@ -29,10 +29,10 @@ from bdayblaze.domain.models import (
     BirthdayDisplayState,
     BirthdayPreview,
     BirthdayTimeline,
-    TimelineEntry,
     GuildSettings,
     MemberBirthday,
     RecurringCelebration,
+    TimelineEntry,
 )
 from bdayblaze.services.errors import ValidationError
 

@@ -201,6 +201,62 @@ class FakeVoteService:
         )
 
 
+class FakeRequestReader:
+    def __init__(self, *, lines: list[bytes] | None = None, body: bytes = b"") -> None:
+        self._lines = list(lines or [])
+        self._body = body
+
+    async def readline(self) -> bytes:
+        if not self._lines:
+            return b""
+        return self._lines.pop(0)
+
+    async def readexactly(self, size: int) -> bytes:
+        if len(self._body) < size:
+            raise EOFError("body ended early")
+        payload = self._body[:size]
+        self._body = self._body[size:]
+        return payload
+
+
+@pytest.mark.asyncio
+async def test_http_parser_rejects_invalid_content_length() -> None:
+    server = HttpHealthServer(
+        metrics=SchedulerMetrics(),
+        runtime_status=_runtime_status(),
+        host="127.0.0.1",
+        port=8080,
+        scheduler_max_sleep_seconds=300,
+    )
+
+    with pytest.raises(Exception) as excinfo:
+        await server._read_body(  # pyright: ignore[reportPrivateUsage]
+            FakeRequestReader(body=b"{}"),  # type: ignore[arg-type]
+            {"content-length": "not-a-number"},
+        )
+
+    assert excinfo.value.__class__.__name__ == "_BadRequest"
+
+
+@pytest.mark.asyncio
+async def test_http_parser_rejects_oversized_headers() -> None:
+    server = HttpHealthServer(
+        metrics=SchedulerMetrics(),
+        runtime_status=_runtime_status(),
+        host="127.0.0.1",
+        port=8080,
+        scheduler_max_sleep_seconds=300,
+    )
+    oversized_line = b"X-Test: " + (b"a" * 9000) + b"\r\n"
+
+    with pytest.raises(Exception) as excinfo:
+        await server._read_headers(  # pyright: ignore[reportPrivateUsage]
+            FakeRequestReader(lines=[oversized_line, b"\r\n"]),  # type: ignore[arg-type]
+        )
+
+    assert excinfo.value.__class__.__name__ == "_BadRequest"
+
+
 def test_http_health_includes_disabled_topgg_block_without_degrading_readiness() -> None:
     metrics = SchedulerMetrics(
         recovery_completed=True,
